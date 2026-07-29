@@ -2,6 +2,9 @@
 // Order of work is in CLAUDE.md (milestones). Bring up the Waveshare demo first.
 #include <Arduino.h>
 #include <WiFi.h>
+#include <WiFiClientSecure.h>
+#include <HTTPClient.h>
+#include <ArduinoJson.h>
 #include <vector>
 #include "config.h"
 #include "aircraft.h"
@@ -26,6 +29,12 @@
 #include "battery.h"                 // AXP2101 battery gauge
 #include "rtc_pcf85063.h"            // PCF85063 RTC (offline clock + date)
 #include "audio.h"                   // ES8311 alert pings
+#include "knob.h"                    // rotary encoder on the 8-pin header
+#include "app_shell.h"               // "channel changer": knob flips between apps
+#include "clock_view.h"              // clock app (app two)
+#include "weather_view.h"           // animated weather-radar app (knob channel)
+#include "settings_view.h"          // settings app (menu; captures the knob)
+#include "location_view.h"          // location info app (Aviator dial)
 #include <set>                       // audio: track which contacts are in range
 #include <string>
 #include <WiFiManager.h>             // captive portal
@@ -49,6 +58,8 @@ static WiFiManager           g_wm;
 static int                   g_brightnessDay = BRIGHTNESS_DEFAULT;   // user brightness (web/NVS)
 static int                   g_volume = 60;                          // alert volume 0..100 (web/NVS)
 static bool                  g_muted  = false;                       // mute alert pings
+static bool                  g_soundRadar = true;                    // on-device: radar pings on/off
+static bool                  g_soundChime = false;                   // on-device: top-of-hour clock chime
 static int                   g_alertMode = 2;                        // 0=off 1=emergencies 2=new+emergencies (web/NVS)
 static float                 g_proximityKm = 0.0f;                   // proximity alert radius, km (0=off) (web/NVS)
 static uint32_t              g_idleDimMs = IDLE_DIM_MS;              // dim after this idle time (0 = never)
@@ -74,6 +85,7 @@ static volatile uint32_t     g_rebootAtMs = 0;                       // !=0: reb
 static String                g_tz = TZ_STR;                          // POSIX timezone (web-configurable, NVS); applied via configTzTime
 static volatile bool         g_weatherDirty = false;
 static volatile bool         g_wxRadarDirty = false;
+static volatile bool         g_wxAnimDirty = false;      // new Weather app: frame set ready
 static volatile bool         g_cloudImageDirty = false;
 
 // Web-selectable time zones (label + POSIX TZ). The <option> value is the index; the save
@@ -112,6 +124,7 @@ static void adsb_task(void*) {
     uint32_t nextWeatherAt = UINT32_MAX;       // armed five seconds after WiFi connects
     uint32_t nextWxRadarAt = UINT32_MAX;
     uint32_t nextCloudImageAt = UINT32_MAX;
+    uint32_t nextLocInfoAt = UINT32_MAX;
     uint32_t lastFeedOk = millis();          // self-heal: time of last good (or no-WiFi) poll
     for (;;) {
         const bool conn = (WiFi.status() == WL_CONNECTED);
@@ -125,6 +138,7 @@ static void adsb_task(void*) {
             nextWeatherAt = millis() + 5000UL; // let the first ADS-B poll complete before weather TLS
             nextCloudImageAt = millis() + 15000UL;
             nextWxRadarAt = millis() + 12000UL;
+            nextLocInfoAt = millis() + 9000UL;
             // mDNS + OTA are started on core 1 (loop) to keep all mDNS use on one core
         }
         wasConnected = conn;
@@ -218,6 +232,14 @@ static void adsb_task(void*) {
                     Serial.println("[clouds] fetch failed; retrying in 60s");
                 }
             }
+            // Location Info app: reverse-geocode + weather + a Wikipedia fact. One HTTPS
+            // call per cycle (pump); a new cycle starts on demand or on the refresh timer.
+            if (locationview::takeRefresh() || (int32_t)(nowMs - nextLocInfoAt) >= 0) {
+                Serial.println("[locinfo] fetching...");
+                locationview::startRefresh();
+                nextLocInfoAt = millis() + (locationview::hasData() ? 300000UL : 30000UL);
+            }
+            locationview::pump(g_settings.homeLat, g_settings.homeLon);
             // Then the on-demand lookups for the selected aircraft. Their timeouts are kept
             // short (see photo_client / route_client) so a slow photo server can't freeze the
             // feed for long; the next loop iteration polls again as soon as they return.
@@ -252,6 +274,8 @@ static void loadSettings() {
     g_brightnessDay    = p.getInt("bright", BRIGHTNESS_DEFAULT);
     g_volume           = p.getInt("vol", 60);
     g_muted            = p.getBool("mute", false);
+    g_soundRadar       = p.getBool("sndRadar", true);
+    g_soundChime       = p.getBool("sndChime", false);
     g_alertMode        = p.getInt("alertmode", 2);
     g_proximityKm      = p.getFloat("proxkm", 0.0f);
     g_useGps           = p.getBool("usegps", false);
@@ -271,7 +295,7 @@ static void loadSettings() {
 // Audio alerts. g_alertMode: 0 = off, 1 = emergencies only, 2 = new aircraft + emergencies.
 // g_proximityKm > 0 also pings (once) when any aircraft crosses into that radius.
 static void checkAudioEvents() {
-    if (!audio_present()) return;
+    if (!audio_present() || !g_soundRadar) return;
     static std::set<std::string> seen, seenProx;
     static bool first = true;
     static uint32_t lastNew = 0;
@@ -362,6 +386,179 @@ static void applyBrightness() {
     if (g_idle  && BRIGHTNESS_IDLE  < b) b = BRIGHTNESS_IDLE;   // idle only dims down
     if (g_asleep) b = 0;                                         // face-down -> screen off
     display::setBrightness(b);
+}
+
+// Shared with the Settings app (settings_view.cpp).
+// App-shell onEnter hooks: flip the radar screen's tileview between the radar view
+// and the original app's weather view (radar / clouds / forecast).
+static void radar_show_home()    { ui_show_view(0); }
+static void radar_show_weather() { ui_show_view(3); }
+
+// Set home location from the Settings menu and reboot to re-center radar + weather
+// (mirrors the web /save handler, which also restarts).
+void host_set_location(double lat, double lon) {
+    Preferences p;
+    p.begin("capsuleradar", false);
+    p.putDouble("homeLat", lat);
+    p.putDouble("homeLon", lon);
+    p.end();
+    delay(250);
+    ESP.restart();
+}
+
+int host_get_brightness() { return g_brightnessDay; }
+void host_set_brightness(int v, bool save) {
+    g_brightnessDay = constrain(v, 8, 255);
+    display::setBrightness((uint8_t)g_brightnessDay);   // immediate preview, bypasses idle clamp
+    if (save) {
+        Preferences p;
+        p.begin("capsuleradar", false);
+        p.putInt("bright", g_brightnessDay);
+        p.end();
+    }
+}
+
+// --- Sound settings (on-device menu) ---
+int  host_get_volume() { return g_volume; }
+void host_set_volume(int v, bool save) {
+    g_volume = constrain(v, 0, 100);
+    audio_set_volume(g_volume);
+    if (save) {
+        Preferences p; p.begin("capsuleradar", false);
+        p.putInt("vol", g_volume);
+        p.end();
+    }
+}
+bool host_sound_radar() { return g_soundRadar; }
+void host_sound_set_radar(bool on) {
+    g_soundRadar = on;
+    Preferences p; p.begin("capsuleradar", false); p.putBool("sndRadar", on); p.end();
+}
+bool host_sound_chime() { return g_soundChime; }
+void host_sound_set_chime(bool on) {
+    g_soundChime = on;
+    Preferences p; p.begin("capsuleradar", false); p.putBool("sndChime", on); p.end();
+}
+void host_sound_preview_chime() { if (audio_present()) audio_play(AUDIO_CHIME); }
+void host_sound_preview_beep()  { if (audio_present()) audio_play(AUDIO_NEW); }
+
+void host_recents_add(const char *name, double lat, double lon);   // defined below
+
+// Approximate current location from the public IP (city-level; no GPS on this board).
+// Reboots via host_set_location on success; returns quietly on failure.
+void host_locate_current() {
+    if (WiFi.status() != WL_CONNECTED) return;
+    WiFiClient client;
+    HTTPClient http;
+    http.setConnectTimeout(4000);
+    http.setTimeout(6000);
+    if (!http.begin(client, "http://ip-api.com/json/")) return;
+    const int code = http.GET();
+    if (code != 200) { http.end(); return; }
+    String body = http.getString();
+    http.end();
+    JsonDocument doc;
+    if (deserializeJson(doc, body)) return;
+    if (String((const char *)(doc["status"] | "")) != "success") return;
+    const double lat = doc["lat"] | 1000.0;
+    const double lon = doc["lon"] | 1000.0;
+    if (lat >= -90 && lat <= 90 && lon >= -180 && lon <= 180) {
+        const char *city   = doc["city"]   | "";
+        const char *region = doc["region"] | "";
+        if (city[0]) {
+            char nm[40];
+            snprintf(nm, sizeof(nm), "%s%s%s", city, region[0] ? ", " : "", region);
+            host_recents_add(nm, lat, lon);            // remember where we landed
+        }
+        host_set_location(lat, lon);   // saves + reboots
+    }
+}
+
+// Free city search (Open-Meteo geocoding, no key). Fills names/lats/lons with up to
+// maxN matches for the query; returns the count. Runs synchronously (~1s).
+int host_geocode(const char *query, char names[][40], double *lats, double *lons, int maxN) {
+    if (WiFi.status() != WL_CONNECTED || !query || strlen(query) < 2) return 0;
+    String q;
+    for (const char *p = query; *p; ++p) q += (*p == ' ') ? String("%20") : String(*p);
+    String url = "https://geocoding-api.open-meteo.com/v1/search?name=" + q +
+                 "&count=" + String(maxN) + "&language=en&format=json";
+    WiFiClientSecure client;
+    client.setInsecure();
+    HTTPClient http;
+    http.setConnectTimeout(4000);
+    http.setTimeout(6000);
+    if (!http.begin(client, url)) return 0;
+    if (http.GET() != 200) { http.end(); return 0; }
+    String body = http.getString();
+    http.end();
+    JsonDocument doc;
+    if (deserializeJson(doc, body)) return 0;
+    JsonArrayConst results = doc["results"].as<JsonArrayConst>();
+    int n = 0;
+    for (JsonObjectConst r : results) {
+        if (n >= maxN) break;
+        const char *name   = r["name"]   | "";
+        const char *admin1 = r["admin1"] | "";
+        const char *cc     = r["country_code"] | "";
+        const char *sub    = admin1[0] ? admin1 : cc;
+        snprintf(names[n], 40, "%s%s%s", name, sub[0] ? ", " : "", sub);
+        lats[n] = r["latitude"]  | 1000.0;
+        lons[n] = r["longitude"] | 1000.0;
+        if (lats[n] <= 90 && lats[n] >= -90) n++;
+    }
+    return n;
+}
+
+// ---- recent cities (small list persisted in NVS, survives the reboot on location change) ----
+static const int RECENTS_MAX = 8;
+
+int host_recents_get(char names[][40], double *lats, double *lons, int maxN) {
+    Preferences p;
+    p.begin("capsuleradar", true);
+    String blob = p.getString("recents", "");
+    p.end();
+    if (blob.length() == 0) return 0;
+    JsonDocument doc;
+    if (deserializeJson(doc, blob)) return 0;
+    JsonArrayConst arr = doc.as<JsonArrayConst>();
+    int n = 0;
+    for (JsonObjectConst r : arr) {
+        if (n >= maxN) break;
+        snprintf(names[n], 40, "%s", (const char *)(r["n"] | ""));
+        lats[n] = r["la"] | 1000.0;
+        lons[n] = r["lo"] | 1000.0;
+        if (names[n][0] && lats[n] <= 90 && lats[n] >= -90) n++;
+    }
+    return n;
+}
+
+void host_recents_add(const char *name, double lat, double lon) {
+    if (!name || !name[0]) return;
+    char   names[RECENTS_MAX][40];
+    double lats[RECENTS_MAX], lons[RECENTS_MAX];
+    const int n = host_recents_get(names, lats, lons, RECENTS_MAX);
+    JsonDocument doc;
+    JsonArray arr = doc.to<JsonArray>();
+    { JsonObject o = arr.add<JsonObject>(); o["n"] = name; o["la"] = lat; o["lo"] = lon; }
+    int count = 1;
+    for (int i = 0; i < n && count < RECENTS_MAX; ++i) {
+        if (strcmp(names[i], name) == 0) continue;      // the new front entry already covers it
+        JsonObject o = arr.add<JsonObject>();
+        o["n"] = names[i]; o["la"] = lats[i]; o["lo"] = lons[i];
+        count++;
+    }
+    String out;
+    serializeJson(doc, out);
+    Preferences p;
+    p.begin("capsuleradar", false);
+    p.putString("recents", out);
+    p.end();
+}
+
+// Like host_set_location but records the named city in the recents list first (then reboots).
+void host_set_location_named(const char *name, double lat, double lon) {
+    host_recents_add(name, lat, lon);
+    host_set_location(lat, lon);
 }
 
 // ----------------------------- configuration web --------------------------------
@@ -941,6 +1138,27 @@ void setup() {
     ui_set_units(g_units);                       // apply saved unit preset
     ui_set_range_km(g_settings.rangeKm);         // show the loaded range
 
+    knob::begin();     // rotary encoder on GPIO16/17/18
+
+    // --- App shell: the knob flips between full-screen apps ------------------
+    // display::begin() already built the radar UI onto the active screen, so it's
+    // app one. The clock builds itself onto its own screen (radar untouched).
+    // Radar and Weather share the radar screen: "Weather" just jumps its tileview to
+    // the original app's weather tile (view 3). No touch-swipe needed.
+    lv_obj_t *radarScreen = lv_scr_act();
+    app_shell::add(radarScreen, "Radar",   nullptr, nullptr, false, radar_show_home);
+    app_shell::add(radarScreen, "Weather", nullptr, nullptr, false, radar_show_weather);
+    clockview::init();
+    app_shell::add(clockview::screen(), "Clock", clockview::onPress);  // push flips analog/digital
+    locationview::init();
+    app_shell::add(locationview::screen(), "Location",
+                   locationview::onPress, nullptr, false, locationview::onEnter);  // push refreshes
+    settingsview::init();
+    app_shell::add(settingsview::screen(), "Settings",
+                   settingsview::onPress, settingsview::onTurn,
+                   true, settingsview::onEnter);  // captures the knob on entry; onEnter resets to the menu
+    app_shell::begin();                // start on the radar
+
     imu_begin();       // face-down sleep (no-op if the IMU isn't detected)
     battery_begin();   // AXP2101 (no-op if not detected / no battery)
     gps_begin();       // LC76G GNSS (no-op if not the -G variant)
@@ -1034,6 +1252,22 @@ void loop() {
     g_wm.process();                 // service the WiFi config portal (non-blocking)
     g_web.handleClient();           // serve the configuration web page
     if (g_useGps) gps_poll();       // pull NMEA from the LC76G (only when GPS auto-location is on)
+    knob::poll();                   // read the rotary encoder
+    {
+        int32_t kd = knob::takeDelta();
+        bool pressed = knob::takePress();
+        if (kd != 0 || pressed) display::noteActivity();    // knob use keeps the screen awake
+        if (app_shell::browsing()) {                        // switcher overlay is up
+            if (kd != 0) app_shell::browseTurn((int)kd);    //   turn cycles apps
+            if (pressed) app_shell::browsePress();          //   push commits
+        } else if (app_shell::captured()) {                 // a menu owns the knob (Settings)
+            if (kd != 0) app_shell::turnCurrent((int)kd);
+            if (pressed) app_shell::pressCurrent();
+        } else {                                            // inside an app
+            if (kd != 0) app_shell::browseTurn((int)kd);    //   turn opens the switcher
+            if (pressed) app_shell::pressCurrent();          //   push = app action
+        }
+    }
 
     // scheduled reboot after a fresh WiFi config (see setSaveConfigCallback)
     if (g_rebootAtMs && (int32_t)(millis() - g_rebootAtMs) >= 0) { delay(50); ESP.restart(); }
@@ -1096,6 +1330,13 @@ void loop() {
             char date[20];
             strftime(date, sizeof(date), "%d %b %Y", &ti);   // e.g. "08 Jun 2026"
             ui_set_date(date);
+            // Top-of-hour clock chime (once per hour change; not at boot).
+            static int lastChimeHour = -1;
+            if (lastChimeHour < 0) lastChimeHour = ti.tm_hour;
+            else if (ti.tm_hour != lastChimeHour) {
+                lastChimeHour = ti.tm_hour;
+                if (g_soundChime && audio_present()) audio_play(AUDIO_CHIME);
+            }
         }
         const bool wifiUp = (WiFi.status() == WL_CONNECTED);
         const int  rssi   = wifiUp ? (int)WiFi.RSSI() : -127;

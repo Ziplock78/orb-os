@@ -162,6 +162,13 @@ static void play_cue(int cue) {
             i2s_write(I2S_PORT, buf, ns * 2, &bw, portMAX_DELAY);
             delay(40);
         }
+    } else if (cue == AUDIO_CHIME) {                   // gentle 4-note descending clock chime
+        static const float notes[4] = { 659.25f, 587.33f, 523.25f, 392.00f };  // E5 D5 C5 G4
+        for (int k = 0; k < 4; ++k) {
+            size_t ns = gen_beep(buf, S_BUF_LEN, notes[k], 300, amp * 0.85f);
+            i2s_write(I2S_PORT, buf, ns * 2, &bw, portMAX_DELAY);
+            delay(55);
+        }
     } else {
         size_t ns = gen_beep(buf, S_BUF_LEN, 880.0f, 160, amp);
         i2s_write(I2S_PORT, buf, ns * 2, &bw, portMAX_DELAY);
