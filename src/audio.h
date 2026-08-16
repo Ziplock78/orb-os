@@ -18,3 +18,11 @@ void audio_set_volume(int pct);     // 0..100 (software amplitude)
 void audio_set_muted(bool muted);
 void audio_play(AudioCue cue);      // non-blocking: signals the playback task
 void audio_selftest();              // ~2 s continuous tone for by-ear verification
+
+// Named chime library (real recorded audio, baked into flash — see chime_westminster.h).
+// AUDIO_CHIME plays whichever index is currently selected via audio_set_chime().
+int         audio_chime_count();          // number of chimes available
+const char *audio_chime_name(int idx);    // display name, bounds-checked
+int         audio_chime_index();          // currently selected chime
+void        audio_set_chime(int idx);     // select active chime (caller persists the index)
+void        audio_preview_chime(int idx); // play a specific chime once, ignoring mute (picker UI)

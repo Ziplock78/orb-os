@@ -6,4 +6,5 @@ namespace clockview {
     void      init();      // build the clock screen; call once after display::begin()
     lv_obj_t* screen();    // the clock's LVGL screen (hand this to app_shell::add)
     void      onPress();   // knob push: flip between the analog face and big digital
+    void      onExit();    // shell is switching away: drop the custom face's decoded PSRAM
 }

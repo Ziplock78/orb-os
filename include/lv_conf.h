@@ -28,7 +28,14 @@
 /* Object/style pool (internal RAM). Big bitmap draw buffers are allocated
    separately in PSRAM in display.cpp. Bump this if the radar UI grows. */
 #define LV_MEM_CUSTOM 0
+#ifdef LV_MEM_SIZE_NATIVE_OVERRIDE
+// Desktop simulator only (see [env:native] in platformio.ini): a screenshot run
+// loads several apps' worth of screens/objects at once in one process, more than
+// the on-device 64 KB pool budgets for one app at a time. Device build is untouched.
+#define LV_MEM_SIZE LV_MEM_SIZE_NATIVE_OVERRIDE
+#else
 #define LV_MEM_SIZE (64U * 1024U)
+#endif
 #define LV_MEM_ADR 0
 #define LV_MEM_BUF_MAX_NUM 16
 #define LV_MEMCPY_MEMSET_STD 0

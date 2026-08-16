@@ -7,7 +7,6 @@
 #include "config.h"
 #include "radar_view.h"
 #include "ui.h"
-#include "touch_cst9217.h"
 
 #include <Arduino.h>
 #include <Arduino_GFX_Library.h>
@@ -26,12 +25,24 @@ static Arduino_CO5300  *s_gfx = nullptr;
 #define LVGL_BUF_LINES 40    // partial draw-buffer height (lines); kept in fast internal RAM
 static lv_disp_draw_buf_t s_draw_buf;
 static lv_disp_drv_t      s_disp_drv;
-static lv_indev_drv_t     s_indev_drv;
 static lv_color_t        *s_buf1 = nullptr;
 static lv_color_t        *s_buf2 = nullptr;
 
 static volatile uint32_t s_frameCount = 0;   // rendered frames (last-flush), for FPS measurement
 uint32_t display_frames() { return s_frameCount; }
+
+// Render-time accounting. Flight Tracker measured 5 fps against a 33 fps target, while
+// [perf] showed the aircraft drawing costs only 0.2 ms — so the time goes somewhere else
+// in the frame. Splitting "total time inside LVGL" from "time spent pushing pixels to the
+// panel" distinguishes compositing cost (CPU, layer blending) from QSPI transfer cost.
+static volatile uint32_t s_lvglUs  = 0;   // cumulative us inside lv_timer_handler()
+static volatile uint32_t s_flushUs = 0;   // cumulative us inside flush_cb (a subset)
+static volatile uint32_t s_flushedPx = 0; // cumulative pixels pushed (dirty-area size)
+uint32_t display_flushed_px() { return s_flushedPx; }
+// Defined at file scope, matching display_frames() above: display.h declares these
+// globally, not inside namespace display.
+uint32_t display_lvgl_us()  { return s_lvglUs; }
+uint32_t display_flush_us() { return s_flushUs; }
 
 static volatile uint16_t s_rot = 0;          // clockwise display rotation, 0..359 degrees
 static float      s_rotCos = 1.0f;
@@ -130,7 +141,14 @@ static void flush_arbitrary(const lv_area_t *area) {
 //              internal-RAM one starves the mbedTLS handshake and kills the ADS-B feed.
 //   other: update the logical framebuffer and inverse-sample the rotated dirty bounds.
 static void flush_cb(lv_disp_drv_t *drv, const lv_area_t *area, lv_color_t *px) {
+    const uint32_t t_flush0 = micros();
     const int w = (int)(area->x2 - area->x1 + 1);
+    // How much screen area is actually being redrawn. Slowing the sweep's redraw rate by
+    // half changed the frame cost by 0.2%, which means the cost is not "many small
+    // invalidations" — so the question is whether each frame is repainting a small dirty
+    // box or the entire 466x466 screen. Accumulate the pixels flushed per second and let
+    // /health report it, instead of reasoning about LVGL's invalidation behaviour.
+    s_flushedPx += (uint32_t)w * (uint32_t)(area->y2 - area->y1 + 1);
     const int h = (int)(area->y2 - area->y1 + 1);
     const uint16_t angle = s_rot;
     const bool arbitrary = (angle != 0 && angle != 90 && angle != 180 && angle != 270);
@@ -149,6 +167,7 @@ static void flush_cb(lv_disp_drv_t *drv, const lv_area_t *area, lv_color_t *px) 
     if (arbitrary && s_frameBuf && s_rotBuf) {
         flush_arbitrary(area);
         if (lv_disp_flush_is_last(drv)) s_frameCount++;
+        s_flushUs += micros() - t_flush0;
         lv_disp_flush_ready(drv);
         return;
     }
@@ -185,6 +204,7 @@ static void flush_cb(lv_disp_drv_t *drv, const lv_area_t *area, lv_color_t *px) 
     }
     draw_block(dx, dy, out, dw, dh);
     if (lv_disp_flush_is_last(drv)) s_frameCount++;
+    s_flushUs += micros() - t_flush0;
     lv_disp_flush_ready(drv);
 }
 
@@ -198,42 +218,26 @@ static void rounder_cb(lv_disp_drv_t *drv, lv_area_t *area) {
     area->y2 |= 1;
 }
 
-// CST9217 touch -> LVGL pointer. LVGL keeps the last point on release.
-static void touch_read_cb(lv_indev_drv_t *drv, lv_indev_data_t *data) {
-    (void)drv;
-    uint16_t x, y;
-    if (touch_read(&x, &y)) {
-        int lx = x, ly = y;                              // physical touch -> logical (inverse rotation)
-        const uint16_t angle = s_rot;
-        switch (angle) {
-            case 90:  lx = y;                        ly = SCREEN_H - 1 - x; break;
-            case 180: lx = SCREEN_W - 1 - x;         ly = SCREEN_H - 1 - y; break;
-            case 270: lx = SCREEN_W - 1 - y;         ly = x; break;
-            default:
-                if (angle != 0) {
-                    const int relX2 = 2 * (int)x - (SCREEN_W - 1);
-                    const int relY2 = 2 * (int)y - (SCREEN_H - 1);
-                    const int64_t sx2q = (int64_t)(SCREEN_W - 1) * 65536
-                                       + (int64_t)s_rotCosQ16 * relX2
-                                       + (int64_t)s_rotSinQ16 * relY2;
-                    const int64_t sy2q = (int64_t)(SCREEN_H - 1) * 65536
-                                       - (int64_t)s_rotSinQ16 * relX2
-                                       + (int64_t)s_rotCosQ16 * relY2;
-                    lx = (int)((sx2q + 65536) >> 17);
-                    ly = (int)((sy2q + 65536) >> 17);
-                }
-                break;
-        }
-        if (lx < 0 || lx >= SCREEN_W || ly < 0 || ly >= SCREEN_H) {
-            data->state = LV_INDEV_STATE_RELEASED;        // black corners are outside the logical UI
-            return;
-        }
-        data->point.x = (lv_coord_t)lx;
-        data->point.y = (lv_coord_t)ly;
-        data->state = LV_INDEV_STATE_PRESSED;
-    } else {
-        data->state = LV_INDEV_STATE_RELEASED;
-    }
+// Touch is deliberately not wired up. The Orb is knob-only: see the input model in
+// docs/ARCHITECTURE.md and section 2 of orb-user-requirements.md. The CST9217 driver
+// (src/touch_cst9217.cpp) is kept in the repo but excluded from both build envs via
+// build_src_filter in platformio.ini, so it costs zero bytes while staying available
+// if a touch feature is ever wanted. The pointer indev registration and the
+// physical-to-logical rotation mapping that used to live here were removed with it.
+
+
+// Same running ledger as main.cpp's boot checkpoints, scoped inside this function.
+// display::begin() was measured taking 4.6 MB of the 8 MB PSRAM budget — 57% of the
+// chip, before a single app loads — and only ~900 KB of that was accounted for. These
+// marks split it by name so the rest stops being a mystery.
+static void dmark(const char *what) {
+    static uint32_t prev = 0;
+    const uint32_t now = (uint32_t)ESP.getFreePsram();
+    Serial.printf("[psram/display] %-24s free %6u KB", what, (unsigned)(now / 1024));
+    if (prev && prev >= now) Serial.printf("   (-%u KB)", (unsigned)((prev - now) / 1024));
+    else if (prev)           Serial.printf("   (+%u KB)", (unsigned)((now - prev) / 1024));
+    Serial.println();
+    prev = now;
 }
 
 namespace display {
@@ -249,11 +253,14 @@ bool begin() {
         Serial.println("[display] gfx->begin() FAILED");
         return false;
     }
+    dmark("after gfx begin");
     s_gfx->fillScreen(RGB565_BLACK);
     s_gfx->setBrightness(BRIGHTNESS_DEFAULT);
     Serial.println("[display] panel up; init LVGL...");
 
+    dmark("before lv_init");
     lv_init();
+    dmark("after lv_init");
 
     // Draw scratch in INTERNAL DMA RAM: rendering anti-aliased graphics into PSRAM is
     // slow (that, not QSPI bandwidth, was the bottleneck). Keep the active buffer in fast
@@ -265,6 +272,7 @@ bool begin() {
         Serial.println("[display] internal draw buffer failed; falling back to PSRAM");
         s_buf1 = (lv_color_t *)heap_caps_malloc(buf_px * sizeof(lv_color_t), MALLOC_CAP_SPIRAM);
     }
+    dmark("after draw buffer");
     lv_disp_draw_buf_init(&s_draw_buf, s_buf1, s_buf2, buf_px);
 
     // Rotation buffers live in PSRAM so the internal contiguous block needed by TLS remains
@@ -277,6 +285,7 @@ bool begin() {
         Serial.println("[display] WARNING: rotation buffer allocation failed; arbitrary angles unavailable");
     }
 
+    dmark("after rot+frame buffers");
     lv_disp_drv_init(&s_disp_drv);
     s_disp_drv.hor_res  = SCREEN_W;
     s_disp_drv.ver_res  = SCREEN_H;
@@ -285,22 +294,22 @@ bool begin() {
     s_disp_drv.draw_buf = &s_draw_buf;
     lv_disp_drv_register(&s_disp_drv);
 
-    // Touch input (CST9217) -> LVGL pointer indev (drives tap-to-inspect + swipe).
-    if (touch_begin()) {
-        lv_indev_drv_init(&s_indev_drv);
-        s_indev_drv.type = LV_INDEV_TYPE_POINTER;
-        s_indev_drv.read_cb = touch_read_cb;
-        lv_indev_drv_register(&s_indev_drv);
-        Serial.println("[display] CST9217 touch registered");
-    }
+    // No touch indev is registered. Knob only. See the note above touch_read_cb's
+    // former home, further up this file.
 
     Serial.printf("[display] PSRAM free: %u KB\n", (unsigned)(ESP.getFreePsram() / 1024));
-    ui_create();                   // M3: radar/list/stats views + tap-to-inspect
+    dmark("before ui_create");
+    ui_create();                   // Flight Tracker scope + detail card + weather view
+    dmark("after ui_create");
     Serial.println("[display] LVGL ready");
     return true;
 }
 
-void loop() { lv_timer_handler(); }
+void loop() {
+    const uint32_t t0 = micros();
+    lv_timer_handler();
+    s_lvglUs += micros() - t0;
+}
 
 void setBrightness(uint8_t v) { if (s_gfx) s_gfx->setBrightness(v); }
 

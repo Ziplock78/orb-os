@@ -11,13 +11,13 @@ struct RadarSettings {
     bool   mute = false;
 };
 
-// Selectable visual skins.
+// Selectable visual skins. (Phosphor and Amber CRT were retired — Orb, Military, and
+// Aviator covered everything anyone actually used.)
 enum RadarTheme {
-    THEME_PHOSPHOR = 0,   // green-on-black radar scope (the mockup look)
-    THEME_ORB   = 1,   // Orb scope: green gradient, grid, yellow blips
-    THEME_AMBER    = 2,   // amber CRT scope (warm monochrome chrome)
-    THEME_MILITARY = 3,   // night-vision / military green scope
-    THEME_COUNT    = 4
+    THEME_ORB      = 0,   // Orb scope: green gradient, grid, yellow blips
+    THEME_MILITARY = 1,   // night-vision / military green scope
+    THEME_AVIATOR  = 2,   // WWII aviator scope: brass/ivory chrome, matches the clock + Location dials
+    THEME_COUNT    = 3
 };
 
 // Flattened, display-ready info for one aircraft (detail card / list view).
@@ -50,6 +50,25 @@ int  hitTest(int x, int y);
 void select(int idx);
 bool selected(AcInfo& out);                 // false if nothing selected/visible
 
+// Knob-driven cycling through in-range aircraft, for a Launch Kit custom push:
+// the shell captures the knob on Flight Tracker and each detent calls this.
+// The cycle includes an explicit "nothing selected" stop (reachable from either
+// end), so turning far enough always gets you back to no selection, not just a
+// separate gesture. dir: +1 next (turn right), -1 previous (turn left).
+void selectNext(int dir);
+
+// Flight Tracker knob state machine, wired identically by the device (main.cpp)
+// and the simulator (sim_main.cpp) so they can't drift. Default view = nothing
+// selected, knob released (a turn opens the app switcher); a push enters selection
+// mode (knob captured, a turn cycles aircraft); a second push or 5s of no input
+// drops back to the default view. Hosts call knobEnter() at the tail of the app's
+// onEnter (after showing the scope), and wire knobPress/knobTurn/knobExit as the
+// app's onPress/onTurn/onExit.
+void knobEnter();
+void knobPress();
+void knobTurn(int dir);
+void knobExit();
+
 // Snapshot access for the list / stats views.
 int  count();
 int  countInRange();                        // aircraft within the display range (for the HUD)
@@ -58,10 +77,12 @@ bool info(int idx, AcInfo& out);
 // Sweep self-animates via an internal timer; kept for API compatibility.
 void tickSweep();
 
-// Selectable visual skin (THEME_PHOSPHOR / THEME_ORB).
+// Selectable visual skin (THEME_ORB / THEME_MILITARY / THEME_AVIATOR).
 void setTheme(int theme);
 int  theme();
+const char *themeName(int theme);                // "ORB" / "MILITARY" / "AVIATOR" (bounds-checked)
 void cycleTheme();
+void flashThemeName();                           // briefly show the current theme's name banner (on touch)
 void setThemeChangedCb(void (*cb)(int theme));   // called when the theme changes (for persistence)
 void setRangeLabelVisible(bool v);               // hide the built-in range label (UI shows its own)
 void setSweepEnabled(bool on);                   // show/hide the rotating sweep line
@@ -71,5 +92,11 @@ bool airportsEnabled();
 void setTrailLength(int level);                  // 0=off 1=short 2=medium 3=long (aircraft trails + flow)
 void setMaxOnScreen(int n);                       // how many (nearest) aircraft to draw on the scope
 void setLargeText(bool on);                       // accessibility: bigger glyph labels. Call BEFORE init()
+
+// Re-attach the baked plate/overlay image sources (decoding lazily if needed).
+// Call from Flight Tracker's onEnter — a matching onExit calls
+// radar_sprite_release() to free the decoded PSRAM while some other app is on
+// screen, so this re-decode-on-entry keeps the image objects' src valid.
+void refreshCustomStyle();
 
 } // namespace radar

@@ -22,7 +22,12 @@
 #include "cloud_image.h"
 #include "cloud_image_client.h"
 #include "radar_view.h"
+#include "radar_sprite.h"   // radar_sprite_release() — Flight Tracker's onExit
+#include "custom_radar.h"             // CUSTOM_HAS_RADAR — a Launch Kit push changes the Flight Tracker knob's behavior
 #include "ui.h"
+#include "app_theme.h"
+#include "theme_select.h"  // which Launch Kit theme (of however many are on the SD card) is active
+#include "theme_style.h"   // per-theme app roster (theme_style::apps())
 #include "display.h"                  // M0: CO5300 + LVGL bring-up
 #include "imu_qmi8658.h"             // face-down sleep
 #include "gps.h"                     // LC76G GNSS (-G variant only)
@@ -31,19 +36,31 @@
 #include "audio.h"                   // ES8311 alert pings
 #include "knob.h"                    // rotary encoder on the 8-pin header
 #include "app_shell.h"               // "channel changer": knob flips between apps
+#include "input_router.h"            // shared knob->app_shell routing (device + sim)
+#include "diag_log.h"                // RTC-memory event ring buffer, survives a reboot
+#include "sdcard.h"                  // microSD (TF) slot, SPI mode
+#include "roads_sd.h"                // worldwide roads read off the SD card
 #include "clock_view.h"              // clock app (app two)
 #include "weather_view.h"           // animated weather-radar app (knob channel)
 #include "settings_view.h"          // settings app (menu; captures the knob)
+#include "custom_boot_target.h"       // CUSTOM_BOOT_TARGET — set by whichever Launch Kit push (clock/splash/radar) ran last
+#include "custom_apps.h"              // CUSTOM_APP_* — which apps a theme flash includes in the menu
 #include "location_view.h"          // location info app (Aviator dial)
+#include "spycam_view.h"             // Spy Cam: looping "security camera" flip-book
 #include <set>                       // audio: track which contacts are in range
 #include <string>
 #include <WiFiManager.h>             // captive portal
+#if __has_include("secrets.h")
+#include "secrets.h"                 // optional, gitignored: DEV_WIFI_SSID / DEV_WIFI_PASS
+#endif
 #include <Preferences.h>            // NVS (persist theme/settings)
 #include <time.h>                   // NTP/RTC clock + date
 #include <WebServer.h>              // configuration web page
 #include <ESPmDNS.h>                // http://capsuleradar.local
 #include <ArduinoOTA.h>             // OTA firmware update over WiFi (PlatformIO/espota)
+#include <esp_system.h>             // esp_reset_reason() for /health
 #include <Update.h>                 // browser OTA: self-flash an uploaded .bin
+#include <SD.h>                     // /sdput: write theme files straight to the microSD
 #include <esp_heap_caps.h>          // largest-free-block metric (heap health)
 #include <esp_wifi.h>               // WiFi driver control (reset must survive the reboot)
 #include <nvs.h>                    // erase the driver's "nvs.net80211" namespace (WiFi reset)
@@ -58,16 +75,21 @@ static WiFiManager           g_wm;
 static int                   g_brightnessDay = BRIGHTNESS_DEFAULT;   // user brightness (web/NVS)
 static int                   g_volume = 60;                          // alert volume 0..100 (web/NVS)
 static bool                  g_muted  = false;                       // mute alert pings
-static bool                  g_soundRadar = true;                    // on-device: radar pings on/off
+static int                   g_chimeIdx = 0;                         // selected chime (Settings/NVS)
+static bool                  g_soundRadar = false;                   // on-device: radar pings on/off
 static bool                  g_soundChime = false;                   // on-device: top-of-hour clock chime
 static int                   g_alertMode = 2;                        // 0=off 1=emergencies 2=new+emergencies (web/NVS)
 static float                 g_proximityKm = 0.0f;                   // proximity alert radius, km (0=off) (web/NVS)
 static uint32_t              g_idleDimMs = IDLE_DIM_MS;              // dim after this idle time (0 = never)
 static bool                  g_showSweep = true;                     // rotating sweep line on/off (web/NVS)
 static int                   g_units = 0;                            // 0=Aviation 1=Metric 2=Imperial (web/NVS)
+static int                   g_wxUnits = 0;                          // Weather app only: 0=Auto 1=Metric 2=Imperial (Settings/NVS)
+static int                   g_wxZoomTier = 0;                       // Weather map range: 0=50mi 1=100mi (Settings/NVS)
+static volatile bool         g_wxZoomChanged = false;                // set on cycle so adsb_task refetches immediately
 static bool                  g_showAirports = true;                  // airport markers on/off (web/NVS)
 static bool                  g_hideGround   = false;                 // skip on-ground aircraft in the feed (web/NVS)
 static int                   g_minAltFt     = 0;                     // only show aircraft above this altitude, ft (0 = off) (web/NVS)
+static int                   g_deadZonePx   = 0;                     // ignore aircraft inside this many px of scope center (0 = off) (pushed design)
 static bool                  g_milOnly      = false;                 // only show military-flagged aircraft (web/NVS)
 static int                   g_rotation = 0;                         // clockwise display rotation, 0..359° (web/NVS)
 static bool                  g_useGps = false;                       // auto-set home from the LC76G GPS (-G variant) (web/NVS)
@@ -121,9 +143,11 @@ static void adsb_task(void*) {
     bool retainingEmptySnapshot = false;
     bool wasConnected = false;
     uint32_t lastPoll = 0;
+    uint32_t adsbBackoffMs = 0;                // extra delay after feed failures (exponential, 30s cap)
     uint32_t nextWeatherAt = UINT32_MAX;       // armed five seconds after WiFi connects
     uint32_t nextWxRadarAt = UINT32_MAX;
-    uint32_t nextCloudImageAt = UINT32_MAX;
+    int      wxFillIdx = WX_RADAR_FRAMES;      // which animation frame to fetch next (== FRAMES: idle)
+    uint32_t wxGen = 0;                        // refresh generation, bumped each full loop
     uint32_t nextLocInfoAt = UINT32_MAX;
     uint32_t lastFeedOk = millis();          // self-heal: time of last good (or no-WiFi) poll
     for (;;) {
@@ -133,10 +157,10 @@ static void adsb_task(void*) {
             // and makes RSSI bounce (feed goes stale -> amber bars) even sitting next to the router.
             WiFi.setSleep(false);
             Serial.printf("[adsb] WiFi up, IP %s\n", WiFi.localIP().toString().c_str());
+            diag::log("wifi up %s", WiFi.localIP().toString().c_str());
             configTzTime(g_tz.c_str(), "pool.ntp.org", "time.nist.gov");  // local time (web-configurable TZ)
             Serial.println("[web] config: http://capsuleradar.local/  (or the IP above)");
             nextWeatherAt = millis() + 5000UL; // let the first ADS-B poll complete before weather TLS
-            nextCloudImageAt = millis() + 15000UL;
             nextWxRadarAt = millis() + 12000UL;
             nextLocInfoAt = millis() + 9000UL;
             // mDNS + OTA are started on core 1 (loop) to keep all mDNS use on one core
@@ -147,6 +171,7 @@ static void adsb_task(void*) {
         if (!conn) lastFeedOk = millis();
         else if (millis() - lastFeedOk > 180000UL) {
             Serial.println("[adsb] feed stuck >180s with WiFi up -> restarting to recover");
+            diag::log("feed stuck 180s -> reboot (heap %u)", (unsigned)ESP.getFreeHeap());
             delay(100);
             ESP.restart();
         }
@@ -160,7 +185,8 @@ static void adsb_task(void*) {
             // it refreshing even while the user taps around — a slow route/photo lookup (below)
             // can block this single network task, so it must never get ahead of the feed.
             const uint32_t nowMs = millis();
-            const uint32_t pollInterval = g_onBattery ? POLL_INTERVAL_BATTERY_MS : POLL_INTERVAL_MS;
+            const uint32_t pollInterval =
+                (g_onBattery ? POLL_INTERVAL_BATTERY_MS : POLL_INTERVAL_MS) + adsbBackoffMs;
             if (lastPoll == 0 || nowMs - lastPoll >= pollInterval) {  // aircraft feed
                 lastPoll = nowMs;
                 static int failCount = 0;
@@ -169,6 +195,7 @@ static void adsb_task(void*) {
                 if (g_adsb.poll(fresh)) {
                     Serial.printf("[adsb] fetched %u aircraft\n", (unsigned)fresh.size());
                     failCount = 0;
+                    adsbBackoffMs = 0;                        // recovered: back to real-time polling
                     g_feedOk = true;
                     const uint32_t receivedMs = millis();
                     lastFeedOk = receivedMs;
@@ -193,8 +220,17 @@ static void adsb_task(void*) {
                         }
                     }
                 } else {
-                    Serial.println("[adsb] poll failed");
                     if (++failCount >= 5) g_feedOk = false;   // sustained outage -> HUD warning
+                    // A failed poll is almost always the TLS handshake starving on a fragmented
+                    // internal heap (SSL -32512). Hammering both hosts every 2s only fragments it
+                    // further and floods the log; backing off exponentially (2s -> 30s cap) lets the
+                    // internal heap coalesce so a later handshake can allocate, and we snap straight
+                    // back to real-time the instant a poll succeeds (see the success branch above).
+                    adsbBackoffMs = (adsbBackoffMs == 0)     ? 2000UL
+                                  : (adsbBackoffMs < 15000UL) ? adsbBackoffMs * 2
+                                                              : 30000UL;
+                    Serial.printf("[adsb] poll failed (backing off ~%lus)\n",
+                                  (unsigned long)(adsbBackoffMs / 1000));
                 }
             }
             // Forecasts change slowly. Fetch only after the live ADS-B poll has had priority.
@@ -212,26 +248,38 @@ static void adsb_task(void*) {
                     Serial.println("[weather] fetch failed; retrying in 60s");
                 }
             }
-            if ((int32_t)(nowMs - nextWxRadarAt) >= 0) {
-                Serial.println("[wxradar] fetching latest frame...");
-                if (wx_radar_fetch(g_settings.homeLat, g_settings.homeLon)) {
-                    g_wxRadarDirty = true;
+            // Weather radar animation: fetch the past frames one per pass (not all 9 in one
+            // blocking burst) so each ~2-3s tile fetch yields back to the live ADS-B poll
+            // between frames instead of freezing the feed for ~25s. wxFillIdx == FRAMES = idle.
+            if (g_wxZoomChanged) {                     // zoom changed: restart the loop right away
+                g_wxZoomChanged = false;
+                wxFillIdx = 0; ++wxGen; nextWxRadarAt = nowMs;
+            }
+            if (wxFillIdx >= WX_RADAR_FRAMES && (int32_t)(nowMs - nextWxRadarAt) >= 0) {
+                wxFillIdx = 0; ++wxGen;                // periodic refresh: start a new loop
+            }
+            if (wxFillIdx < WX_RADAR_FRAMES && (int32_t)(nowMs - nextWxRadarAt) >= 0) {
+                const int r = wx_radar_fetch_frame(g_settings.homeLat, g_settings.homeLon,
+                                                   g_wxZoomTier, wxGen, wxFillIdx);
+                if (r == 1) {
+                    g_wxRadarDirty = true;             // new frame committed
+                    wxFillIdx++;
+                    nextWxRadarAt = millis() + (wxFillIdx >= WX_RADAR_FRAMES ? WX_RADAR_REFRESH_MS : 250UL);
+                } else if (r == 0) {                   // fewer frames than the loop length — cycle done
+                    if (wxFillIdx > 0) g_wxRadarDirty = true;
+                    wxFillIdx = WX_RADAR_FRAMES;
                     nextWxRadarAt = millis() + WX_RADAR_REFRESH_MS;
-                } else {
+                } else {                               // error — retry the whole cycle in 60s
+                    wxFillIdx = WX_RADAR_FRAMES;
                     nextWxRadarAt = millis() + 60000UL;
                     Serial.println("[wxradar] fetch failed; retrying in 60s");
                 }
             }
-            if ((int32_t)(nowMs - nextCloudImageAt) >= 0) {
-                Serial.println("[clouds] fetching EUMETSAT frame...");
-                if (cloud_image_fetch(g_settings.homeLat, g_settings.homeLon)) {
-                    g_cloudImageDirty = true;
-                    nextCloudImageAt = millis() + CLOUD_IMAGE_REFRESH_MS;
-                } else {
-                    nextCloudImageAt = millis() + 60000UL;
-                    Serial.println("[clouds] fetch failed; retrying in 60s");
-                }
-            }
+            // Satellite clouds (EUMETSAT) is no longer reachable from the Weather app's
+            // knob-push cycle (see weather_press_cycle() in main.cpp) — nothing to spend
+            // a periodic fetch + PSRAM cache on. nextCloudImageAt stays permanently
+            // un-armed (UINT32_MAX) since it's never referenced now. cloud_image_fetch()
+            // itself is untouched if this ever needs to come back on some other input.
             // Location Info app: reverse-geocode + weather + a Wikipedia fact. One HTTPS
             // call per cycle (pump); a new cycle starts on demand or on the refresh timer.
             if (locationview::takeRefresh() || (int32_t)(nowMs - nextLocInfoAt) >= 0) {
@@ -270,22 +318,52 @@ static void loadSettings() {
     p.begin("capsuleradar", true);
     g_settings.homeLat = p.getDouble("homeLat", HOME_LAT_DEFAULT);
     g_settings.homeLon = p.getDouble("homeLon", HOME_LON_DEFAULT);
+#if CUSTOM_HAS_RADAR_HOME
+    // Launch Kit is the source of truth for location: a pushed design's own
+    // Latitude/Longitude override whatever's saved in NVS (and the on-device
+    // Settings/IP/GPS detection, see below), so the editor, simulator, and Orb
+    // all center on the exact same coordinates. Not persisted — same
+    // one-shot-per-flash model as range; a re-push (or reflash) is how location
+    // changes, matching "the editor is the source of truth".
+    g_settings.homeLat = CUSTOM_RADAR_HOME_LAT;
+    g_settings.homeLon = CUSTOM_RADAR_HOME_LON;
+#endif
     g_settings.rangeKm = p.getFloat("rangeKm", RANGE_KM_DEFAULT);
+#if CUSTOM_HAS_RADAR_RANGE
+    // A pushed design's own Range slider is authoritative for what the scope
+    // captures (and what the range banner shows) until the next push — not
+    // persisted to NVS, so an on-device zoom afterward still works normally
+    // for the rest of this session; it just won't survive a reboot without a
+    // fresh push, same one-shot-per-boot precedent as CUSTOM_BOOT_TARGET.
+    g_settings.rangeKm = CUSTOM_RADAR_RANGE_KM;
+#endif
     g_brightnessDay    = p.getInt("bright", BRIGHTNESS_DEFAULT);
     g_volume           = p.getInt("vol", 60);
     g_muted            = p.getBool("mute", false);
-    g_soundRadar       = p.getBool("sndRadar", true);
+    g_soundRadar       = p.getBool("sndRadar", false);
     g_soundChime       = p.getBool("sndChime", false);
     g_alertMode        = p.getInt("alertmode", 2);
     g_proximityKm      = p.getFloat("proxkm", 0.0f);
     g_useGps           = p.getBool("usegps", false);
     g_trailLen         = p.getInt("traillen", 2);
     g_maxAc            = p.getInt("maxac", 20);
+#if CUSTOM_HAS_RADAR_MAXAC
+    g_maxAc = CUSTOM_RADAR_MAXAC;   // a pushed design's own "max aircraft shown" cap, same one-shot-per-boot precedent as range/boot-target
+#endif
     g_idleDimMs        = p.getUInt("idledim", IDLE_DIM_MS);
     g_units            = p.getInt("units", 0);
+    g_wxUnits          = p.getInt("wxUnits", 0);
+    g_wxZoomTier       = 0;   // lean redesign: weather map is a single fixed 50mi range now
+                              // (tier 0). Zoom is gone (see weather_press_cycle), so this is
+                              // pinned to 0 regardless of any old saved "wxZoom2" value.
     g_tz               = p.getString("tz", TZ_STR);
+    // Migrate off the old forked-in Spain default so a device that has it saved (from
+    // before the default changed) still lands on local time. Re-locating overwrites this.
+    if (g_tz == "CET-1CEST,M3.5.0,M10.5.0/3") g_tz = TZ_STR;
     g_bigText          = p.getBool("bigtext", false);
+    g_chimeIdx         = p.getInt("chimeIdx", 0);
     p.end();
+    audio_set_chime(g_chimeIdx);   // no hardware dependency, safe before audio_begin()
     // fonts are baked into the widgets at creation time, so the large-text flag must be
     // in place before display::begin() builds the UI (loadSettings runs first in setup)
     ui_set_large_text(g_bigText);
@@ -337,20 +415,38 @@ static float queryRadiusKm() {
     return constrain(km, ADSB_QUERY_MIN_KM, ADSB_QUERY_MAX_KM);
 }
 
-// Double-tap zoom: change the display range, persist it, and ask adsb_task to
-// re-query at a matching radius (safely, on its own core). Re-render immediately.
+// The center dead zone is authored in PIXELS (Launch Kit's Scope card) rather
+// than km, because what it exists to clear is a fixed piece of on-screen
+// artwork — a center hub, a gear, a hand pivot — that stays the same size on the
+// glass whatever the range is. So it becomes a real distance only here, against
+// whatever range is currently live, and has to be recomputed whenever the range
+// changes. Launch Kit's preview does the identical conversion.
+static float deadZoneKm() {
+    if (g_deadZonePx <= 0) return 0.0f;
+    const float px = (float)min(g_deadZonePx, (int)RADAR_R_OUTER_PX);
+    return (px / (float)RADAR_R_OUTER_PX) * g_settings.rangeKm;
+}
+
+// Change the display range, persist it, and ask adsb_task to re-query at a matching
+// radius (safely, on its own core). Re-render immediately. Reached from Settings >
+// Range through host_set_range_km() below. This used to be driven by the on-screen
+// zoom button, which was touch-only and went away when touch did.
 static void onRangeChange(float km) {
     g_settings.rangeKm = km;
     Preferences p;
     p.begin("capsuleradar", false);
     p.putFloat("rangeKm", km);
     p.end();
+    g_adsb.setMinDistKm(deadZoneKm());   // px-based zone, so a new range means a new km threshold
     g_requeryKm = queryRadiusKm();
     g_requery = true;
     radar::update(g_snap, g_settings);   // instant visual zoom from the last snapshot
-    ui_set_range_km(km);
     ui_on_data_updated();
 }
+
+// Settings > Range hooks (declared extern in settings_view.cpp).
+float host_get_range_km() { return g_settings.rangeKm; }
+void  host_set_range_km(float km) { onRangeChange(km); }
 
 // Persist the visual theme in NVS (called when the user long-presses to switch).
 static void saveTheme(int t) {
@@ -358,13 +454,15 @@ static void saveTheme(int t) {
     p.begin("capsuleradar", false);
     p.putInt("theme", t);
     p.end();
+    ui_apply_theme(t);   // keep the HUD chrome in sync with the scope's palette
+    diag::log("theme -> %d", t);
 }
 
 // Convert a UTC broken-down time to time_t (mktime assumes local TZ, so flip to UTC0).
 static time_t utc_to_time(struct tm *utc) {
     setenv("TZ", "UTC0", 1); tzset();
     const time_t t = mktime(utc);
-    setenv("TZ", TZ_STR, 1); tzset();   // restore local TZ for getLocalTime()
+    setenv("TZ", g_tz.c_str(), 1); tzset();   // restore the loaded/located local TZ for getLocalTime()
     return t;
 }
 
@@ -392,17 +490,203 @@ static void applyBrightness() {
 // App-shell onEnter hooks: flip the radar screen's tileview between the radar view
 // and the original app's weather view (radar / clouds / forecast).
 static void radar_show_home()    { ui_show_view(0); }
-static void radar_show_weather() { ui_show_view(3); }
+static void radar_show_weather() { ui_show_view(1); }   // tile 1 since list/stats went
+
+// A Launch Kit push with a custom selection design changes what the knob does on
+// Flight Tracker: turning cycles the selected aircraft (see selectNext()'s "none"
+// stop — no more requires clearing needing a separate gesture) instead of opening
+// the app switcher, so the shell captures the knob the same way Settings does.
+// Push then means "leave selection mode" (back to the switcher) instead of
+// cycling the built-in Orb/Military/Aviator skin, which a custom design overrides
+// anyway. Stock behaviour (no custom push) is untouched either way.
+// Flight Tracker knob wiring now lives in radar_view (knobEnter/knobPress/
+// knobTurn/knobExit) so the device and simulator run one identical state machine:
+// land in the default view (knob released, a turn opens the switcher), push to
+// enter selection mode (turn cycles aircraft), push again or wait 5s to drop back.
+// Flight Tracker's baked plate/overlay (~1.3MB of decoded PSRAM) is freed on exit
+// via knobExit(), same discipline as clockview::onExit.
+static void radar_show_home_custom() {
+    radar_show_home();
+    radar::knobEnter();   // re-attach style + land in the default view (knob released)
+}
+static void radar_turn_select(int delta) { radar::knobTurn(delta); }
+static void radar_press_custom_or_theme() { radar::knobPress(); }
+static void radar_exit_release_style() { radar::knobExit(); }
+void host_wx_zoom_set(int tier);   // defined below, near the other weather-units hosts
+int  host_wx_zoom_tier();
+
+// Knob push while on Weather: one cycle through everything the app shows, no touch
+// needed — 50mi -> 100mi radar zoom, then the 3-day forecast, then back to 50mi.
+// Satellite clouds isn't in this cycle (see ui_set_weather_forecast()'s comment).
+static void weather_press_cycle() {
+    // Lean redesign: one fixed 50mi radar range, no user-selectable zoom (see
+    // docs/lean-weather-radar-redesign.md). The knob push just toggles forecast <-> radar
+    // map; the old 100mi tier and the re-fetch it forced are gone. g_wxZoomTier is pinned
+    // to 0 (50mi) in loadSettings, so the radar map is always the 50mi view.
+    ui_set_weather_forecast(!ui_weather_is_forecast());
+}
+
+// Recovery-reboot warning: the knob's hold-to-reboot is meant for a genuinely stuck
+// device, but a silent multi-second countdown means a thumb resting on the button
+// during normal browsing can trigger it by accident with zero warning. This shows a
+// big on-screen countdown starting partway into any hold, so you can just let go.
+static constexpr uint32_t HOLD_WARNING_START_MS = 2500;   // when the countdown appears
+static lv_obj_t *g_holdWarning    = nullptr;
+static lv_obj_t *g_holdWarningLbl = nullptr;
+
+static void build_hold_warning() {
+    g_holdWarning = lv_obj_create(lv_layer_top());
+    lv_obj_remove_style_all(g_holdWarning);
+    lv_obj_set_size(g_holdWarning, SCREEN_W, SCREEN_H);
+    lv_obj_center(g_holdWarning);
+    lv_obj_set_style_bg_color(g_holdWarning, lv_color_hex(0x3A0000), 0);
+    lv_obj_set_style_bg_opa(g_holdWarning, LV_OPA_80, 0);
+    lv_obj_clear_flag(g_holdWarning, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
+    g_holdWarningLbl = lv_label_create(g_holdWarning);
+    lv_obj_set_style_text_color(g_holdWarningLbl, lv_color_white(), 0);
+    lv_obj_set_style_text_font(g_holdWarningLbl, &lv_font_montserrat_20, 0);
+    lv_obj_set_style_text_align(g_holdWarningLbl, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_center(g_holdWarningLbl);
+    lv_obj_add_flag(g_holdWarning, LV_OBJ_FLAG_HIDDEN);
+}
+
+// Called every loop(): shows/updates the countdown while held past the warning
+// threshold, hides it the instant the button is released (or once it actually reboots).
+static void update_hold_warning() {
+    if (!g_holdWarning) return;
+    const uint32_t held = knob::heldMs();
+    if (held < HOLD_WARNING_START_MS) {
+        lv_obj_add_flag(g_holdWarning, LV_OBJ_FLAG_HIDDEN);
+        return;
+    }
+    const uint32_t total = knob::longPressMs();
+    const uint32_t remainMs = (held >= total) ? 0 : (total - held);
+    char buf[64];
+    snprintf(buf, sizeof(buf), "RELEASE TO CANCEL\n\nREBOOTING IN %lus",
+             (unsigned long)((remainMs + 999) / 1000));
+    lv_label_set_text(g_holdWarningLbl, buf);
+    lv_obj_clear_flag(g_holdWarning, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_move_foreground(g_holdWarning);
+}
+
+// Countries where everyday weather is reported in Fahrenheit/miles rather than
+// Celsius/km: the US (+ territories), Liberia, Myanmar. Approximated with coarse
+// bounding boxes — good enough for "Automatic" mode; Settings > Weather > Units always
+// lets you override it manually regardless of what this returns.
+static bool is_imperial_region(double lat, double lon) {
+    if (lat >= 24.0 && lat <= 49.5 && lon >= -125.0 && lon <= -66.0)  return true;   // CONUS
+    if (lat >= 51.0 && lat <= 72.0 && lon >= -170.0 && lon <= -129.0) return true;   // Alaska
+    if (lat >= 18.5 && lat <= 22.5 && lon >= -161.0 && lon <= -154.0) return true;   // Hawaii
+    if (lat >= 4.0  && lat <= 8.6  && lon >= -11.6  && lon <= -7.3)   return true;   // Liberia
+    if (lat >= 9.5  && lat <= 28.6 && lon >= 92.0   && lon <= 101.2)  return true;   // Myanmar
+    return false;
+}
+
+// Resolves the current Weather units mode (0=Auto 1=Metric 2=Imperial) against the home
+// location to the actual imperial/metric flag the UI needs. Called at boot and whenever
+// the mode changes from Settings; home location itself only ever changes via a reboot
+// (host_set_location), so there's no need to re-resolve Auto mode outside of those.
+bool host_wx_is_imperial() {
+    if (g_wxUnits == 1) return false;
+    if (g_wxUnits == 2) return true;
+    return is_imperial_region(g_settings.homeLat, g_settings.homeLon);
+}
+int host_wx_units_mode() { return g_wxUnits; }
+void host_wx_units_set(int mode) {
+    g_wxUnits = constrain(mode, 0, 2);
+    Preferences p;
+    p.begin("capsuleradar", false);
+    p.putInt("wxUnits", g_wxUnits);
+    p.end();
+    ui_set_wx_units(host_wx_is_imperial());
+}
+
+int host_wx_zoom_tier() { return g_wxZoomTier; }
+void host_wx_zoom_set(int tier) {
+    g_wxZoomTier = constrain(tier, 0, 1);
+    Preferences p;
+    p.begin("capsuleradar", false);
+    p.putInt("wxZoom2", g_wxZoomTier);
+    p.end();
+    ui_set_wx_zoom(g_wxZoomTier);
+    g_wxZoomChanged = true;   // adsb_task refetches with the new range on its next pass
+}
 
 // Set home location from the Settings menu and reboot to re-center radar + weather
-// (mirrors the web /save handler, which also restarts).
+// (mirrors the web /save handler, which also restarts). Reuses the hold-warning overlay
+// (built in build_hold_warning()) for a visible countdown first — a silent 250ms-later
+// reboot was jarring with no explanation of what was happening or why.
 void host_set_location(double lat, double lon) {
     Preferences p;
     p.begin("capsuleradar", false);
     p.putDouble("homeLat", lat);
     p.putDouble("homeLon", lon);
+    // Also clears the post-Reset "needs setup" flag (see host_factory_reset()) — the
+    // auto-locate path (host_locate_current()) lands here directly on success, without
+    // going through host_wifi_connected_reboot(), so that was the one path that left
+    // the flag stuck set and kept forcing WiFi setup open on every boot after.
+    p.putBool("needsWifiSetup", false);
     p.end();
-    delay(250);
+
+    if (g_holdWarning && g_holdWarningLbl) {
+        lv_obj_clear_flag(g_holdWarning, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_move_foreground(g_holdWarning);
+        for (int s = 3; s >= 1; s--) {
+            char buf[48];
+            snprintf(buf, sizeof(buf), "LOCATION SAVED\n\nRESTARTING IN %ds", s);
+            lv_label_set_text(g_holdWarningLbl, buf);
+            lv_refr_now(NULL);
+            delay(1000);
+        }
+    } else {
+        delay(250);
+    }
+    ESP.restart();
+}
+
+// Settings > Reset: wipes WiFi credentials and every saved device setting (home
+// location, recent cities, theme, brightness, everything under the "capsuleradar"
+// Preferences namespace), then reboots straight into WiFi setup — meant for handing
+// the device to someone else. Same countdown-warning pattern as host_set_location(),
+// and the same WiFi-namespace erase the web /wifi-reset endpoint (handleWifi()) uses.
+void host_factory_reset() {
+    if (g_holdWarning && g_holdWarningLbl) {
+        lv_obj_clear_flag(g_holdWarning, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_move_foreground(g_holdWarning);
+        for (int s = 3; s >= 1; s--) {
+            char buf[48];
+            snprintf(buf, sizeof(buf), "FACTORY RESET\n\nRESTARTING IN %ds", s);
+            lv_label_set_text(g_holdWarningLbl, buf);
+            lv_refr_now(NULL);
+            delay(1000);
+        }
+    } else {
+        delay(250);
+    }
+
+    Preferences p;
+    p.begin("capsuleradar", false);
+    p.clear();
+    p.end();
+
+    g_wm.resetSettings();           // best-effort driver-level erase first...
+    WiFi.disconnect(false, true);   // ...keep WiFi up so the erase can actually run
+    delay(100);
+    nvs_handle_t h;                 // ...then the guaranteed path: wipe the driver's namespace
+    if (nvs_open("nvs.net80211", NVS_READWRITE, &h) == ESP_OK) {
+        nvs_erase_all(h);
+        nvs_commit(h);
+        nvs_close(h);
+    }
+
+    // Written last, after the clear() above, so it survives it — the next boot reads
+    // this and walks whoever's setting the device up straight into WiFi setup.
+    Preferences p2;
+    p2.begin("capsuleradar", false);
+    p2.putBool("needsWifiSetup", true);
+    p2.end();
+
+    delay(200);
     ESP.restart();
 }
 
@@ -416,6 +700,17 @@ void host_set_brightness(int v, bool save) {
         p.putInt("bright", g_brightnessDay);
         p.end();
     }
+}
+
+// Screen-dim idle timeout (Settings > Display). 0 = always on / never dim.
+uint32_t host_get_idle_ms() { return g_idleDimMs; }
+void host_set_idle_ms(uint32_t ms) {
+    g_idleDimMs = ms;
+    display::noteActivity();                             // reset the idle clock so it doesn't dim mid-change
+    Preferences p;
+    p.begin("capsuleradar", false);
+    p.putUInt("idledim", g_idleDimMs);
+    p.end();
 }
 
 // --- Sound settings (on-device menu) ---
@@ -442,24 +737,55 @@ void host_sound_set_chime(bool on) {
 void host_sound_preview_chime() { if (audio_present()) audio_play(AUDIO_CHIME); }
 void host_sound_preview_beep()  { if (audio_present()) audio_play(AUDIO_NEW); }
 
+// Named chime library (Settings > Sound > Chime sound). Only one entry exists today
+// (Westminster) but the picker UI and NVS persistence are built for more.
+int  host_chime_count()          { return audio_chime_count(); }
+const char *host_chime_name(int i) { return audio_chime_name(i); }
+int  host_chime_index()          { return audio_chime_index(); }
+void host_chime_set(int i) {
+    audio_set_chime(i);
+    Preferences p; p.begin("capsuleradar", false); p.putInt("chimeIdx", i); p.end();
+}
+void host_chime_preview(int i) { if (audio_present()) audio_preview_chime(i); }
+
 void host_recents_add(const char *name, double lat, double lon);   // defined below
 
 // Approximate current location from the public IP (city-level; no GPS on this board).
-// Reboots via host_set_location on success; returns quietly on failure.
-void host_locate_current() {
-    if (WiFi.status() != WL_CONNECTED) return;
+// Reboots via host_set_location() on success and never returns; returns false quietly
+// on failure so a caller that needs a location set either way (first-boot WiFi setup)
+// can fall back to something else instead of getting stuck waiting for a reboot that
+// isn't coming.
+// Build a POSIX TZ string (fixed offset, no DST) from a UTC offset in seconds, as ip-api's
+// "offset" field reports it. Correct year-round for zones that don't observe DST (Arizona,
+// most of Asia); for DST zones it's correct as of when the device located and drifts an
+// hour after the next DST change until it re-locates. Fixed-offset because deriving proper
+// POSIX DST rules would need a full timezone database the device doesn't carry.
+static void posix_tz_from_offset(long offsetSec, char *out, size_t n) {
+    const long offMin  = offsetSec / 60;    // minutes east of UTC (Arizona: -420)
+    const long westMin = -offMin;           // POSIX offset field is positive west of UTC
+    const char sign = offMin < 0 ? '-' : '+';
+    const int aH = (int)(labs(offMin) / 60), aM = (int)(labs(offMin) % 60);
+    const int wh = (int)(westMin / 60),       wm = (int)(labs(westMin) % 60);
+    if (aM == 0) snprintf(out, n, "<%c%02d>%d", sign, aH, wh);
+    else         snprintf(out, n, "<%c%02d%02d>%d:%02d", sign, aH, aM, wh, wm);
+}
+
+bool host_locate_current() {
+    if (WiFi.status() != WL_CONNECTED) return false;
     WiFiClient client;
     HTTPClient http;
     http.setConnectTimeout(4000);
     http.setTimeout(6000);
-    if (!http.begin(client, "http://ip-api.com/json/")) return;
+    // Ask for `offset` (UTC offset in seconds) alongside the position so the clock's
+    // timezone follows the located region, not just the map centre.
+    if (!http.begin(client, "http://ip-api.com/json/?fields=status,message,city,region,lat,lon,offset")) return false;
     const int code = http.GET();
-    if (code != 200) { http.end(); return; }
+    if (code != 200) { http.end(); return false; }
     String body = http.getString();
     http.end();
     JsonDocument doc;
-    if (deserializeJson(doc, body)) return;
-    if (String((const char *)(doc["status"] | "")) != "success") return;
+    if (deserializeJson(doc, body)) return false;
+    if (String((const char *)(doc["status"] | "")) != "success") return false;
     const double lat = doc["lat"] | 1000.0;
     const double lon = doc["lon"] | 1000.0;
     if (lat >= -90 && lat <= 90 && lon >= -180 && lon <= 180) {
@@ -470,8 +796,23 @@ void host_locate_current() {
             snprintf(nm, sizeof(nm), "%s%s%s", city, region[0] ? ", " : "", region);
             host_recents_add(nm, lat, lon);            // remember where we landed
         }
-        host_set_location(lat, lon);   // saves + reboots
+        // Derive + persist the timezone before the reboot, so the clock comes back on
+        // local time. host_set_location() writes homeLat/Lon and reboots (never returns).
+        const long off = doc["offset"] | 0x7FFFFFFFL;
+        if (off != 0x7FFFFFFFL && off >= -50400 && off <= 50400) {
+            char tz[24];
+            posix_tz_from_offset(off, tz, sizeof(tz));
+            g_tz = tz;
+            Preferences p;
+            p.begin("capsuleradar", false);
+            p.putString("tz", tz);
+            p.end();
+            Serial.printf("[locate] tz offset %lds -> %s\n", off, tz);
+        }
+        host_set_location(lat, lon);   // saves + reboots — does not return
+        return true;
     }
+    return false;
 }
 
 // Free city search (Open-Meteo geocoding, no key). Fills names/lats/lons with up to
@@ -561,6 +902,61 @@ void host_set_location_named(const char *name, double lat, double lon) {
     host_set_location(lat, lon);
 }
 
+// --- On-device WiFi setup (Settings > WiFi) --------------------------------------
+// Lets the user scan/select/enter-password entirely from the knob+touchscreen, no
+// phone or captive portal needed. Scanning is async (WiFi.scanNetworks(true)) so it
+// never blocks the UI thread; settings_view.cpp polls host_wifi_scan_result() from a
+// timer. Connecting hands off cleanly from WiFiManager's non-blocking portal, then
+// mirrors WiFiManager's own approach on success: reboot for a clean start, since this
+// chip's WiFi/web/mDNS stack doesn't reliably hot-swap networks in place.
+void host_wifi_scan_start() { WiFi.scanNetworks(true /*async*/); }
+
+// Returns: -1 = scan still running, -2 = scan failed, >=0 = number of networks written.
+// Deduplicates repeated SSIDs (multiple access points/bands) to the strongest signal.
+int host_wifi_scan_result(char names[][33], int8_t *rssi, bool *isOpen, int maxN) {
+    const int16_t n = WiFi.scanComplete();
+    if (n == WIFI_SCAN_RUNNING) return -1;
+    if (n == WIFI_SCAN_FAILED || n < 0) return -2;
+    int count = 0;
+    for (int i = 0; i < n && count < maxN; ++i) {
+        String ssid = WiFi.SSID(i);
+        if (ssid.length() == 0) continue;
+        int dupIdx = -1;
+        for (int j = 0; j < count; ++j) if (strcmp(names[j], ssid.c_str()) == 0) { dupIdx = j; break; }
+        const int8_t r = (int8_t)WiFi.RSSI(i);
+        if (dupIdx >= 0) { if (r > rssi[dupIdx]) rssi[dupIdx] = r; continue; }   // keep the stronger AP
+        snprintf(names[count], 33, "%s", ssid.c_str());
+        rssi[count] = r;
+        isOpen[count] = (WiFi.encryptionType(i) == WIFI_AUTH_OPEN);
+        count++;
+    }
+    return count;
+}
+
+void host_wifi_connect(const char *ssid, const char *pass) {
+    if (g_wm.getConfigPortalActive()) g_wm.stopConfigPortal();   // hand off cleanly
+    WiFi.begin(ssid, pass);
+}
+
+// 0 = still connecting, 1 = connected, 2 = failed/rejected.
+int host_wifi_connect_status() {
+    const wl_status_t st = WiFi.status();
+    if (st == WL_CONNECTED) return 1;
+    if (st == WL_CONNECT_FAILED || st == WL_NO_SSID_AVAIL) return 2;
+    return 0;
+}
+
+// Called on a successful manual connect: reboot shortly after, mirroring
+// g_wm.setSaveConfigCallback() — same reasoning (clean web/mDNS start). Also clears the
+// post-Reset "needs setup" flag (see host_factory_reset()) so the next boot is normal.
+void host_wifi_connected_reboot() {
+    Preferences p;
+    p.begin("capsuleradar", false);
+    p.putBool("needsWifiSetup", false);
+    p.end();
+    g_rebootAtMs = millis() + 1500;
+}
+
 // ----------------------------- configuration web --------------------------------
 static WebServer g_web(80);
 
@@ -578,11 +974,10 @@ static void handleRoot() {
                  r, (r == (int)(g_settings.rangeKm + 0.5f)) ? " selected" : "", r * ufac, uname);
         ropts += o;
     }
-    const char *tnames[] = {"Phosphor", "Orb", "Amber CRT", "Military"};
     String topts;
-    for (int i = 0; i < 4; ++i) {
+    for (int i = 0; i < THEME_COUNT; ++i) {
         char o[80];
-        snprintf(o, sizeof(o), "<option value=%d%s>%s</option>", i, i == th ? " selected" : "", tnames[i]);
+        snprintf(o, sizeof(o), "<option value=%d%s>%s</option>", i, i == th ? " selected" : "", radar::themeName(i));
         topts += o;
     }
     const int idleSecs[] = {10, 20, 30, 60, 120, 300, 1800, 3600, 7200, 14400, 28800};
@@ -892,7 +1287,6 @@ static void handleUnits() {   // measurement units preset (live re-render)
     if (g_web.hasArg("v")) {
         g_units = constrain((int)g_web.arg("v").toInt(), 0, 2);
         ui_set_units(g_units);
-        ui_set_range_km(g_settings.rangeKm);   // refresh the zoom-button label
         ui_on_data_updated();                  // re-render card/list/stats in the new units
         if (g_web.hasArg("save")) {
             Preferences p;
@@ -1086,18 +1480,170 @@ static void handleUpdateUpload() {
     }
 }
 
+// ---- theme file upload over WiFi -----------------------------------------
+// POST /sdput?path=/themes/<slug>/<file>, multipart body, streamed to the microSD in
+// chunks. Theme art no longer lives in the firmware binary (it stopped fitting: a
+// detailed design needs several MB against a ~944 KB flash budget), so it has to reach
+// the card some other way. The alternative was pulling the card out and using a reader
+// on every push. The Orb is already on WiFi with a web server running, so Launch Kit
+// POSTs the files here instead.
+//
+// No concurrency guard needed: g_web.handleClient() and every screen's SD decode both
+// run inside loop() on core 1, so card access is serialised by construction. adsb_task
+// (core 0) never touches SD.
+static File   g_sdUpFile;
+static bool   g_sdUpOk = false;
+static String g_sdUpPath;
+
+// Confined to /themes/. A malformed or hostile request must not be able to scribble
+// over Spy Cam clips, road tiles, or anything else living on the card.
+static bool sd_put_path_ok(const String &p) {
+    return p.startsWith("/themes/") && p.indexOf("..") < 0 && p.length() > 8 && p.length() < 96;
+}
+
+static void handleSdPutUpload() {
+    HTTPUpload &up = g_web.upload();
+    if (up.status == UPLOAD_FILE_START) {
+        g_sdUpOk = false;
+        g_sdUpPath = g_web.arg("path");
+        if (!sdcard::mounted()) { Serial.println("[sdput] no card mounted"); return; }
+        if (!sd_put_path_ok(g_sdUpPath)) { Serial.printf("[sdput] rejected path '%s'\n", g_sdUpPath.c_str()); return; }
+        // Create every missing level, not just the last one. SD.mkdir() does not create
+        // intermediate directories, so on a card that has never held a theme the whole
+        // path fails at "/themes" and every upload dies with a bare open failure.
+        for (int i = 1; i < (int)g_sdUpPath.length(); ++i) {
+            if (g_sdUpPath[i] != '/') continue;
+            String part = g_sdUpPath.substring(0, i);
+            if (!SD.exists(part) && !SD.mkdir(part)) {
+                Serial.printf("[sdput] mkdir failed: %s\n", part.c_str());
+                return;
+            }
+        }
+        g_sdUpFile = SD.open(g_sdUpPath.c_str(), FILE_WRITE);   // truncates any existing file
+        if (!g_sdUpFile) {
+            Serial.printf("[sdput] open failed: %s (card %llu MB, writable?)\n",
+                          g_sdUpPath.c_str(), (unsigned long long)(sdcard::sizeBytes() / (1024ULL * 1024ULL)));
+            return;
+        }
+        g_sdUpOk = true;
+        Serial.printf("[sdput] start %s\n", g_sdUpPath.c_str());
+    } else if (up.status == UPLOAD_FILE_WRITE) {
+        if (g_sdUpOk && g_sdUpFile.write(up.buf, up.currentSize) != up.currentSize) {
+            g_sdUpOk = false;
+            Serial.println("[sdput] short write (card full or removed?)");
+        }
+    } else if (up.status == UPLOAD_FILE_END) {
+        if (g_sdUpFile) g_sdUpFile.close();
+        if (g_sdUpOk) Serial.printf("[sdput] done %s (%u bytes)\n", g_sdUpPath.c_str(), (unsigned)up.totalSize);
+    }
+}
+
+static void handleSdPutDone() {
+    g_web.send(g_sdUpOk ? 200 : 500, "text/plain", g_sdUpOk ? "ok" : "failed");
+}
+
+
+// PSRAM ledger. Free memory went from 592 KB (before disabling two unused apps) to
+// 105 KB (after), which means something else absorbed the ~3.5 MB that was freed and
+// then some. Printing the balance at each stage of boot shows WHERE it goes, instead of
+// inferring it from whatever fails to allocate first. Cheap: a handful of prints, once.
+static void psram_mark(const char *stage) {
+    static uint32_t s_prev = 0;
+    const uint32_t now = (uint32_t)ESP.getFreePsram();
+    const int32_t delta = s_prev ? (int32_t)((now - s_prev) / 1024) : 0;
+    Serial.printf("[psram] %-26s free %6u KB", stage, (unsigned)(now / 1024));
+    if (s_prev) Serial.printf("   (%+ld KB)", (long)delta);
+    Serial.println();
+    s_prev = now;
+}
+
+
+// Rendered frames per second, sampled between /health calls. The sweep advances a fixed
+// step per timer tick rather than by elapsed time, so it visibly runs slow whenever the
+// render loop cannot keep its 30 ms cadence — Zion spotted exactly that by comparing the
+// device against Launch Kit's preview. This turns that observation into a number.
+// Milliseconds of CPU spent per wall-clock second, sampled between /health calls.
+// lvgl_ms_per_s near 1000 means the render loop is saturated; flush_ms_per_s says how
+// much of that was the QSPI push rather than compositing.
+static unsigned host_lvgl_load() {
+    static uint32_t last = 0, lastMs = 0;
+    const uint32_t us = display_lvgl_us(), now = millis();
+    unsigned v = 0;
+    if (lastMs && now > lastMs) v = (unsigned)(((us - last) / 1000UL) * 1000UL / (now - lastMs));
+    last = us; lastMs = now;
+    return v;
+}
+static unsigned host_flush_load() {
+    static uint32_t last = 0, lastMs = 0;
+    const uint32_t us = display_flush_us(), now = millis();
+    unsigned v = 0;
+    if (lastMs && now > lastMs) v = (unsigned)(((us - last) / 1000UL) * 1000UL / (now - lastMs));
+    last = us; lastMs = now;
+    return v;
+}
+
+// Full screens' worth of pixels repainted per second (466x466 = 1 screen). A value near
+// the frame rate means every frame repaints essentially the whole display; a value far
+// below it means LVGL really is honouring small dirty rectangles. This distinguishes
+// "too much area" from "too many layers" — halving the sweep's redraw rate moved the
+// frame cost by 0.2%, so one of those two assumptions is wrong.
+static unsigned host_screens_per_s() {
+    static uint32_t last = 0, lastMs = 0;
+    const uint32_t px = display_flushed_px(), now = millis();
+    unsigned v = 0;
+    const uint32_t perScreen = (uint32_t)SCREEN_W * SCREEN_H;
+    if (lastMs && now > lastMs) v = (unsigned)(((px - last) * 100UL / perScreen) * 1000UL / (now - lastMs));
+    last = px; lastMs = now;
+    return v;   // hundredths of a screen per second
+}
+
+static unsigned host_fps() {
+    static uint32_t lastFrames = 0, lastMs = 0;
+    const uint32_t frames = display_frames();
+    const uint32_t now = millis();
+    unsigned fps = 0;
+    if (lastMs && now > lastMs) fps = (unsigned)((frames - lastFrames) * 1000UL / (now - lastMs));
+    lastFrames = frames; lastMs = now;
+    return fps;
+}
+
 void setup() {
     Serial.begin(115200);
     delay(200);
     Serial.println("\nCapsule Radar boot");
+    diag::boot();   // print + continue the RTC-memory event history across this reboot
+
+    // Send large allocations (>=4KB) to PSRAM instead of the ~300KB internal heap.
+    // TLS handshakes (WiFiClientSecure, fresh one built for every poll of every feed —
+    // ADS-B every 2s, weather, wx radar, cloud imagery, aircraft photos) were the
+    // biggest thing routinely landing on the internal heap, and repeatedly allocating
+    // and freeing those over a long uptime fragmented it badly enough that eventually
+    // no single free block was big enough for the next handshake, even with plenty of
+    // total free memory — mbedTLS calls it "SSL - Memory allocation failed", and it was
+    // tripping the "feed stuck 180s -> reboot" recovery every few minutes. Internal
+    // memory allocations don't get restructured at all; they're just redirected to the
+    // ~8MB PSRAM pool, which has vastly more room to absorb the same churn.
+    heap_caps_malloc_extmem_enable(4096);
+
+    psram_mark("boot start");
+    sdcard::begin();
+    psram_mark("after sdcard");
 
     if (PIN_LCD_SCLK < 0 || PIN_I2C_SDA < 0) {
         Serial.println("[!] Pins in config.h are still -1. Copy them from the Waveshare demo.");
     }
     Serial.printf("PSRAM: %u bytes free\n", (unsigned)ESP.getFreePsram());
 
+    // Reserve the roads projection buffers now, while PSRAM is fresh — by the time
+    // the Flight Tracker first runs, the custom design's plate/overlay (~1MB) plus
+    // weather/spycam churn have fragmented the pool and a mid-session grab fails.
+    roads_sd::init();
+
     loadSettings();
     route_cache_begin();   // clear stale route cache if the label format changed
+    app_theme::init();     // load the saved app skin (Default/Office) before any view reads it
+    theme_select::init();  // load the saved Launch Kit theme slug before any screen reads it
+    psram_mark("after theme_select");
 
     // --- Display + LVGL (M0) ----------------------------------------------
     // CO5300 AMOLED over QSPI + LVGL draw buffers in PSRAM, then a hello screen.
@@ -1106,27 +1652,58 @@ void setup() {
     if (!display::begin()) {
         Serial.println("[!] display::begin() failed — check QSPI pins / power.");
     }
+    build_hold_warning();   // hold-to-reboot countdown, sits above every app
 
     // restore the saved theme, then persist any future change
     {
         Preferences p;
         p.begin("capsuleradar", true);
-        const int t = p.getInt("theme", THEME_PHOSPHOR);
+        // One-time migration: Phosphor and Amber CRT were retired, leaving Orb/Military/
+        // Aviator renumbered 0/1/2. Remap whatever's stored (old numbering: 0=Phosphor
+        // 1=Orb 2=Amber 3=Military 4=Aviator) once; after that it's already in the new
+        // scheme and this is a no-op. Default (no "theme" key at all) reads as old-scheme
+        // Aviator so it lands on new Aviator too, same as everything else.
+        const bool migratedV2 = p.getBool("themeMigV2", false);
+        int t = p.getInt("theme", 4);
         g_showSweep = p.getBool("sweep", true);
         g_showAirports = p.getBool("airports", true);
         g_hideGround = p.getBool("hideground", false);
         g_minAltFt = p.getInt("minalt", 0);
+#if CUSTOM_HAS_RADAR_HIDEGROUND
+        g_hideGround = (bool)CUSTOM_RADAR_HIDEGROUND;   // a pushed design's own Scope settings, same one-shot-per-boot precedent as range/max-aircraft
+#endif
+#if CUSTOM_HAS_RADAR_MINALT
+        g_minAltFt = CUSTOM_RADAR_MINALT;
+#endif
+#if CUSTOM_HAS_RADAR_DEADZONE
+        g_deadZonePx = CUSTOM_RADAR_DEADZONE_PX;   // pushed-design only: there's no device-side control for it, since it's sized against the design's own center artwork
+#endif
         g_milOnly = p.getBool("milonly", false);
         // Migrate the old quarter-turn setting (rot=0..3) without changing existing
         // installations' orientation. New firmware stores actual degrees separately.
         g_rotation = p.isKey("rotDeg") ? p.getInt("rotDeg", 0) : p.getInt("rot", 0) * 90;
         g_rotation = constrain(g_rotation, 0, 359);
         p.end();
+        if (!migratedV2) {
+            switch (t) {                     // old numbering -> new (see comment above)
+                case 1:  t = THEME_ORB;      break;
+                case 3:  t = THEME_MILITARY; break;
+                case 4:  t = THEME_AVIATOR;  break;
+                default: t = THEME_AVIATOR;  break;   // old Phosphor(0)/Amber(2)/anything else
+            }
+            Preferences pw;
+            pw.begin("capsuleradar", false);
+            pw.putInt("theme", t);
+            pw.putBool("themeMigV2", true);
+            pw.end();
+        }
         radar::setTheme(t);
+        ui_apply_theme(t);   // setThemeChangedCb isn't registered yet — paint the HUD explicitly
         radar::setSweepEnabled(g_showSweep);
         radar::setAirportsEnabled(g_showAirports);
         g_adsb.setHideGround(g_hideGround);
         g_adsb.setMinAltFt((float)g_minAltFt);
+        g_adsb.setMinDistKm(deadZoneKm());
         g_adsb.setMilitaryOnly(g_milOnly);
         radar::setTrailLength(g_trailLen);
         radar::setMaxOnScreen(g_maxAc);
@@ -1134,37 +1711,97 @@ void setup() {
         g_rotation = display::rotation();
     }
     radar::setThemeChangedCb(saveTheme);
-    ui_set_range_cb(onRangeChange);              // on-screen zoom button
     ui_set_units(g_units);                       // apply saved unit preset
-    ui_set_range_km(g_settings.rangeKm);         // show the loaded range
+    ui_set_wx_units(host_wx_is_imperial());      // apply saved (or auto-resolved) weather units
+    ui_set_wx_zoom(g_wxZoomTier);                 // apply saved weather map zoom tier
 
     knob::begin();     // rotary encoder on GPIO16/17/18
 
     // --- App shell: the knob flips between full-screen apps ------------------
-    // display::begin() already built the radar UI onto the active screen, so it's
-    // app one. The clock builds itself onto its own screen (radar untouched).
-    // Radar and Weather share the radar screen: "Weather" just jumps its tileview to
-    // the original app's weather tile (view 3). No touch-swipe needed.
+    // Clock goes first (app index 0, the boot app) on purpose: it's the only app that
+    // needs no network data to be fully correct (RTC-seeded time), so it's what should
+    // be sitting there the instant the splash clears, while WiFi/ADS-B/weather are still
+    // connecting in the background. See the UI-pump loop below, right before the
+    // blocking WiFi connect call, for the other half of that plan.
+    // display::begin() already built the radar UI onto the active screen; Flight Tracker
+    // and Weather Radar share that screen: "Weather" just jumps its tileview to the
+    // original app's weather tile (view 3). List/Stats stay touch-swipe-only (swipe
+    // right from Radar) — they don't get their own knob-menu entry. Push while on Radar
+    // cycles the visual theme (Phosphor/Orb/Amber/Military/Aviator).
+    // App lineup. Every app is always registered (so indices and selectApp(n) never
+    // shift), but the ones a Launch Kit theme flash turns off (custom_apps.h) are
+    // marked hidden — still built, just skipped when the knob cycles the menu. The
+    // default custom_apps.h has all apps on, so a stock build / single-screen push
+    // is unchanged.
     lv_obj_t *radarScreen = lv_scr_act();
-    app_shell::add(radarScreen, "Radar",   nullptr, nullptr, false, radar_show_home);
-    app_shell::add(radarScreen, "Weather", nullptr, nullptr, false, radar_show_weather);
+    psram_mark("after display+radar");
     clockview::init();
-    app_shell::add(clockview::screen(), "Clock", clockview::onPress);  // push flips analog/digital
+    psram_mark("after clockview");
+    app_shell::add(clockview::screen(), "Clock", clockview::onPress, nullptr, false, nullptr, clockview::onExit, !theme_style::apps().clock);  // push flips analog/digital; onExit frees a custom face's decoded PSRAM
+    app_shell::add(radarScreen, "Flight Tracker", radar_press_custom_or_theme, radar_turn_select, false, radar_show_home_custom, radar_exit_release_style, !theme_style::apps().flight);
+    app_shell::add(radarScreen, "Weather Radar",  weather_press_cycle, nullptr, false, radar_show_weather, nullptr, !theme_style::apps().weather);
     locationview::init();
-    app_shell::add(locationview::screen(), "Location",
-                   locationview::onPress, nullptr, false, locationview::onEnter);  // push refreshes
+    psram_mark("after locationview");
+    app_shell::add(locationview::screen(), "Intel",
+                   locationview::onPress, nullptr, false, locationview::onEnter, nullptr, !theme_style::apps().intel);  // push refreshes
+    spycamview::init();
+    psram_mark("after spycamview");
+    app_shell::add(spycamview::screen(), "Surveillance", spycamview::onPress, nullptr, false, nullptr, nullptr, !theme_style::apps().surveillance);  // push cycles cams; clip loads lazily on commit
     settingsview::init();
+    psram_mark("after settingsview");
     app_shell::add(settingsview::screen(), "Settings",
                    settingsview::onPress, settingsview::onTurn,
-                   true, settingsview::onEnter);  // captures the knob on entry; onEnter resets to the menu
-    app_shell::begin();                // start on the radar
+                   true, settingsview::onEnter, settingsview::onExit, false);  // captures the knob on entry; onEnter resets to the menu and takes the text canvas, onExit gives it back
+    app_shell::begin();                // start on the clock (index 0 — see comment above)
+    psram_mark("after app_shell::begin");
+
+    // Fresh out of the box, or right after Settings > Reset: skip the clock and walk
+    // straight into WiFi setup instead — see host_factory_reset(). Index 5 is still
+    // Settings: Clock was inserted at the front, Intel/Surveillance/Settings didn't move.
+    {
+        Preferences p;
+        p.begin("capsuleradar", true);
+        const bool needsWifiSetup = p.getBool("needsWifiSetup", false);
+        p.end();
+        if (needsWifiSetup) {
+            app_shell::selectApp(5);
+            app_shell::setCaptured(true);   // Settings normally captures the knob on entry; match that here
+            settingsview::openWifiSetupPrompt();
+        }
+#if CUSTOM_BOOT_TARGET == 1
+        // Set only by the splash push (the clock push clears it, even if a custom
+        // splash is still baked in) — so this is genuinely "you just pushed the
+        // splash," not "a custom splash happens to exist." Lands on the About page,
+        // which holds the same splash art up indefinitely (push the knob to leave)
+        // instead of the ordinary 2s-hold-then-fade, so it stays put to look at.
+        else {
+            app_shell::selectApp(5);
+            app_shell::setCaptured(true);
+            settingsview::openAboutPage();
+        }
+#elif CUSTOM_BOOT_TARGET == 2
+        // Set only by a Flight Tracker push — boots straight into it instead of
+        // landing on the clock and making you swipe/switch over, since a radar
+        // push is almost always "I just changed this one screen, go look at it."
+        // selectApp(1) runs Flight Tracker's onEnter, which captures the knob for
+        // aircraft selection when a custom design is active (see
+        // radar_show_home_custom) — left captured on purpose: turning the knob
+        // should select an aircraft immediately, not open the switcher, since
+        // that's the whole point of landing here. Press the knob to leave
+        // selection mode and reach the switcher/menu (Settings -> WiFi etc.) —
+        // same gesture Settings itself already uses to back out.
+        else {
+            app_shell::selectApp(1);
+        }
+#endif
+    }
 
     imu_begin();       // face-down sleep (no-op if the IMU isn't detected)
     battery_begin();   // AXP2101 (no-op if not detected / no battery)
     gps_begin();       // LC76G GNSS (no-op if not the -G variant)
     battery_enable_codec_rail();   // power the ES8311 analog rail before audio init
 
-    setenv("TZ", TZ_STR, 1); tzset();   // local time for display even before NTP
+    setenv("TZ", g_tz.c_str(), 1); tzset();   // local time for display even before NTP (loadSettings ran above)
     rtc_begin();
     rtc_seed_clock();                   // offline clock/date from the PCF85063
     if (audio_begin()) {                // ES8311 alert pings (no-op if codec absent)
@@ -1174,6 +1811,23 @@ void setup() {
 
     // --- Radar UI ----------------------------------------------------------
     // radar::init() runs inside display::begin() (LVGL must be up first).
+
+    // Let the boot splash actually hold-then-fade in real time before g_wm.autoConnect()
+    // below blocks for potentially 10-20+ seconds trying the saved WiFi network. LVGL
+    // timers and animations only advance while lv_timer_handler() runs, which does NOT
+    // happen during blocking setup() code — without this pump, the splash's 2s/600ms
+    // timer+fade (ui.cpp) just sit frozen for however long WiFi takes, then both fire
+    // back-to-back the instant loop() finally starts. Clock is already app index 0 and
+    // already loaded (app_shell::begin() above), so this is what actually reveals a
+    // live, correct-time clock quickly instead of a stuck title card. rtc_seed_clock()
+    // has already run, so the time it shows is correct from the very first frame.
+    {
+        const uint32_t pumpUntil = millis() + 2700;   // 2000ms hold + 600ms fade + margin
+        while (millis() < pumpUntil) {
+            lv_timer_handler();
+            delay(5);
+        }
+    }
 
     // --- WiFi (captive portal, non-blocking) ------------------------------
     // First boot opens the "CapsuleRadar-Setup" AP to enter WiFi creds. Non-blocking
@@ -1198,6 +1852,17 @@ void setup() {
         Serial.println("[wifi] new credentials saved -> rebooting for a clean web/mDNS start");
         g_rebootAtMs = millis() + 2500;   // let the portal deliver its 'saved' page first
     });
+    // DISABLED on purpose (2026-08-15). A secrets.h fallback used to run here and it was
+    // destructive: WiFi.SSID() is empty this early because the WiFi driver has not loaded
+    // the stored credentials yet, so the guard was always true, and the WiFi.begin() below
+    // it overwrote the user's real saved network on EVERY boot. When the fallback
+    // credentials then failed to associate, the device came up in the config portal with
+    // its good credentials already gone.
+    //
+    // If this comes back, it must (a) determine "no stored network" properly, which means
+    // after WiFi.mode(WIFI_STA) or via WiFiManager's own getWiFiSSID(), and (b) never call
+    // WiFi.begin() with fallback credentials before autoConnect() has had its turn.
+    psram_mark("before wifi connect");
     if (g_wm.autoConnect("CapsuleRadar-Setup"))
         Serial.println("[wifi] connected");
     else
@@ -1209,12 +1874,56 @@ void setup() {
     // --- ADS-B client + task ----------------------------------------------
     float queryKm = queryRadiusKm();
     g_adsb.begin(g_settings.homeLat, g_settings.homeLon, queryKm);
-    wx_radar_begin();
-    cloud_image_begin();
+    // Four 360x360 RGB565 frame buffers, ~1 MB, and until now allocated even when the
+    // active theme has Weather Radar switched off. Same reasoning as the Surveillance
+    // clip buffer: an app you cannot reach should not be holding a quarter of the memory
+    // the visible screens are competing for.
+    if (theme_style::apps().weather) wx_radar_begin();
+    else Serial.println("[wxradar] app disabled by theme - skipping ~1 MB of frame buffers");
+    // cloud_image_begin() intentionally not called: the satellite-cloud view was dropped
+    // from the Weather app's knob cycle, so its two full-frame PSRAM buffers (~0.5MB) would
+    // just sit unused. That memory goes to the Weather Radar animation frames instead.
     g_ac_mutex = xSemaphoreCreateMutex();
+    psram_mark("before adsb task");
     xTaskCreatePinnedToCore(adsb_task, "adsb", 16384, nullptr, 1, nullptr, 0);  // TLS needs a big stack
 
     // configuration web page (http://capsuleradar.local/)
+    g_web.on("/diag", []{ g_web.send(200, "text/plain", diag::text()); });
+    // Reboot on request. Added because capturing the boot log (the only place the PSRAM
+    // ledger prints) otherwise means physically unplugging the device, and the serial
+    // port cannot be held open during a flash anyway. Deliberately delayed so the HTTP
+    // response reaches the caller first, same pattern as the settings handlers above.
+    g_web.on("/reboot", []{
+        g_web.send(200, "text/plain", "rebooting");
+        g_rebootAtMs = millis() + 400;
+    });
+    // Machine-readable device state, so diagnosis starts from facts instead of from a
+    // photograph of the screen (workflow rule R2). largest_block matters as much as
+    // free: an allocation can fail with plenty of total free PSRAM if churn has
+    // fragmented it below the requested size.
+    g_web.on("/health", []{
+        char b[360];
+        snprintf(b, sizeof(b),
+                 "{\"fw\":\"%s\",\"slug\":\"%s\",\"uptime_s\":%lu,"
+                 "\"psram_free_kb\":%u,\"psram_largest_kb\":%u,"
+                 "\"heap_free_kb\":%u,\"heap_largest_kb\":%u,"
+                 "\"fps\":%u,\"lvgl_ms_per_s\":%u,\"flush_ms_per_s\":%u,"
+                 "\"screens_per_s\":%u,"
+                 "\"wifi_rssi\":%d,\"boot_reason\":\"%s\"}",
+                 FW_VERSION, theme_select::activeSlug(),
+                 (unsigned long)(millis() / 1000UL),
+                 (unsigned)(ESP.getFreePsram() / 1024),
+                 (unsigned)(heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM) / 1024),
+                 (unsigned)(ESP.getFreeHeap() / 1024),
+                 (unsigned)(heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL) / 1024),
+                 host_fps(), host_lvgl_load(), host_flush_load(), host_screens_per_s(),
+                 (int)WiFi.RSSI(),
+                 esp_reset_reason() == ESP_RST_POWERON ? "power-on" :
+                 esp_reset_reason() == ESP_RST_SW      ? "software" :
+                 esp_reset_reason() == ESP_RST_TASK_WDT ? "watchdog" : "other");
+        g_web.send(200, "application/json", b);
+    });
+    g_web.on("/sdput", HTTP_POST, handleSdPutDone, handleSdPutUpload);   // Launch Kit pushes theme files here
     g_web.on("/", handleRoot);
     g_web.on("/save", HTTP_POST, handleSave);
     g_web.on("/wifi", HTTP_POST, handleWifi);
@@ -1253,20 +1962,20 @@ void loop() {
     g_web.handleClient();           // serve the configuration web page
     if (g_useGps) gps_poll();       // pull NMEA from the LC76G (only when GPS auto-location is on)
     knob::poll();                   // read the rotary encoder
+    update_hold_warning();          // countdown while the button is held (see build_hold_warning)
+    if (knob::takeLongPress()) {    // held ~8 s -> manual recovery reboot
+        Serial.println("[main] knob long-press -> reboot");
+        diag::log("knob long-press -> reboot (app %s)", app_shell::name());
+        delay(50);
+        ESP.restart();
+    }
     {
         int32_t kd = knob::takeDelta();
         bool pressed = knob::takePress();
         if (kd != 0 || pressed) display::noteActivity();    // knob use keeps the screen awake
-        if (app_shell::browsing()) {                        // switcher overlay is up
-            if (kd != 0) app_shell::browseTurn((int)kd);    //   turn cycles apps
-            if (pressed) app_shell::browsePress();          //   push commits
-        } else if (app_shell::captured()) {                 // a menu owns the knob (Settings)
-            if (kd != 0) app_shell::turnCurrent((int)kd);
-            if (pressed) app_shell::pressCurrent();
-        } else {                                            // inside an app
-            if (kd != 0) app_shell::browseTurn((int)kd);    //   turn opens the switcher
-            if (pressed) app_shell::pressCurrent();          //   push = app action
-        }
+        if (pressed) diag::log("push (app %s, browsing=%d, captured=%d)",
+                               app_shell::name(), app_shell::browsing(), app_shell::captured());
+        input_router::dispatch((int)kd, pressed);           // same 3-mode routing the sim uses
     }
 
     // scheduled reboot after a fresh WiFi config (see setSaveConfigCallback)
@@ -1311,6 +2020,12 @@ void loop() {
     static uint32_t lastStatus = 0;
     if (millis() - lastStatus > 5000) {
         lastStatus = millis();
+        static int diagTick = 0;
+        if (++diagTick >= 3) {   // every ~15s — a heap trend without flooding the ring buffer
+            diagTick = 0;
+            diag::log("heap %u min %u app %s", (unsigned)ESP.getFreeHeap(),
+                      (unsigned)ESP.getMinFreeHeap(), app_shell::name());
+        }
 #if DEBUG_MEM
         static uint32_t lastFrames = 0;
         const uint32_t fr = display_frames();
@@ -1352,7 +2067,7 @@ void loop() {
                      WiFi.localIP().toString().c_str(), g_settings.homeLat, g_settings.homeLon);
         else
             snprintf(net, sizeof(net), "WiFi setup:\njoin CapsuleRadar-Setup");
-        ui_set_netinfo(net);
+        settingsview::setNetInfo(net);   // shown on Settings > About (was the Stats screen)
         const bool bpresent = battery_present();
         ui_set_battery(battery_percent(), battery_charging(), bpresent);
         g_onBattery = bpresent && !battery_charging();
@@ -1367,6 +2082,9 @@ void loop() {
             if (rtc_write(&utc)) { g_rtcSynced = true; Serial.println("[rtc] saved NTP time"); }
         }
         // GPS auto-location (-G variant): re-centre the radar when the fix moves enough.
+        // Suppressed while a Launch Kit design pins the location — the pushed home is
+        // the source of truth so the Orb keeps matching the editor/simulator exactly.
+#if !CUSTOM_HAS_RADAR_HOME
         if (g_useGps) {
             double glat, glon;
             if (gps_location(&glat, &glon) &&
@@ -1379,6 +2097,7 @@ void loop() {
                 Serial.printf("[gps] re-centred to %.4f, %.4f\n", glat, glon);
             }
         }
+#endif
     }
 
     // face-down -> screen off (IMU); flip face-up to wake

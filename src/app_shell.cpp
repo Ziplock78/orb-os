@@ -1,6 +1,21 @@
 #include "app_shell.h"
+#ifdef ARDUINO
 #include <Arduino.h>
+#else
+#include <cstdio>
+#include <chrono>
+static struct { void printf(const char *fmt, ...) const { va_list a; va_start(a, fmt); vprintf(fmt, a); va_end(a); } } Serial;
+static uint32_t millis() {
+    using namespace std::chrono;
+    return (uint32_t)duration_cast<milliseconds>(steady_clock::now().time_since_epoch()).count();
+}
+#endif
 #include "config.h"     // SCREEN_W / SCREEN_H
+#include "diag_log.h"
+#include "app_theme.h"
+#include "custom_menu.h"     // CUSTOM_HAS_MENU — a Launch Kit push replaces this overlay's look
+#include "menu_sprite.h"     // menu_custom_plate()/menu_custom_overlay() — the editor's baked background / CRT+glass
+#include "menu_text.h"       // menu_text::refresh() — the editor's current/prev/next banners
 
 namespace {
     struct App {
@@ -10,6 +25,8 @@ namespace {
         app_turn_t    onTurn;
         bool          capture;
         app_action_t  onEnter;
+        app_action_t  onExit;
+        bool          hidden;    // registered but skipped when cycling the menu
     };
 
     constexpr int   MAX_APPS      = 8;
@@ -21,27 +38,113 @@ namespace {
     bool s_captured = false;
 
     // app-switcher overlay (lives on the top layer, above whatever screen is loaded)
-    bool      s_browsing     = false;
-    lv_obj_t *s_overlay      = nullptr;
-    lv_obj_t *s_overlayLabel = nullptr;
-    uint32_t  s_browseTouch  = 0;          // millis() of the last browse interaction
-    constexpr uint32_t BROWSE_SETTLE_MS = 3000;   // auto-enter the shown app after this idle
+    bool      s_browsing      = false;
+    // Which app the switcher is POINTING AT, as distinct from the one actually loaded.
+    // These used to be the same: every detent called load(), which fires the outgoing
+    // app's onExit and the incoming app's onEnter, so scrubbing the menu meant freeing
+    // one app's decoded artwork and decoding the next straight off the SD card, per
+    // step. That is a 350 KB PNG expanded into a 636 KB buffer for a screen you are
+    // scrolling past. Nothing loads now until you commit.
+    int       s_browseIdx     = 0;
+    lv_obj_t *s_overlay       = nullptr;
+    lv_obj_t *s_overlayLabel  = nullptr;   // stock fallback (no custom menu design): plain centered name
+    lv_obj_t *s_overlayHint   = nullptr;   // "push to open" — stock only, a custom design speaks for itself
+    lv_obj_t *s_overlayPlate  = nullptr;   // a custom menu's baked background image, if any
+    lv_obj_t *s_overlayGlass  = nullptr;   // a custom menu's baked CRT+glass, if any
+    uint32_t  s_browseTouch   = 0;         // millis() of the last browse interaction
+    constexpr uint32_t BROWSE_SETTLE_MS = 2000;   // auto-enter the shown app after this idle
+
+    int next_visible(int from, int dir);   // forward decl — defined below, needed by show_overlay above it
+    void load(int idx, bool animate, bool forward);   // same, needed by commit_current()
+
+    // The menu's background art is 466x466 and costs ~636 KB of PSRAM decoded, and the
+    // glass layer another ~636 KB. Both used to be decoded once at boot and held for the
+    // life of the device, for a screen that is visible for a couple of seconds at a time.
+    // That is what left Flight Tracker unable to allocate its own static overlays
+    // ("[radar_sprite] static1: buffer alloc failed"). Same rule as the text canvas now:
+    // build on show, tear down on hide.
+    // Free PSRAM, for the log lines below. The exact budget on this board has been
+    // guesswork all evening; print it at each allocation so it stops being guesswork.
+    static unsigned psram_free_kb() {
+#ifdef ESP_PLATFORM
+        return (unsigned)(ESP.getFreePsram() / 1024);
+#else
+        return 0;
+#endif
+    }
+
+    void overlay_art_acquire() {
+        Serial.printf("[menu] art acquire: %u KB PSRAM free before\n", psram_free_kb());
+        if (!s_overlayPlate) {
+            if (const lv_img_dsc_t *plate = menu_custom_plate()) {
+                s_overlayPlate = lv_img_create(s_overlay);
+                lv_img_set_src(s_overlayPlate, plate);
+                lv_obj_center(s_overlayPlate);
+                lv_obj_move_background(s_overlayPlate);   // behind the text canvas
+            }
+        }
+        if (!s_overlayGlass) {
+            if (const lv_img_dsc_t *ov = menu_custom_overlay()) {
+                s_overlayGlass = lv_img_create(s_overlay);
+                lv_img_set_src(s_overlayGlass, ov);
+                lv_obj_center(s_overlayGlass);
+            }
+        }
+        if (s_overlayGlass) lv_obj_move_foreground(s_overlayGlass);   // CRT/glass on top
+        Serial.printf("[menu] art acquire: %u KB PSRAM free after (plate=%d glass=%d)\n",
+                      psram_free_kb(), s_overlayPlate ? 1 : 0, s_overlayGlass ? 1 : 0);
+    }
+
+    void overlay_art_release() {
+        if (s_overlayPlate) { lv_obj_del(s_overlayPlate); s_overlayPlate = nullptr; }
+        if (s_overlayGlass) { lv_obj_del(s_overlayGlass); s_overlayGlass = nullptr; }
+        menu_sprite_release();   // give the decoded PSRAM back, not just the LVGL objects
+    }
 
     void show_overlay(const char *name) {
         if (!s_overlay) return;
+#if CUSTOM_HAS_MENU
+        // Order matters, and getting it wrong showed up as plain white menu text: the
+        // background art wants ~1.3 MB (plate + glass) and the text canvas ~868 KB, and
+        // they do not both fit. Text first, because a menu you cannot read is useless
+        // while a menu without a backdrop is merely plain.
+        menu_text::acquire();   // ~868 KB PSRAM, held only while the overlay is up
+        overlay_art_acquire();
+        // A custom design draws current/prev/next itself (menu_text canvas); the stock
+        // label stays hidden while that canvas exists. If it could not be allocated,
+        // fall through to the plain label: an overlay with no text on it is worse than
+        // an unstyled one, because there is then no way to see which app you are on.
+        if (menu_text::available()) {
+            const char *prevName = s_count ? s_apps[next_visible(s_browseIdx, -1)].name : "";
+            const char *nextName = s_count ? s_apps[next_visible(s_browseIdx, +1)].name : "";
+            menu_text::refresh(prevName, name, nextName);
+            if (s_overlayLabel) lv_obj_add_flag(s_overlayLabel, LV_OBJ_FLAG_HIDDEN);
+        } else if (s_overlayLabel) {
+            lv_label_set_text(s_overlayLabel, name);
+            lv_obj_clear_flag(s_overlayLabel, LV_OBJ_FLAG_HIDDEN);
+        }
+#else
         lv_label_set_text(s_overlayLabel, name);
+#endif
         lv_obj_clear_flag(s_overlay, LV_OBJ_FLAG_HIDDEN);
         s_browseTouch = millis();          // any turn/open restarts the settle countdown
     }
     void hide_overlay() {
         if (s_overlay) lv_obj_add_flag(s_overlay, LV_OBJ_FLAG_HIDDEN);
+#if CUSTOM_HAS_MENU
+        menu_text::release();     // give the canvas back the moment it is off screen
+        overlay_art_release();    // and the background/glass art with it
+#endif
         s_browsing = false;
     }
 
     void commit_current() {                // enter the app the overlay is showing
         hide_overlay();
-        s_captured = s_apps[s_cur].capture;
-        if (s_apps[s_cur].onEnter) s_apps[s_cur].onEnter();
+        // The one place the switcher actually loads an app. load() handles the outgoing
+        // onExit, the screen swap, capture state, and the incoming onEnter, so exactly
+        // one app's artwork is decoded per selection rather than one per detent.
+        load(s_browseIdx, false, true);
+        diag::log("enter %s", s_apps[s_cur].name);
     }
 
     // Runs on the LVGL thread; if the switcher has sat idle long enough, drop into the shown app.
@@ -49,8 +152,22 @@ namespace {
         if (s_browsing && (millis() - s_browseTouch) >= BROWSE_SETTLE_MS) commit_current();
     }
 
+    // Next non-hidden app from `from` stepping by `dir` (+1/-1), wrapping around.
+    // Falls back to `from` if somehow everything is hidden, so cycling never hangs.
+    int next_visible(int from, int dir) {
+        for (int step = 1; step <= s_count; ++step) {
+            const int idx = ((from + dir * step) % s_count + s_count) % s_count;
+            if (!s_apps[idx].hidden) return idx;
+        }
+        return from;
+    }
+
     void load(int idx, bool animate, bool forward) {
         if (idx < 0 || idx >= s_count || !s_apps[idx].screen) return;
+        // Tell the outgoing app it's leaving before we swap, so it can free whatever it
+        // decoded. Both this and onEnter now fire ONLY on a real app change (boot, a
+        // committed switcher selection, or next()/prev()), never per switcher detent.
+        if (idx != s_cur && s_count && s_apps[s_cur].onExit) s_apps[s_cur].onExit();
         s_cur = idx;
         s_captured = s_apps[idx].capture;   // menu apps grab the knob on entry
         if (s_apps[idx].screen != lv_scr_act()) {   // apps sharing a screen (radar/weather) skip the load
@@ -64,11 +181,12 @@ namespace {
         }
         if (s_apps[idx].onEnter) s_apps[idx].onEnter();
         Serial.printf("[shell] app %d/%d: %s\n", s_cur + 1, s_count, s_apps[idx].name);
+        diag::log("app %s", s_apps[idx].name);
     }
 }
 
 void app_shell::add(lv_obj_t *screen, const char *name,
-                    app_action_t onPress, app_turn_t onTurn, bool capture, app_action_t onEnter) {
+                    app_action_t onPress, app_turn_t onTurn, bool capture, app_action_t onEnter, app_action_t onExit, bool hidden) {
     if (s_count < MAX_APPS && screen) {
         s_apps[s_count].screen  = screen;
         s_apps[s_count].name    = name;
@@ -76,13 +194,15 @@ void app_shell::add(lv_obj_t *screen, const char *name,
         s_apps[s_count].onTurn  = onTurn;
         s_apps[s_count].capture = capture;
         s_apps[s_count].onEnter = onEnter;
+        s_apps[s_count].onExit  = onExit;
+        s_apps[s_count].hidden  = hidden;
         s_count++;
     }
 }
 
 void app_shell::add_active(const char *name,
-                           app_action_t onPress, app_turn_t onTurn, bool capture, app_action_t onEnter) {
-    add(lv_scr_act(), name, onPress, onTurn, capture, onEnter);
+                           app_action_t onPress, app_turn_t onTurn, bool capture, app_action_t onEnter, app_action_t onExit, bool hidden) {
+    add(lv_scr_act(), name, onPress, onTurn, capture, onEnter, onExit, hidden);
 }
 
 void app_shell::pressCurrent() {
@@ -103,20 +223,40 @@ void app_shell::begin() {
     lv_obj_remove_style_all(s_overlay);
     lv_obj_set_size(s_overlay, SCREEN_W, SCREEN_H);
     lv_obj_center(s_overlay);
-    lv_obj_set_style_bg_color(s_overlay, lv_color_black(), 0);
-    lv_obj_set_style_bg_opa(s_overlay, LV_OPA_70, 0);   // dim the previewed app underneath
+    const AppPalette &pal = app_theme::palette();
+    lv_obj_set_style_bg_color(s_overlay, pal.bg, 0);
+    lv_obj_set_style_bg_opa(s_overlay, LV_OPA_COVER, 0);   // solid fallback; a custom plate (below) paints over it
     lv_obj_clear_flag(s_overlay, LV_OBJ_FLAG_SCROLLABLE);
 
+    // A Launch Kit menu push's baked background, if any — sits under everything
+    // else. No plate (stock, or a design with a solid-color background) just
+    // leaves the overlay's own bg_color above showing through.
+    // Menu art is NOT decoded here any more: see overlay_art_acquire(). Decoding it at
+    // boot meant holding ~1.3 MB of PSRAM permanently for a transient overlay.
+
     s_overlayLabel = lv_label_create(s_overlay);
-    lv_obj_set_style_text_color(s_overlayLabel, lv_color_white(), 0);
+    lv_obj_set_style_text_color(s_overlayLabel, pal.ink, 0);
     lv_obj_set_style_text_font(s_overlayLabel, &lv_font_montserrat_48, 0);
     lv_obj_align(s_overlayLabel, LV_ALIGN_CENTER, 0, -12);
 
-    lv_obj_t *hint = lv_label_create(s_overlay);
-    lv_label_set_text(hint, "push to open");
-    lv_obj_set_style_text_color(hint, lv_color_hex(0x9AA0A6), 0);
-    lv_obj_set_style_text_font(hint, &lv_font_montserrat_16, 0);
-    lv_obj_align(hint, LV_ALIGN_CENTER, 0, 40);
+    s_overlayHint = lv_label_create(s_overlay);
+    lv_label_set_text(s_overlayHint, "push to open");
+    lv_obj_set_style_text_color(s_overlayHint, pal.dim, 0);
+    lv_obj_set_style_text_font(s_overlayHint, &lv_font_montserrat_16, 0);
+    lv_obj_align(s_overlayHint, LV_ALIGN_CENTER, 0, 40);
+
+#if CUSTOM_HAS_MENU
+    // A custom design replaces the plain name+hint with its own current/prev/next
+    // banners (menu_text, real glow) and speaks for itself — hide the stock label
+    // and hint for the whole session rather than toggling them per-push.
+    lv_obj_add_flag(s_overlayLabel, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(s_overlayHint, LV_OBJ_FLAG_HIDDEN);
+    menu_text::init(s_overlay);
+#endif
+
+    // CRT + glass on top of everything, same layer order as the clock/radar/splash
+    // compositors (background -> content -> overlay).
+    // Glass likewise built on show, not at boot (see overlay_art_acquire()).
 
     lv_obj_add_flag(s_overlay, LV_OBJ_FLAG_HIDDEN);
 
@@ -130,13 +270,20 @@ void app_shell::browseTurn(int delta) {
     if (!s_count) return;
     if (!s_browsing) {
         s_browsing = true;
-        show_overlay(s_apps[s_cur].name);
+        s_browseIdx = s_cur;
+        // NOT evicting the app underneath any more. That was a workaround for the menu
+        // needing ~1.7 MB against ~592 KB free, and it made every menu open-and-close pay
+        // two full screen decodes (~370 ms each) — the "background disappears and takes a
+        // moment to come back" behaviour. The memory came from somewhere better instead:
+        // three of the four overlays were 100% transparent and are no longer shipped at
+        // all, freeing 636 KB per screen. The app keeps its artwork while you browse.
+        show_overlay(s_apps[s_browseIdx].name);
         return;
     }
-    const int idx = (delta > 0) ? (s_cur + 1) % s_count
-                                : (s_cur - 1 + s_count) % s_count;
-    load(idx, false, delta > 0);       // load the app underneath (no slide; overlay is fixed on top)
-    show_overlay(s_apps[s_cur].name);
+    // Move the cursor only. No load(), so no onExit/onEnter, so no SD read and no PNG
+    // decode: a detent is now just a text redraw on the overlay.
+    s_browseIdx = next_visible(s_browseIdx, delta > 0 ? 1 : -1);   // skip hidden apps
+    show_overlay(s_apps[s_browseIdx].name);
 }
 
 // Push commits the shown app (hides the overlay); if not browsing, it's an app action.
@@ -148,17 +295,22 @@ void app_shell::browsePress() {
 bool app_shell::browsing() { return s_browsing; }
 
 void app_shell::openSwitcher() {
+    s_browseIdx = s_cur;
     if (!s_count) return;
     s_browsing = true;
     show_overlay(s_apps[s_cur].name);
 }
 
 void app_shell::next() {
-    if (s_count) load((s_cur + 1) % s_count, true, true);
+    if (s_count) load(next_visible(s_cur, +1), true, true);
 }
 
 void app_shell::prev() {
-    if (s_count) load((s_cur - 1 + s_count) % s_count, true, false);
+    if (s_count) load(next_visible(s_cur, -1), true, false);
+}
+
+void app_shell::selectApp(int idx) {
+    if (idx >= 0 && idx < s_count) load(idx, false, true);
 }
 
 int         app_shell::count() { return s_count; }

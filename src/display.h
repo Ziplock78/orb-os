@@ -33,3 +33,6 @@ uint16_t rotation();
 } // namespace display
 
 uint32_t display_frames();   // total rendered frames (for FPS measurement)
+uint32_t display_lvgl_us();  // cumulative microseconds inside lv_timer_handler()
+uint32_t display_flush_us(); // cumulative microseconds pushing pixels to the panel
+uint32_t display_flushed_px(); // cumulative pixels flushed (how much screen is repainted)

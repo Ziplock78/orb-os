@@ -12,6 +12,7 @@
 #include "driver/i2s.h"
 #include "esp_heap_caps.h"
 #include <math.h>
+#include "chime_westminster.h"
 
 #define ES8311_ADDR   0x18
 #define SR            16000          // playback sample rate (a beep; pitch-tolerant)
@@ -24,6 +25,16 @@ static volatile int  s_vol = 60;     // 0..100
 static volatile bool s_muted = false;
 static volatile int  s_cue = -1;
 static SemaphoreHandle_t s_sem = nullptr;
+
+// Named chime library: real recorded audio baked into flash (see chime_westminster.h),
+// not synthesized. Add more entries here as more chime files get baked in the same way.
+struct ChimeInfo { const char *name; const uint8_t *pcm; size_t bytes; };
+static const ChimeInfo CHIMES[] = {
+    { "Westminster", CHIME_WESTMINSTER_PCM, CHIME_WESTMINSTER_BYTES },
+};
+static const int CHIME_COUNT = (int)(sizeof(CHIMES) / sizeof(CHIMES[0]));
+static volatile int s_chimeIdx = 0;     // AUDIO_CHIME plays this one
+static volatile int s_previewIdx = 0;   // cue 4 (preview) plays this one instead
 
 static void es_write(uint8_t reg, uint8_t val) {
     Wire.beginTransmission(ES8311_ADDR);
@@ -146,8 +157,31 @@ static size_t gen_beep(int16_t *buf, size_t cap, float freq, int ms, float amp) 
     return i * 2;                                  // samples written (stereo interleaved)
 }
 
+// Streams pre-recorded PCM (flash-resident, read sequentially — no need to copy it all
+// into RAM first) out to I2S in chunks, applying the current software volume on the fly
+// by scaling each chunk into the existing tone scratch buffer before writing it. Assumes
+// the source is already at the playback format (16kHz/16-bit/stereo) — see
+// chime_westminster.h's comment for how it was prepared.
+static void play_pcm(const uint8_t *data, size_t bytes) {
+    if (!s_buf || !data || bytes < 2) return;
+    const float g = s_vol / 100.0f;
+    const int16_t *src = (const int16_t *)data;
+    const size_t totalSamples = bytes / 2;
+    size_t i = 0;
+    while (i < totalSamples) {
+        size_t chunk = totalSamples - i;
+        if (chunk > S_BUF_LEN) chunk = S_BUF_LEN;
+        for (size_t k = 0; k < chunk; ++k) s_buf[k] = (int16_t)(src[i + k] * g);
+        size_t bw;
+        i2s_write(I2S_PORT, s_buf, chunk * sizeof(int16_t), &bw, portMAX_DELAY);
+        i += chunk;
+    }
+}
+
 static void play_cue(int cue) {
-    if (!s_ok || !s_buf || (s_muted && cue != 2) || s_vol <= 0) return;
+    // Preview (4) and self-test (2) both ignore mute — they're a deliberate "let me hear
+    // it" action from the Settings menu, not an automatic notification.
+    if (!s_ok || !s_buf || (s_muted && cue != 2 && cue != 4) || s_vol <= 0) return;
     int16_t *buf = s_buf;
     const float amp = (s_vol / 100.0f) * 17000.0f;
     digitalWrite(PIN_AUDIO_PA, HIGH);              // enable speaker amp
@@ -162,13 +196,12 @@ static void play_cue(int cue) {
             i2s_write(I2S_PORT, buf, ns * 2, &bw, portMAX_DELAY);
             delay(40);
         }
-    } else if (cue == AUDIO_CHIME) {                   // gentle 4-note descending clock chime
-        static const float notes[4] = { 659.25f, 587.33f, 523.25f, 392.00f };  // E5 D5 C5 G4
-        for (int k = 0; k < 4; ++k) {
-            size_t ns = gen_beep(buf, S_BUF_LEN, notes[k], 300, amp * 0.85f);
-            i2s_write(I2S_PORT, buf, ns * 2, &bw, portMAX_DELAY);
-            delay(55);
-        }
+    } else if (cue == AUDIO_CHIME) {                // real recorded chime, whichever is selected
+        const int idx = constrain(s_chimeIdx, 0, CHIME_COUNT - 1);
+        play_pcm(CHIMES[idx].pcm, CHIMES[idx].bytes);
+    } else if (cue == 4) {                          // preview: a specific chime, for the picker UI
+        const int idx = constrain(s_previewIdx, 0, CHIME_COUNT - 1);
+        play_pcm(CHIMES[idx].pcm, CHIMES[idx].bytes);
     } else {
         size_t ns = gen_beep(buf, S_BUF_LEN, 880.0f, 160, amp);
         i2s_write(I2S_PORT, buf, ns * 2, &bw, portMAX_DELAY);
@@ -231,5 +264,20 @@ void audio_play(AudioCue cue) {
 void audio_selftest() {   // ~2 s continuous tone, ignores mute, PA held on
     if (!s_ok) return;
     s_cue = 2;
+    if (s_sem) xSemaphoreGive(s_sem);
+}
+
+int audio_chime_count() { return CHIME_COUNT; }
+const char *audio_chime_name(int idx) {
+    if (idx < 0 || idx >= CHIME_COUNT) return "";
+    return CHIMES[idx].name;
+}
+int  audio_chime_index() { return s_chimeIdx; }
+void audio_set_chime(int idx) { s_chimeIdx = constrain(idx, 0, CHIME_COUNT - 1); }
+
+void audio_preview_chime(int idx) {   // ignores mute, like audio_selftest() — see play_cue()
+    if (!s_ok) return;
+    s_previewIdx = constrain(idx, 0, CHIME_COUNT - 1);
+    s_cue = 4;
     if (s_sem) xSemaphoreGive(s_sem);
 }

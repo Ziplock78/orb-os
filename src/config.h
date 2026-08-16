@@ -5,10 +5,15 @@
 // Edit pins below: replace every -1 with the value from the Waveshare factory demo
 // (see docs/HARDWARE.md and docs/SETUP.md). Do NOT guess them.
 
-// ---------- Home location (default: Dénia, Spain) ----------
-// Overridable at runtime via the captive portal (stored in NVS).
-#define HOME_LAT_DEFAULT   38.8409
-#define HOME_LON_DEFAULT    0.1059
+// ---------- Home location (default: Phoenix, AZ) ----------
+// Fallback only. Launch Kit is the source of truth for location: a pushed
+// design's Latitude/Longitude (CUSTOM_RADAR_HOME_*) overrides this on both the
+// device and the simulator, and the device also stores a runtime override in
+// NVS via the captive portal. This default is what a fresh device / an
+// un-pushed simulator centers on, kept in sync with Launch Kit's own editor
+// default so all three line up out of the box.
+#define HOME_LAT_DEFAULT   33.4484
+#define HOME_LON_DEFAULT  -112.0740
 
 // ---------- Radar ----------
 #define RANGE_KM_DEFAULT    30.0f          // display range (outer ring). Query is wider, see below.
@@ -41,9 +46,12 @@ static const float RANGE_STEPS_KM[] = {10.0f, 20.0f, 30.0f, 50.0f, 100.0f};
 #define LCD_ROW_OFFSET      0              // no row (y) gap
 #define LCD_QSPI_HZ         80000000       // CO5300 QSPI clock (vendor uses 40 MHz; 80 = faster, verify no artifacts)
 #define BRIGHTNESS_DEFAULT  200            // 0..255, panel brightness via cmd 0x51
-#define TZ_STR              "CET-1CEST,M3.5.0,M10.5.0/3"  // POSIX TZ (Spain) for local time/date
+#define TZ_STR              "MST7"                        // POSIX TZ default: Arizona (UTC-7, no DST).
+                                                          // Overridden at runtime by IP geolocation on
+                                                          // auto-locate (host_locate_current) and by the
+                                                          // web config; this is just the out-of-box value.
 #define BRIGHTNESS_IDLE     25             // dimmed after no touch for IDLE_DIM_MS
-#define IDLE_DIM_MS         20000          // dim the screen after this long without a touch
+#define IDLE_DIM_MS         3600000UL      // default: dim the screen after 1 hour idle (Settings > Display)
 
 // ---------- ADS-B API (free, non-commercial) ----------
 #define ADSB_PRIMARY_HOST   "api.airplanes.live"   // GET /v2/point/{lat}/{lon}/{radius_nm}

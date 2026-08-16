@@ -34,7 +34,15 @@ static bool rd(uint8_t reg, uint8_t *buf, uint8_t len) {
 }
 
 bool imu_begin() {
-    Wire.begin(PIN_I2C_SDA, PIN_I2C_SCL, 400000);   // idempotent (touch also begins it)
+    // DO NOT REMOVE, and do not move imu_begin() later in setup(). This is now the ONLY
+    // Wire.begin() in the firmware, so it is what brings up the shared I2C bus for every
+    // other device on it: AXP2101 (battery), PCF85063 (RTC), ES8311 (audio). It used to
+    // be a harmless duplicate because touch_begin() ran first and did the same thing, but
+    // touch was removed (see docs/ARCHITECTURE.md) and took that call with it. main.cpp's
+    // setup() calls imu_begin() immediately before battery_begin()/rtc_begin()/
+    // audio_begin(), which is what keeps the ordering correct. Note this still runs even
+    // when no IMU is fitted: the probe below fails, the bus stays up.
+    Wire.begin(PIN_I2C_SDA, PIN_I2C_SCL, 400000);
     const uint8_t addrs[2] = { 0x6B, 0x6A };
     for (uint8_t i = 0; i < 2; ++i) {
         s_addr = addrs[i];

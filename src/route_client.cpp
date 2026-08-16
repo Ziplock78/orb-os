@@ -68,19 +68,21 @@ void route_cache_put(const char *callsign, const char *from, const char *to) {
     p.end();
 }
 
-// Most recognizable short airport label: a cleaned-up name ("Teesside", "Palma de
-// Mallorca", "London Heathrow"), falling back to the municipality, then the IATA code.
+// The 3-letter IATA airport code ("JFK", "LHR") — short, unambiguous, and what a
+// {from}/{to} banner actually has room for. Falls back to a cleaned-up name (then
+// municipality) only on the rare response that has no IATA code at all.
 static void pick_airport(JsonObjectConst ap, char *out, size_t n) {
+    const char *iata = ap["iata_code"] | "";
+    if (iata[0]) { snprintf(out, n, "%s", iata); return; }
     String s = (const char *)(ap["name"] | "");
     s.replace(" International Airport", "");
     s.replace(" Regional Airport", "");
     s.replace(" Airport", "");
     s.replace(" International", "");
     s.trim();
-    if (s.length() == 0 || s.length() > 18) {           // name missing or too long -> municipality/IATA
+    if (s.length() == 0 || s.length() > 18) {           // name missing or too long -> municipality
         const char *muni = ap["municipality"] | "";
-        const char *iata = ap["iata_code"] | "";
-        snprintf(out, n, "%s", muni[0] ? muni : iata);
+        snprintf(out, n, "%s", muni);
         return;
     }
     snprintf(out, n, "%s", s.c_str());

@@ -8,10 +8,27 @@ import sys, os, struct, subprocess, tempfile
 
 SIZE = 466
 
+def dims(path):
+    out = subprocess.run(["sips", "-g", "pixelWidth", "-g", "pixelHeight", path],
+                         capture_output=True, text=True).stdout
+    w = h = 0
+    for line in out.splitlines():
+        if "pixelWidth" in line:  w = int(line.split(":")[1])
+        if "pixelHeight" in line: h = int(line.split(":")[1])
+    return w, h
+
 def to_bmp(src):
+    # Center-crop to a square first (so a non-square source isn't stretched into an
+    # oval on the round panel), then resize to SIZE and convert to an uncompressed BMP.
+    w, h = dims(src)
+    side = min(w, h)
+    fd, sq = tempfile.mkstemp(suffix=".png"); os.close(fd)
+    subprocess.run(["sips", "-c", str(side), str(side), src, "--out", sq],
+                   check=True, capture_output=True)
     fd, bmp = tempfile.mkstemp(suffix=".bmp"); os.close(fd)
     subprocess.run(["sips", "-z", str(SIZE), str(SIZE), "-s", "format", "bmp",
-                    src, "--out", bmp], check=True, capture_output=True)
+                    sq, "--out", bmp], check=True, capture_output=True)
+    os.remove(sq)
     return bmp
 
 def read_bmp(path):

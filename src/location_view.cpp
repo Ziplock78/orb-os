@@ -5,43 +5,48 @@
 //   - api.open-meteo.com    forecast         -> temperature, surface pressure, elevation
 //   - en.wikipedia.org      page summary     -> the INTEL fun fact (first sentence)
 #include "location_view.h"
+#ifdef ARDUINO
 #include <Arduino.h>
-#include <lvgl.h>
-#include <math.h>
-#include <string.h>
 #include <esp_heap_caps.h>
 #include <WiFi.h>
 #include <WiFiClientSecure.h>
 #include <HTTPClient.h>
+#else
+// Desktop/native build (no ESP32 core): shim the Arduino-only calls this file uses
+// outside the HTTP transport itself (which goes through native_http.h/curl instead
+// of WiFiClientSecure/HTTPClient — see http_json() below). Same pattern as
+// clock_view.cpp / wx_radar_client.cpp. The fetch STATE MACHINE (startRefresh/pump/
+// step_geo/step_wx/trivia) is shared, unguarded, identical on both platforms — only
+// the transport differs, so the simulator hits the exact same three real endpoints
+// the device does.
+#include "native_http.h"
+#include <cstdio>
+#include <cstdarg>
+#include <cstdlib>
+static struct { void printf(const char *fmt, ...) const { va_list a; va_start(a, fmt); vprintf(fmt, a); va_end(a); } void println(const char *s) const { puts(s); } } Serial;
+static void *heap_caps_malloc(size_t sz, int) { return malloc(sz); }
+static struct { unsigned getFreeHeap() const { return 0; } } ESP;   // desktop: no heap-pressure logging needed
+#define MALLOC_CAP_SPIRAM 0
+#define MALLOC_CAP_8BIT 0
+#endif
 #include <ArduinoJson.h>
+#include <lvgl.h>
+#include <math.h>
+#include <string.h>
+#include <ctype.h>
+#include <string>
 #include "config.h"
 #include "dial_loc.h"      // DIAL_LOC — blank Aviator dial, 466x466 RGB565
 
 namespace {
-    struct LocInfo {
-        char   city[40];
-        char   region[40];
-        char   country[8];
-        double lat, lon;
-        int    tempF;
-        float  pressInHg;
-        int    altFt;
-        char   intel[140];
-        bool   hasWx;
-        bool   valid;
-    };
+    using LocInfo = locationview::LocInfo;
 
-    LocInfo           s_info = {};
-    SemaphoreHandle_t s_mutex   = nullptr;
+    LocInfo s_info = {};
+#ifdef ARDUINO
+    SemaphoreHandle_t s_mutex = nullptr;
+#endif
     volatile bool     s_dirty   = false;      // fetch (core0) has new data for the UI (core1)
     volatile bool     s_want    = true;       // a refresh has been requested
-
-    // A refresh runs ONE HTTPS call per adsb_task cycle (three back-to-back TLS
-    // handshakes exhaust the fragmented internal heap; every fetcher here does one).
-    enum Step { STEP_IDLE, STEP_GEO, STEP_WX, STEP_TRIVIA };
-    Step    s_step  = STEP_IDLE;
-    int     s_triviaTry = 0;                    // Wikivoyage title attempt (0..2), one per pump
-    LocInfo s_stage = {};                      // built up across the steps, committed at the end
 
     lv_obj_t   *s_screen = nullptr;
     lv_obj_t   *s_canvas = nullptr;
@@ -91,10 +96,14 @@ namespace {
     void redraw() {
         if (!s_canvas || !s_buf) return;
         LocInfo info;
+#ifdef ARDUINO
         if (s_mutex && xSemaphoreTake(s_mutex, pdMS_TO_TICKS(50)) == pdTRUE) {
             info = s_info;
             xSemaphoreGive(s_mutex);
         } else return;
+#else
+        info = s_info;
+#endif
 
         memcpy(s_buf, DIAL_LOC, sizeof(DIAL_LOC));
 
@@ -142,8 +151,21 @@ namespace {
 
         lv_obj_invalidate(s_canvas);
     }
+}
 
-    // ---- HTTP helpers (core0) ----
+namespace {
+    // --- one step = one HTTPS call, run from pump() on successive adsb_task cycles ---
+
+    // A refresh runs ONE HTTPS call per adsb_task cycle (three back-to-back TLS
+    // handshakes exhaust the fragmented internal heap; every fetcher here does one).
+    // The desktop simulator has no such constraint, but drives pump() the same way
+    // (see locationview::pumpUntilDone) so the two platforms share this exact code.
+    enum Step { STEP_IDLE, STEP_GEO, STEP_WX, STEP_TRIVIA };
+    Step    s_step  = STEP_IDLE;
+    int     s_triviaTry = 0;                    // Wikivoyage title attempt (0..2), one per pump
+    LocInfo s_stage = {};                      // built up across the steps, committed at the end
+
+#ifdef ARDUINO
     bool http_json(const char *url, JsonDocument &doc, const JsonDocument *filter) {
         WiFiClientSecure client;
         client.setInsecure();
@@ -164,6 +186,17 @@ namespace {
         if (err) Serial.printf("[locinfo] json parse: %s\n", err.c_str());
         return !err;
     }
+#else
+    bool http_json(const char *url, JsonDocument &doc, const JsonDocument *filter) {
+        std::string body;
+        if (!native_https_get(url, "CapsuleRadar/1.0 (esp32; contact: device)", body, 6000)) return false;
+        DeserializationError err = filter
+            ? deserializeJson(doc, body, DeserializationOption::Filter(*filter))
+            : deserializeJson(doc, body);
+        if (err) Serial.printf("[locinfo] json parse: %s\n", err.c_str());
+        return !err;
+    }
+#endif
 
     // First sentence of a Wikipedia extract, trimmed to fit the dial (~2 lines).
     void first_sentence(const char *src, char *dst, size_t dstN) {
@@ -181,10 +214,6 @@ namespace {
             strncat(dst, "...", dstN - strlen(dst) - 1);
         }
     }
-}
-
-namespace {
-    // --- one step = one HTTPS call, run from pump() on successive adsb_task cycles ---
 
     void step_geo(double lat, double lon) {
         char url[224];
@@ -286,10 +315,14 @@ namespace {
     void commit() {
         s_stage.valid = (s_stage.city[0] != '\0') || s_stage.hasWx;
         if (!s_stage.valid) { Serial.println("[locinfo] cycle produced no data"); return; }
+#ifdef ARDUINO
         if (s_mutex && xSemaphoreTake(s_mutex, pdMS_TO_TICKS(200)) == pdTRUE) {
             s_info = s_stage;
             xSemaphoreGive(s_mutex);
         }
+#else
+        s_info = s_stage;
+#endif
         s_dirty = true;
         Serial.printf("[locinfo] committed: %s, %s %s\n", s_stage.city, s_stage.region, s_stage.country);
     }
@@ -317,6 +350,18 @@ void locationview::pump(double lat, double lon) {
     }
 }
 
+// Desktop simulator convenience: the device spreads a refresh cycle over several
+// adsb_task cycles to avoid back-to-back TLS handshakes (see the Step comment above);
+// the sim has no such constraint, so just pump() until the cycle finishes. Bounded to
+// 8 iterations (worst case: geo + wx + 3 trivia attempts = 5) so a stuck state machine
+// can't loop forever.
+void locationview::pumpUntilDone(double lat, double lon) {
+    startRefresh();
+    for (int i = 0; i < 8; ++i) {
+        pump(lat, lon);
+    }
+}
+
 bool locationview::hasData() { return s_info.valid; }
 
 bool locationview::takeRefresh() {
@@ -334,12 +379,20 @@ void locationview::onPress() {
     s_want = true;      // push = manual refresh
 }
 
+void locationview::debugSet(const LocInfo &info) {
+    s_info = info;
+    s_dirty = true;
+    redraw();
+}
+
 static void poll_cb(lv_timer_t * /*t*/) {
     if (s_dirty) { s_dirty = false; redraw(); }
 }
 
 void locationview::init() {
+#ifdef ARDUINO
     s_mutex = xSemaphoreCreateMutex();
+#endif
 
     s_screen = lv_obj_create(NULL);
     lv_obj_set_style_bg_color(s_screen, COL_BLACK, 0);

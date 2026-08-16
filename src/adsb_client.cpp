@@ -143,6 +143,13 @@ bool AdsbClient::fetchFrom(const char* host, std::vector<Aircraft>& out) {
 
         const float d = (float)geo::haversineKm(_lat, _lon, lat, lon);
 
+        // Center dead zone: traffic this close projects into the middle of the
+        // scope, underneath whatever the theme puts there (a hub, a gear, a hand
+        // pivot), where a cluster of blips just reads as clutter. Dropped here,
+        // before the nearest-N gate below, so the slots go to aircraft that will
+        // actually be visible. Set from the design's own Scope card (0 = off).
+        if (_minDistKm > 0.0f && d < _minDistKm) continue;
+
         // nearest-N gate: if the buffer is full and this one isn't closer than the farthest kept,
         // drop it now — before any string allocation.
         int farIdx = -1;

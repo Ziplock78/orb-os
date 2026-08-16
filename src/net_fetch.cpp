@@ -1,6 +1,7 @@
 // Shared streamed-download helper (see net_fetch.h). Mirrors the proven pattern in
 // photo_client.cpp: Content-Length -> stream into PSRAM; chunked -> getString decode.
 #include "net_fetch.h"
+#ifdef ARDUINO
 #include <Arduino.h>
 #include <WiFi.h>
 #include <WiFiClientSecure.h>
@@ -65,3 +66,54 @@ bool net_fetch_psram(const char *url, const char *userAgent,
     *out = buf; *outLen = got;
     return true;
 }
+
+#else
+// Desktop/native build: no PSRAM, no fragmented-heap concerns — a single libcurl GET
+// straight into a malloc'd buffer covers it. The maxLen cap is preserved so a runaway
+// response still aborts instead of growing unbounded.
+#include <curl/curl.h>
+#include <cstdlib>
+#include <cstring>
+#include <cstdio>
+
+namespace {
+    struct NetBuf { uint8_t *data; size_t len, cap; };
+    size_t write_cb(char *ptr, size_t size, size_t nmemb, void *userdata) {
+        NetBuf *b = (NetBuf *)userdata;
+        const size_t n = size * nmemb;
+        if (b->len + n > b->cap) return 0;   // over budget -> libcurl aborts the transfer
+        memcpy(b->data + b->len, ptr, n);
+        b->len += n;
+        return n;
+    }
+}
+
+bool net_fetch_psram(const char *url, const char *userAgent,
+                     uint8_t **out, size_t *outLen, size_t maxLen,
+                     int connectTimeoutMs, int totalTimeoutMs) {
+    *out = nullptr; *outLen = 0;
+    CURL *curl = curl_easy_init();
+    if (!curl) return false;
+    NetBuf buf = { (uint8_t *)malloc(maxLen), 0, maxLen };
+    if (!buf.data) { curl_easy_cleanup(curl); return false; }
+    curl_easy_setopt(curl, CURLOPT_URL, url);
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_cb);
+    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &buf);
+    if (userAgent) curl_easy_setopt(curl, CURLOPT_USERAGENT, userAgent);
+    curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT_MS, (long)connectTimeoutMs);
+    curl_easy_setopt(curl, CURLOPT_TIMEOUT_MS, (long)totalTimeoutMs);
+    curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
+    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 0L);
+    const CURLcode res = curl_easy_perform(curl);
+    long code = 0;
+    curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &code);
+    curl_easy_cleanup(curl);
+    if (res != CURLE_OK || code != 200 || buf.len == 0) {
+        fprintf(stderr, "[net] HTTP %ld (curl: %s) %s\n", code, curl_easy_strerror(res), url);
+        free(buf.data);
+        return false;
+    }
+    *out = buf.data; *outLen = buf.len;
+    return true;
+}
+#endif

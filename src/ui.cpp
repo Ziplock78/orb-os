@@ -1,7 +1,9 @@
 // M3 UI: tileview (radar / list / stats) + tap-to-inspect detail card.
 // Pure LVGL, portable. Taps hit-test via radar::hitTest; selection lives in radar.
 #include "ui.h"
+#include "app_theme.h"
 #include "radar_view.h"
+#include "custom_radar.h"     // CUSTOM_HAS_RADAR_STYLE — a pushed design's own banners replace this card
 #include "route.h"
 #include "photo.h"
 #include "weather.h"
@@ -9,38 +11,76 @@
 #include "cloud_image.h"
 #include "airports.h"
 #include "config.h"
+#include "splash_art.h"       // splash_art_decode() — boot-splash PNG, decoded on demand
 #include <lvgl.h>
 #include <stdio.h>
 #include <stdint.h>
 #include <string.h>
 #include <time.h>
 
-#define UI_GREEN lv_color_hex(0x1DFF86)
-#define UI_INK   lv_color_hex(0xEAFFF3)
-#define UI_SOFT  lv_color_hex(0x9AFFC8)
-#define UI_DIM   lv_color_hex(0x5F7A6C)
-#define UI_PANEL lv_color_hex(0x0C160F)
-#define UI_EMERG lv_color_hex(0xFF5A3C)
+// Runtime-retintable HUD chrome — plain variables (not #define) so ui_apply_theme()
+// can repaint every existing UI_* call site below without touching each one.
+static lv_color_t UI_GREEN = lv_color_hex(0x1DFF86);
+static lv_color_t UI_INK   = lv_color_hex(0xEAFFF3);
+static lv_color_t UI_SOFT  = lv_color_hex(0x9AFFC8);
+static lv_color_t UI_DIM   = lv_color_hex(0x5F7A6C);
+static lv_color_t UI_PANEL = lv_color_hex(0x0C160F);
+static lv_color_t UI_EMERG = lv_color_hex(0xFF5A3C);
+static lv_color_t UI_BG    = lv_color_hex(0x000000);   // screen background — was a bare lv_color_black() everywhere
+
+// Repaint the HUD chrome for the active radar theme. Aviator gets a warm ivory/brass
+// palette to match the clock faces + Location dial; every other theme keeps the
+// original phosphor-green HUD regardless of the scope's own accent color, since only
+// Aviator has a full matching palette designed for it. The Office app theme (see
+// app_theme.h) overrides all of this with a white/charcoal/blue skin regardless of the
+// radar scope theme underneath — it's a whole-device switch, not a per-scope one.
+void ui_apply_theme(int theme) {
+    if (app_theme::get() == APP_THEME_OFFICE) {
+        const AppPalette &p = app_theme::palette();
+        UI_GREEN = p.accent; UI_INK = p.ink; UI_SOFT = p.soft; UI_DIM = p.dim;
+        UI_PANEL = p.panel; UI_EMERG = lv_color_hex(0xD1382A); UI_BG = p.bg;
+        return;
+    }
+    UI_BG = lv_color_hex(0x000000);
+    if (theme == THEME_AVIATOR) {
+        UI_GREEN = lv_color_hex(0xDACFA6); UI_INK  = lv_color_hex(0xEDE3CC);
+        UI_SOFT  = lv_color_hex(0x9C8F73); UI_DIM  = lv_color_hex(0x6B5A3A);
+        UI_PANEL = lv_color_hex(0x14100A); UI_EMERG = lv_color_hex(0xB0402C);
+    } else {
+        UI_GREEN = lv_color_hex(0x1DFF86); UI_INK  = lv_color_hex(0xEAFFF3);
+        UI_SOFT  = lv_color_hex(0x9AFFC8); UI_DIM  = lv_color_hex(0x5F7A6C);
+        UI_PANEL = lv_color_hex(0x0C160F); UI_EMERG = lv_color_hex(0xFF5A3C);
+    }
+}
 
 static lv_obj_t *s_tv = nullptr;
-static lv_obj_t *s_tileRadar = nullptr, *s_tileList = nullptr, *s_tileStats = nullptr, *s_tileWeather = nullptr;
+static lv_obj_t *s_tileRadar = nullptr, *s_tileWeather = nullptr;
 static lv_obj_t *s_card = nullptr, *s_cardTitle = nullptr, *s_cardL = nullptr, *s_cardR = nullptr;
 static lv_obj_t *s_cardRoute = nullptr;
 static lv_obj_t *s_photo = nullptr, *s_photoCredit = nullptr;   // aircraft photo above the card
 static char s_lastRouteReq[12] = "";
 static lv_obj_t *s_hudWifi = nullptr, *s_hudCount = nullptr, *s_hudClock = nullptr, *s_hudBatt = nullptr, *s_hudDate = nullptr;
 static lv_obj_t *s_hudBars[4] = { nullptr, nullptr, nullptr, nullptr };   // WiFi signal-strength bars
-static lv_obj_t *s_list = nullptr;
-static lv_obj_t *s_statsLbl = nullptr;
-static lv_obj_t *s_statsNet = nullptr;
 static lv_obj_t *s_hudGps   = nullptr;   // HUD satellite icon (hidden unless GPS auto-location is on)
-static lv_obj_t *s_statsGps = nullptr;   // Stats view GPS status line
 static lv_obj_t *s_weatherNow = nullptr, *s_weatherMeta = nullptr, *s_weatherDays = nullptr;
 static lv_obj_t *s_wxCanvas = nullptr, *s_wxStatus = nullptr, *s_wxAirport = nullptr;
 static lv_obj_t *s_wxFooter = nullptr, *s_wxMeta = nullptr, *s_wxAttrib = nullptr;
 static lv_obj_t *s_wxRings[3] = { nullptr, nullptr, nullptr };
+static lv_obj_t *s_wxRingLbl[3] = { nullptr, nullptr, nullptr };
+
+// "Push, wait, image refreshes" has a real lag (a fresh RainViewer fetch + roads
+// reprojection + PNG decode), but the range label and rings update instantly since
+// those are local — that mismatch reads as "the zoom didn't work" (live user feedback).
+// This overlay covers the still-stale canvas with an animated "UPDATING..." as soon as
+// the press lands, and clears itself the moment the frame actually meant for the new
+// tier arrives (tracked by wx_radar_version()'s counter, not a timer, so it can't clear
+// early or get stuck late regardless of how long the fetch actually takes).
+static lv_obj_t *s_wxUpdateOverlay = nullptr;
+static bool     s_wxUpdating = false;
+static uint32_t s_wxLastVersion = 0;
+static int      s_wxUpdateDots = 0;
+static int      s_wxAnimSlot = 0;   // which frame of the loop is on screen right now
 static lv_obj_t *s_wxNorth = nullptr, *s_wxCenter = nullptr, *s_wxRange = nullptr;
-static lv_obj_t *s_weatherModeBtn = nullptr, *s_weatherModeLbl = nullptr;
 static lv_obj_t *s_weatherTitle = nullptr;
 enum WeatherViewMode { WEATHER_RADAR, WEATHER_CLOUDS, WEATHER_FORECAST };
 static WeatherViewMode s_weatherMode = WEATHER_RADAR;
@@ -90,14 +130,27 @@ static float dist_val(float km) {
 }
 static const char *dist_unit(void) { return s_units == 0 ? "nm" : (s_units == 2 ? "mi" : "km"); }
 
-static float weather_temp(float c) { return s_units == 2 ? c * 1.8f + 32.0f : c; }
-static const char *weather_temp_unit(void) { return s_units == 2 ? "F" : "C"; }
-static float weather_wind(float kmh) {
-    if (s_units == 0) return kmh * 0.539957f;
-    if (s_units == 2) return kmh * 0.621371f;
-    return kmh;
-}
-static const char *weather_wind_unit(void) { return s_units == 0 ? "kt" : (s_units == 2 ? "mph" : "km/h"); }
+// Weather units are independent of s_units above: that preset also drives the aircraft
+// ALT/SPD/DIST readout (and includes an Aviation nm/kt mode that makes no sense for a
+// weather forecast), so weather gets its own metric/imperial flag instead of sharing it.
+// Resolved on the host side (main.cpp) from either the saved manual choice or, in
+// Automatic mode, the home location — see host_wx_units_set()/is_imperial_region().
+static bool s_wxImperial = false;
+void ui_set_wx_units(bool imperial) { s_wxImperial = imperial; }
+
+static float weather_temp(float c) { return s_wxImperial ? c * 1.8f + 32.0f : c; }
+static const char *weather_temp_unit(void) { return s_wxImperial ? "F" : "C"; }
+static float weather_wind(float kmh) { return s_wxImperial ? kmh * 0.621371f : kmh; }
+static const char *weather_wind_unit(void) { return s_wxImperial ? "mph" : "km/h"; }
+static float wx_dist_val(float km) { return s_wxImperial ? km * 0.621371f : km; }
+static const char *wx_dist_unit(void) { return s_wxImperial ? "MI" : "KM"; }
+
+// Weather map zoom: 0=50mi 1=100mi. The actual fetch/crop math lives in
+// wx_radar_client.cpp's WX_ZOOM[] table; this mirrors just the display radius (km) for
+// the on-screen range label — keep the two in sync if the tiers ever change.
+// ui_set_wx_zoom() itself is defined below, after build_weather().
+static int s_wxZoom = 0;
+static const float WX_ZOOM_KM[2] = { 80.4672f, 160.9344f };
 static const char *cardinal(float deg) {
     static const char *p[] = {"N", "NE", "E", "SE", "S", "SW", "W", "NW"};
     int i = ((int)(deg + 22.5f) / 45) & 7;
@@ -138,6 +191,15 @@ static void fold_ascii(char *s) {
 
 // ----------------------------------------------------------------- detail card
 static void refresh_card(void) {
+#if CUSTOM_HAS_RADAR_STYLE
+    // A pushed design's own selection banners (callsign/stats/route, styled and
+    // positioned in the editor) fully replace this generic card — showing both
+    // would double up the same info in two different looks on the same screen.
+    if (s_card)        lv_obj_add_flag(s_card, LV_OBJ_FLAG_HIDDEN);
+    if (s_photo)       lv_obj_add_flag(s_photo, LV_OBJ_FLAG_HIDDEN);
+    if (s_photoCredit) lv_obj_add_flag(s_photoCredit, LV_OBJ_FLAG_HIDDEN);
+    return;
+#endif
     AcInfo in;
     if (!radar::selected(in)) {
         lv_obj_add_flag(s_card, LV_OBJ_FLAG_HIDDEN);
@@ -219,67 +281,19 @@ static void refresh_card(void) {
 }
 
 // --------------------------------------------------------------------- input
-static bool s_longPressed = false;
-static int s_rangeIdx = -1;
-static float s_rangeKm = RANGE_KM_DEFAULT;   // current display range (km), for the stats view
-static void (*s_rangeCb)(float) = nullptr;
-static lv_obj_t *s_zoomBtn = nullptr, *s_zoomLbl = nullptr;
+// Nothing here any more. This file used to own the touch input surface: tap a plane to
+// select it, tap the on-screen zoom button to change range, long-press to cycle the
+// scope skin, swipe between radar / list / stats / weather. All of it went when the Orb
+// became knob-only (docs/ARCHITECTURE.md).
+//
+// Where each of those lives now:
+//   - selecting an aircraft -> radar::knobTurn()/knobPress(), via input_router
+//   - changing range        -> Settings > Range (settings_view.cpp)
+//   - cycling the skin      -> Settings > Design (theme_select)
+//   - moving between apps   -> the knob and app_shell's switcher overlay
+//   - the range readout     -> radar_view's own s_rangeLbl, re-enabled in ui_create()
 
-void ui_set_range_cb(void (*cb)(float)) { s_rangeCb = cb; }
-
-static void zoom_cb(lv_event_t *e) {   // fires on PRESS (robust vs scroll-cancel on the tileview)
-    (void)e;
-    static uint32_t last = 0;
-    const uint32_t now = lv_tick_get();
-    if (now - last < 250) return;      // debounce repeated/held presses
-    last = now;
-    if (!s_rangeCb) return;
-    const int n = (int)(sizeof(RANGE_STEPS_KM) / sizeof(RANGE_STEPS_KM[0]));
-    s_rangeIdx = (s_rangeIdx + 1) % n;
-    s_rangeCb(RANGE_STEPS_KM[s_rangeIdx]);
-}
-
-void ui_set_range_km(float km) {
-    s_rangeKm = km;
-    if (s_zoomLbl) {
-        char b[20];
-        snprintf(b, sizeof(b), LV_SYMBOL_LOOP " %.0f %s", dist_val(km), dist_unit());
-        lv_label_set_text(s_zoomLbl, b);
-    }
-    int best = 0; float bd = 1e9f;                 // sync the cycle index to the shown range
-    const int n = (int)(sizeof(RANGE_STEPS_KM) / sizeof(RANGE_STEPS_KM[0]));
-    for (int i = 0; i < n; ++i) { float d = km - RANGE_STEPS_KM[i]; if (d < 0) d = -d; if (d < bd) { bd = d; best = i; } }
-    s_rangeIdx = best;
-}
-
-static void radar_press_cb(lv_event_t *e) { (void)e; s_longPressed = false; }
-
-static void radar_longpress_cb(lv_event_t *e) {   // long-press cycles the visual theme
-    (void)e;
-    radar::cycleTheme();
-    s_longPressed = true;
-}
-
-static void radar_clicked_cb(lv_event_t *e) {
-    (void)e;
-    if (s_longPressed) { s_longPressed = false; return; }   // ignore the click after a long-press
-    lv_indev_t *indev = lv_indev_get_act();
-    if (!indev) return;
-    lv_point_t p;
-    lv_indev_get_point(indev, &p);
-    radar::select(radar::hitTest(p.x, p.y));   // hit -> select; miss -> clear
-    refresh_card();
-}
-
-static void list_btn_cb(lv_event_t *e) {
-    lv_obj_t *b = lv_event_get_target(e);
-    const int idx = (int)(intptr_t)lv_obj_get_user_data(b);
-    radar::select(idx);
-    refresh_card();
-    lv_obj_set_tile_id(s_tv, 0, 0, LV_ANIM_ON);   // jump back to the radar
-}
-
-// ----------------------------------------------------------------- list/stats
+// ----------------------------------------------------------------------- HUD
 void ui_set_status(bool wifiUp, bool feedOk, int rssi, const char *clock) {
     // bar count from RSSI (dBm): the weaker the signal, the fewer lit bars
     int level;
@@ -315,15 +329,12 @@ void ui_set_date(const char *date) {
     if (s_hudDate && date) lv_label_set_text(s_hudDate, date);
 }
 
-void ui_set_netinfo(const char *line) {
-    if (s_statsNet && line) lv_label_set_text(s_statsNet, line);
-}
-
 // GPS indicator. state: 0 = off / no module (hidden), 1 = acquiring (amber), 2 = fix (green).
+// The fuller "GPS fix, N sats" line this also used to write lived on the Stats screen and
+// went with it; the HUD icon carries the same information in less space.
 void ui_set_gps(int state, int sats) {
     if (state <= 0) {                                 // hidden when GPS auto-location is off
-        if (s_hudGps)   lv_label_set_text(s_hudGps, "");
-        if (s_statsGps) lv_label_set_text(s_statsGps, "");
+        if (s_hudGps) lv_label_set_text(s_hudGps, "");
         return;
     }
     const bool fix = (state >= 2);
@@ -334,63 +345,48 @@ void ui_set_gps(int state, int sats) {
         lv_label_set_text(s_hudGps, b);
         lv_obj_set_style_text_color(s_hudGps, col, 0);
     }
-    if (s_statsGps) {
-        char s[40];
-        if (fix) snprintf(s, sizeof(s), LV_SYMBOL_GPS " fix  " LV_SYMBOL_BULLET "  %d sats", sats);
-        else     snprintf(s, sizeof(s), LV_SYMBOL_GPS " acquiring  (%d sats)", sats);
-        lv_label_set_text(s_statsGps, s);
-        lv_obj_set_style_text_color(s_statsGps, col, 0);
-    }
 }
 
-// Rebuild the scrollable contact list. Costly (deletes+recreates LVGL buttons), so we
-// only call it when the list tile is actually visible — not on every 2 s poll.
-static void build_list(void) {
-    if (!s_list) return;
-    lv_obj_clean(s_list);
-    const int n = radar::count();
-    for (int i = 0; i < n; ++i) {
-        AcInfo in;
-        radar::info(i, in);
-        char altS[16], txt[64];
-        fmt_alt(altS, sizeof(altS), in.altFt, in.onGround);
-        snprintf(txt, sizeof(txt), "%-8.8s  %-8s %4.1f %s",
-                 in.call[0] ? in.call : in.hex, altS, dist_val(in.distKm), dist_unit());
-        lv_obj_t *b = lv_list_add_btn(s_list, NULL, txt);
-        lv_obj_set_style_bg_opa(b, LV_OPA_TRANSP, 0);
-        lv_obj_set_style_text_color(b, in.emergency ? UI_EMERG : UI_SOFT, 0);
-        lv_obj_set_style_text_font(b, F16(), 0);
-        lv_obj_set_user_data(b, (void *)(intptr_t)i);
-        lv_obj_add_event_cb(b, list_btn_cb, LV_EVENT_CLICKED, NULL);
-    }
+// The frame the loop is currently sitting on, from the newest (possibly still-filling)
+// generation. s_wxAnimSlot is advanced by wx_anim_cb() at ~3fps; build_weather() and the
+// animation tick both read through here so they always agree on what's shown.
+static bool wx_anim_current(const uint16_t **px, uint32_t *ft) {
+    const uint32_t gen = wx_radar_gen();
+    const int n = wx_radar_gen_count(gen);
+    if (n <= 0) return false;
+    if (s_wxAnimSlot >= n) s_wxAnimSlot = 0;
+    return wx_radar_frame(s_wxAnimSlot, gen, px, ft);
 }
 
-static void build_stats(void) {
-    if (!s_statsLbl) return;
-    const int n = radar::count();
-    int emg = 0;
-    float nearest = 1e9f, highest = -1e9f;
-    char nearestCall[12] = "-";
-    for (int i = 0; i < n; ++i) {
-        AcInfo in;
-        radar::info(i, in);
-        if (in.emergency) emg++;
-        if (in.distKm < nearest) { nearest = in.distKm; snprintf(nearestCall, sizeof(nearestCall), "%s", in.call[0] ? in.call : in.hex); }
-        if (!in.onGround && in.altFt > highest) highest = in.altFt;
+// Lean-redesign cadence: step to the next frame and repaint the canvas so precipitation
+// appears to move, but dwell 2s on each frame and HOLD the newest (last) frame 5s before
+// looping back to the start -- a deliberate "click, click, ... dwell, start over" feel
+// rather than a fast blur. Runs only while the Weather Radar view is on screen and no
+// "UPDATING" overlay is pending. Cheap: swaps the canvas to an already-decoded PSRAM
+// buffer, it does not rebuild the tile.
+static constexpr uint32_t WX_ANIM_STEP_MS = 2000;   // dwell on each intermediate frame
+static constexpr uint32_t WX_ANIM_HOLD_MS = 5000;   // dwell on the newest frame before looping
+static void wx_anim_cb(lv_timer_t *t) {
+    if (!s_wxCanvas || !s_tv) return;
+    if (s_weatherMode != WEATHER_RADAR || s_wxUpdating) return;
+    if (lv_tileview_get_tile_act(s_tv) != s_tileWeather) return;   // weather not the visible tile
+    const uint32_t gen = wx_radar_gen();
+    const int n = wx_radar_gen_count(gen);
+    if (n <= 0) return;
+    s_wxAnimSlot = (s_wxAnimSlot + 1) % n;
+    // Set how long THIS (newly shown) frame dwells before the next step: the newest frame
+    // (highest slot index) holds 5s, every other frame holds 2s.
+    lv_timer_set_period(t, (s_wxAnimSlot == n - 1) ? WX_ANIM_HOLD_MS : WX_ANIM_STEP_MS);
+    const uint16_t *px = nullptr; uint32_t ft = 0;
+    if (!wx_radar_frame(s_wxAnimSlot, gen, &px, &ft) || !px) return;
+    lv_canvas_set_buffer(s_wxCanvas, (void *)px, WX_RADAR_SIZE, WX_RADAR_SIZE, LV_IMG_CF_TRUE_COLOR);
+    lv_obj_invalidate(s_wxCanvas);
+    if (s_wxAttrib) {
+        char stamp[6] = "--:--"; time_t t = (time_t)ft; struct tm ti;
+        if (ft && localtime_r(&t, &ti)) snprintf(stamp, sizeof(stamp), "%02d:%02d", ti.tm_hour, ti.tm_min);
+        char attr[64]; snprintf(attr, sizeof(attr), "RADAR %s  |  RAINVIEWER", stamp);
+        lv_label_set_text(s_wxAttrib, attr);
     }
-    char altH[16];
-    fmt_alt(altH, sizeof(altH), (highest > -1e8f) ? highest : 0.0f, false);
-    char st[220];
-    snprintf(st, sizeof(st),
-             "Aircraft   %d\n"
-             "Emergency  %d\n"
-             "Nearest    %s\n"
-             "           %.1f %s\n"
-             "Highest    %s\n"
-             "Range      %.0f %s",
-             n, emg, n ? nearestCall : "-", dist_val(n ? nearest : 0.0f), dist_unit(),
-             altH, dist_val(s_rangeKm), dist_unit());
-    lv_label_set_text(s_statsLbl, st);
 }
 
 static void build_weather(void) {
@@ -465,17 +461,23 @@ static void build_weather(void) {
         lv_label_set_text(s_weatherDays, days);
     }
 
-    const uint16_t *radarPixels = nullptr, *cloudPixels = nullptr;
     uint32_t frameTime = 0, version = 0;
     double rlat = 0, rlon = 0;
     const bool cloudMode = s_weatherMode == WEATHER_CLOUDS;
     const bool forecastMode = s_weatherMode == WEATHER_FORECAST;
     bool haveImage = false;
-    if (cloudMode)
-        haveImage = cloud_image_front(&cloudPixels, &frameTime, &rlat, &rlon, &version);
-    else
-        haveImage = wx_radar_front(&radarPixels, &frameTime, &rlat, &rlon, &version);
-    const uint16_t *pixels = cloudMode ? cloudPixels : radarPixels;
+    const uint16_t *pixels = nullptr;
+    if (cloudMode) {
+        haveImage = cloud_image_front(&pixels, &frameTime, &rlat, &rlon, &version);
+    } else {
+        // Drop the "UPDATING" overlay the moment a frame of a NEW generation lands (the
+        // version counter bumps on every commit, so the first new-zoom frame trips this).
+        const uint32_t ver = wx_radar_version();
+        if (s_wxUpdating && ver != s_wxLastVersion) s_wxUpdating = false;
+        s_wxLastVersion = ver;
+        wx_radar_center(&rlat, &rlon);
+        haveImage = wx_anim_current(&pixels, &frameTime);
+    }
     if (haveImage && pixels && s_wxCanvas) {
         lv_canvas_set_buffer(s_wxCanvas, (void *)pixels, WX_RADAR_SIZE, WX_RADAR_SIZE, LV_IMG_CF_TRUE_COLOR);
         lv_obj_clear_flag(s_wxCanvas, LV_OBJ_FLAG_HIDDEN);
@@ -511,7 +513,8 @@ static void build_weather(void) {
     };
     lv_obj_t *radarObjs[] = { s_wxCanvas, s_wxStatus, s_wxAirport, s_wxFooter, s_wxMeta,
                               s_wxAttrib, s_wxNorth, s_wxCenter, s_wxRange,
-                              s_wxRings[0], s_wxRings[1], s_wxRings[2] };
+                              s_wxRings[0], s_wxRings[1], s_wxRings[2],
+                              s_wxRingLbl[0], s_wxRingLbl[1], s_wxRingLbl[2] };
     for (lv_obj_t *o : forecastObjs) if (o) {
         if (forecastMode) lv_obj_clear_flag(o, LV_OBJ_FLAG_HIDDEN); else lv_obj_add_flag(o, LV_OBJ_FLAG_HIDDEN);
     }
@@ -520,18 +523,30 @@ static void build_weather(void) {
     }
     if (!forecastMode && haveImage) lv_obj_add_flag(s_wxStatus, LV_OBJ_FLAG_HIDDEN);
     if (!forecastMode && !haveImage) lv_obj_add_flag(s_wxCanvas, LV_OBJ_FLAG_HIDDEN);
-    lv_label_set_text(s_wxRange, cloudMode ? "200 KM" : "75 KM");
-    lv_label_set_text(s_weatherModeLbl,
-        s_weatherMode == WEATHER_RADAR ? "CLOUDS" :
-        s_weatherMode == WEATHER_CLOUDS ? "3-DAY FORECAST" : "WX RADAR");
+    if (cloudMode) {
+        lv_label_set_text(s_wxRange, "200 KM");
+    } else {
+        char rb[16];
+        snprintf(rb, sizeof(rb), "%.0f %s", wx_dist_val(WX_ZOOM_KM[s_wxZoom]), wx_dist_unit());
+        lv_label_set_text(s_wxRange, rb);
+    }
+    // Ring 0 is the outer edge (full range), ring 1 is 2/3 out, ring 2 is 1/3 out — label
+    // each with the real distance it stands for so the zoom is visible even when the
+    // roads/precip underneath don't obviously change (a bare number, not a repeat of the
+    // "N MI" range label, since three of those stacked up would be redundant clutter).
+    {
+        const float fullKm = cloudMode ? 200.0f : WX_ZOOM_KM[s_wxZoom];
+        const float frac[3] = { 1.0f, 2.0f / 3.0f, 1.0f / 3.0f };
+        for (int i = 0; i < 3; ++i) {
+            if (!s_wxRingLbl[i]) continue;
+            char b[12];
+            snprintf(b, sizeof(b), "%.0f", wx_dist_val(fullKm * frac[i]));
+            lv_label_set_text(s_wxRingLbl[i], b);
+        }
+    }
     if (s_weatherTitle) lv_label_set_text(s_weatherTitle,
         s_weatherMode == WEATHER_RADAR ? "WX RADAR" :
         s_weatherMode == WEATHER_CLOUDS ? "SAT CLOUDS" : "WEATHER");
-}
-
-static void weather_mode_cb(lv_event_t *) {
-    s_weatherMode = (WeatherViewMode)(((int)s_weatherMode + 1) % 3);
-    build_weather();
 }
 
 void ui_set_weather_forecast(bool forecast) {
@@ -539,13 +554,23 @@ void ui_set_weather_forecast(bool forecast) {
     build_weather();
 }
 
-// Rebuild whichever of list/stats is currently on screen (called on poll and on swipe).
+// WEATHER_CLOUDS is no longer reachable from here (nothing assigns it) — the touch
+// button that used to cycle RADAR/CLOUDS/FORECAST is gone; the knob push handler in
+// main.cpp (weather_press_cycle()) drives radar zoom tiers + forecast instead. Left in
+// place rather than ripped out in case satellite cloud view comes back some other way.
+bool ui_weather_is_forecast(void) { return s_weatherMode == WEATHER_FORECAST; }
+
+void ui_set_wx_zoom(int tier) {
+    s_wxZoom = (tier < 0 || tier > 1) ? 0 : tier;
+    s_wxUpdating = true;   // covers the canvas with "UPDATING..." until the new frame lands
+    build_weather();       // range label + rings update now; the map image catches up later
+}
+
+// Rebuild the weather tile when it is the one on screen. Only the visible tile pays the
+// cost. This used to cover the list and stats tiles too, which no longer exist.
 static void refresh_active_tile(void) {
     if (!s_tv) return;
-    lv_obj_t *act = lv_tileview_get_tile_act(s_tv);
-    if (act == s_tileList)  build_list();
-    else if (act == s_tileStats) build_stats();
-    else if (act == s_tileWeather) build_weather();
+    if (lv_tileview_get_tile_act(s_tv) == s_tileWeather) build_weather();
 }
 
 void ui_on_data_updated(void) {
@@ -575,7 +600,7 @@ static lv_obj_t *make_round_panel(lv_obj_t *parent) {
     lv_obj_set_size(p, 462, 462);
     lv_obj_center(p);
     lv_obj_set_style_radius(p, LV_RADIUS_CIRCLE, 0);
-    lv_obj_set_style_bg_color(p, lv_color_hex(0x05100A), 0);
+    lv_obj_set_style_bg_color(p, UI_BG, 0);
     lv_obj_set_style_bg_opa(p, LV_OPA_COVER, 0);
     lv_obj_set_style_border_color(p, UI_GREEN, 0);
     lv_obj_set_style_border_opa(p, 50, 0);
@@ -639,7 +664,7 @@ static void build_card(void) {
 }
 
 void ui_show_view(int idx) {
-    if (s_tv && idx >= 0 && idx <= 3) lv_obj_set_tile_id(s_tv, (uint32_t)idx, 0, LV_ANIM_OFF);
+    if (s_tv && idx >= 0 && idx <= 1) lv_obj_set_tile_id(s_tv, (uint32_t)idx, 0, LV_ANIM_OFF);
 }
 
 // ------------------------------------------------------------------- splash
@@ -664,95 +689,82 @@ void ui_splash_show(void) {
     lv_obj_remove_style_all(cont);
     lv_obj_set_size(cont, SCREEN_W, SCREEN_H);
     lv_obj_center(cont);
-    lv_obj_set_style_bg_color(cont, lv_color_black(), 0);
+    const bool office = app_theme::get() == APP_THEME_OFFICE;
+    lv_obj_set_style_bg_color(cont, office ? app_theme::palette().bg : lv_color_black(), 0);
     lv_obj_set_style_bg_opa(cont, LV_OPA_COVER, 0);
     lv_obj_clear_flag(cont, LV_OBJ_FLAG_SCROLLABLE);
 
-    // concentric rings
-    const lv_coord_t dia[3] = { 210, 142, 78 };
-    const lv_opa_t   op[3]  = { 90, 120, 160 };
-    for (int i = 0; i < 3; ++i) {
-        lv_obj_t *r = lv_obj_create(cont);
-        lv_obj_remove_style_all(r);
-        lv_obj_set_size(r, dia[i], dia[i]);
-        lv_obj_align(r, LV_ALIGN_CENTER, 0, -8);
-        lv_obj_set_style_radius(r, LV_RADIUS_CIRCLE, 0);
-        lv_obj_set_style_border_color(r, UI_GREEN, 0);
-        lv_obj_set_style_border_opa(r, op[i], 0);
-        lv_obj_set_style_border_width(r, 2, 0);
-        lv_obj_clear_flag(r, LV_OBJ_FLAG_SCROLLABLE);
+    // Title card — decoded from a flash-resident PNG at show time (see splash_art.h).
+    // settings_view.cpp's About page decodes the same way.
+    static lv_img_dsc_t splashImg;
+    if (splash_art_decode(office, &splashImg)) {
+        lv_obj_t *img = lv_img_create(cont);
+        lv_img_set_src(img, &splashImg);
+        lv_obj_center(img);
     }
-    // rotating sweep
-    lv_obj_t *sweep = lv_spinner_create(cont, 1400, 55);
-    lv_obj_set_size(sweep, 210, 210);
-    lv_obj_align(sweep, LV_ALIGN_CENTER, 0, -8);
-    lv_obj_set_style_arc_opa(sweep, 0, LV_PART_MAIN);
-    lv_obj_set_style_arc_color(sweep, UI_GREEN, LV_PART_INDICATOR);
-    lv_obj_set_style_arc_width(sweep, 4, LV_PART_INDICATOR);
 
-    lv_obj_t *title = lv_label_create(cont);
-    lv_label_set_text(title, "CAPSULE RADAR");
-    lv_obj_set_style_text_font(title, &lv_font_montserrat_28, 0);
-    lv_obj_set_style_text_color(title, UI_GREEN, 0);
-    lv_obj_align(title, LV_ALIGN_CENTER, 0, 118);
+    // Force this onto the panel right now — the rest of setup() (WiFi connect, sensor
+    // init, etc.) is blocking and won't call lv_timer_handler() again until loop()
+    // starts, so without this the screen just sits black through all of that and the
+    // splash only gets its first real paint at the same moment its overdue fade-timer
+    // fires too, a barely-visible flash instead of the held title card it's meant to be.
+    lv_refr_now(NULL);
 
-    lv_obj_t *sub = lv_label_create(cont);
-    lv_label_set_text(sub, "Live ADS-B radar");
-    lv_obj_set_style_text_font(sub, F14(), 0);
-    lv_obj_set_style_text_color(sub, UI_SOFT, 0);
-    lv_obj_align(sub, LV_ALIGN_CENTER, 0, 150);
-
-    lv_timer_t *t = lv_timer_create(splash_dismiss_cb, 2200, cont);   // hold, then fade out
+    // Hold 2s then fade. This timer only advances while lv_timer_handler() is being
+    // called, which does NOT happen during setup()'s blocking work (WiFi connect, sensor
+    // init) -- main.cpp deliberately pumps the UI for ~2.6s right after the boot app
+    // (Clock) is loaded and BEFORE the blocking WiFi connect call, specifically so this
+    // timer gets to fire for real instead of sitting frozen for however long WiFi takes.
+    lv_timer_t *t = lv_timer_create(splash_dismiss_cb, 2000, cont);
     lv_timer_set_repeat_count(t, 1);
+}
+
+
+// Section ledger for ui_create(). Measured taking 4.2 MB of an 8 MB budget in one call,
+// which is more than every app's artwork put together. Marks split it by section so the
+// expensive part can be named rather than guessed at.
+static void umark(const char *what) {
+#ifdef ARDUINO
+    static uint32_t prev = 0;
+    const uint32_t now = (uint32_t)ESP.getFreePsram();
+    Serial.printf("[psram/ui] %-26s free %6u KB", what, (unsigned)(now / 1024));
+    if (prev >= now && prev) Serial.printf("   (-%u KB)", (unsigned)((prev - now) / 1024));
+    prev = now;
+    Serial.println();
+#else
+    (void)what;
+#endif
 }
 
 void ui_create(void) {
     lv_obj_t *scr = lv_scr_act();
-    lv_obj_set_style_bg_color(scr, lv_color_black(), 0);
+    lv_obj_set_style_bg_color(scr, UI_BG, 0);
     lv_obj_set_style_bg_opa(scr, LV_OPA_COVER, 0);
 
+    umark("ui_create start");
     s_tv = lv_tileview_create(scr);
     lv_obj_set_size(s_tv, SCREEN_W, SCREEN_H);
-    lv_obj_set_style_bg_color(s_tv, lv_color_black(), 0);
+    lv_obj_set_style_bg_color(s_tv, UI_BG, 0);
     lv_obj_set_style_bg_opa(s_tv, LV_OPA_COVER, 0);
     lv_obj_set_scrollbar_mode(s_tv, LV_SCROLLBAR_MODE_OFF);
 
-    s_tileRadar = lv_tileview_add_tile(s_tv, 0, 0, LV_DIR_RIGHT);
-    s_tileList  = lv_tileview_add_tile(s_tv, 1, 0, LV_DIR_HOR);
-    s_tileStats = lv_tileview_add_tile(s_tv, 2, 0, LV_DIR_HOR);
-    s_tileWeather = lv_tileview_add_tile(s_tv, 3, 0, LV_DIR_LEFT);
-    // Rebuild the list/stats with the latest data the moment they slide into view
-    // (between polls they'd otherwise show whatever was there when last visible).
+    // Two tiles now: Flight Tracker and Weather Radar. The list and stats tiles that sat
+    // between them were reachable only by swiping, so they went with the touchscreen.
+    // The knob moves between apps via app_shell; nothing swipes any more, and these two
+    // are switched programmatically by ui_show_view() from each app's onEnter.
+    s_tileRadar   = lv_tileview_add_tile(s_tv, 0, 0, LV_DIR_RIGHT);
+    s_tileWeather = lv_tileview_add_tile(s_tv, 1, 0, LV_DIR_LEFT);
     lv_obj_add_event_cb(s_tv, [](lv_event_t *) { refresh_active_tile(); }, LV_EVENT_VALUE_CHANGED, nullptr);
 
     // --- radar tile ---
     lv_obj_clear_flag(s_tileRadar, LV_OBJ_FLAG_SCROLLABLE);
+    umark("after tileview");
     radar::init(s_tileRadar);
-    radar::setRangeLabelVisible(false);                     // the zoom button shows the range instead
-    lv_obj_add_flag(s_tileRadar, LV_OBJ_FLAG_CLICKABLE);     // receive taps (planes/empty)
-    lv_obj_add_event_cb(s_tileRadar, radar_clicked_cb, LV_EVENT_CLICKED, NULL);
-    lv_obj_add_event_cb(s_tileRadar, radar_press_cb, LV_EVENT_PRESSED, NULL);
-    lv_obj_add_event_cb(s_tileRadar, radar_longpress_cb, LV_EVENT_LONG_PRESSED, NULL);
+    umark("after radar::init");
+    radar::setRangeLabelVisible(true);   // radar draws its own range readout again, now that
+                                         // the touch-only zoom button that replaced it is gone
     build_card();
-
-    // on-screen range/zoom button (reliable single tap; bottom, above the 'S' marker)
-    s_zoomBtn = lv_btn_create(s_tileRadar);
-    lv_obj_set_size(s_zoomBtn, 120, 44);
-    lv_obj_set_ext_click_area(s_zoomBtn, 18);   // invisibly enlarge the tap target (easier to hit)
-    lv_obj_align(s_zoomBtn, LV_ALIGN_BOTTOM_MID, 0, -32);
-    lv_obj_set_style_radius(s_zoomBtn, 18, 0);
-    lv_obj_set_style_bg_color(s_zoomBtn, UI_PANEL, 0);
-    lv_obj_set_style_bg_opa(s_zoomBtn, 225, 0);
-    lv_obj_set_style_border_color(s_zoomBtn, UI_GREEN, 0);
-    lv_obj_set_style_border_width(s_zoomBtn, 1, 0);
-    lv_obj_set_style_border_opa(s_zoomBtn, 170, 0);
-    lv_obj_clear_flag(s_zoomBtn, LV_OBJ_FLAG_SCROLL_CHAIN);  // tapping it must not swipe the tileview
-    lv_obj_add_event_cb(s_zoomBtn, zoom_cb, LV_EVENT_PRESSED, NULL);  // fire on touch-down, not release
-    s_zoomLbl = lv_label_create(s_zoomBtn);
-    lv_label_set_text(s_zoomLbl, LV_SYMBOL_LOOP " 30 km");
-    lv_obj_set_style_text_font(s_zoomLbl, F14(), 0);
-    lv_obj_set_style_text_color(s_zoomLbl, UI_GREEN, 0);
-    lv_obj_center(s_zoomLbl);
+    umark("after detail card+photo");
 
     // top status HUD (wifi / aircraft count / clock); white reads on both themes.
     // WiFi is a 4-bar signal meter: bar count = RSSI strength, colour = feed health.
@@ -803,47 +815,20 @@ void ui_create(void) {
     lv_label_set_text(s_hudDate, "");
     lv_obj_align(s_hudDate, LV_ALIGN_TOP_MID, 0, 70);
 
-    // --- list tile (circular panel, clipped to the round screen) ---
-    lv_obj_t *lp = make_round_panel(s_tileList);
-    make_tile_title(lp, "AIRCRAFT");
-    s_list = lv_list_create(lp);
-    lv_obj_set_size(s_list, s_bigText ? 340 : 300, 372);   // wider rows so big-font distances don't clip
-    lv_obj_align(s_list, LV_ALIGN_CENTER, 0, 22);
-    lv_obj_set_style_bg_opa(s_list, LV_OPA_TRANSP, 0);
-    lv_obj_set_style_border_width(s_list, 0, 0);
-    lv_obj_set_style_pad_row(s_list, 2, 0);
+#if CUSTOM_HAS_RADAR_STYLE
+    // This status row (WiFi bars, GPS icon, in-range count, clock, battery,
+    // date) is Flight Tracker-only chrome, not a device-wide status bar — a
+    // pushed design's own scope has no room reserved for it and never drew it
+    // in the editor, so hide it here rather than have it float over the design.
+    lv_obj_add_flag(s_hudWifi, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(s_hudGps, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(s_hudCount, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(s_hudClock, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(s_hudBatt, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(s_hudDate, LV_OBJ_FLAG_HIDDEN);
+#endif
 
-    // --- stats tile (circular panel) ---
-    lv_obj_t *sp = make_round_panel(s_tileStats);
-    make_tile_title(sp, "STATS");
-    s_statsLbl = lv_label_create(sp);
-    lv_obj_set_style_text_font(s_statsLbl, F16(), 0);
-    lv_obj_set_style_text_color(s_statsLbl, UI_SOFT, 0);
-    lv_label_set_text(s_statsLbl, "Aircraft   0");
-    lv_obj_align(s_statsLbl, LV_ALIGN_CENTER, 0, -16);
-
-    s_statsGps = lv_label_create(sp);               // GPS status line (hidden unless GPS is on)
-    lv_obj_set_style_text_font(s_statsGps, F14(), 0);
-    lv_obj_set_style_text_color(s_statsGps, UI_SOFT, 0);
-    lv_obj_set_style_text_align(s_statsGps, LV_TEXT_ALIGN_CENTER, 0);
-    lv_label_set_text(s_statsGps, "");
-    lv_obj_align(s_statsGps, LV_ALIGN_CENTER, 0, 90);
-
-    // footer: where to reach the configuration page (IP / hostname / setup AP)
-    s_statsNet = lv_label_create(sp);
-    lv_obj_set_width(s_statsNet, 320);
-    lv_obj_set_style_text_font(s_statsNet, F14(), 0);
-    lv_obj_set_style_text_color(s_statsNet, UI_GREEN, 0);
-    lv_obj_set_style_text_align(s_statsNet, LV_TEXT_ALIGN_CENTER, 0);
-    lv_label_set_text(s_statsNet, "");
-    lv_obj_align(s_statsNet, LV_ALIGN_CENTER, 0, 132);
-
-    lv_obj_t *ver = lv_label_create(sp);            // firmware version (so users can tell what's flashed)
-    lv_obj_set_style_text_font(ver, F12(), 0);
-    lv_obj_set_style_text_color(ver, UI_DIM, 0);
-    lv_label_set_text(ver, "Capsule Radar v" FW_VERSION);
-    lv_obj_align(ver, LV_ALIGN_CENTER, 0, 170);
-
+    umark("after radar HUD");
     // --- weather tile (current conditions + next three days) ---
     lv_obj_t *wp = make_round_panel(s_tileWeather);
     lv_obj_set_style_bg_color(wp, lv_color_black(), 0); // hide square radar-tile bounds on AMOLED
@@ -899,8 +884,6 @@ void ui_create(void) {
     s_wxCanvas = lv_canvas_create(wp);
     lv_obj_set_size(s_wxCanvas, WX_RADAR_SIZE, WX_RADAR_SIZE);
     lv_obj_align(s_wxCanvas, LV_ALIGN_TOP_MID, 0, 52);
-    lv_obj_add_flag(s_wxCanvas, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_add_event_cb(s_wxCanvas, weather_mode_cb, LV_EVENT_CLICKED, nullptr);
     lv_obj_add_flag(s_wxCanvas, LV_OBJ_FLAG_HIDDEN);
     lv_obj_move_background(s_wxCanvas);
 
@@ -921,6 +904,26 @@ void ui_create(void) {
         lv_obj_set_style_border_opa(s_wxRings[i], i == 0 ? 180 : 90, 0);
         lv_obj_set_style_border_width(s_wxRings[i], 1, 0);
         lv_obj_clear_flag(s_wxRings[i], LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_SCROLLABLE);
+
+        // Fixed-pixel rings alone don't communicate zoom — all three tiers drew the exact
+        // same 360/240/120px circles regardless of what real-world distance they stood
+        // for, so cycling zoom looked like nothing changed even though the underlying
+        // roads/precip data genuinely did (found from live user feedback: "they all seem
+        // the exact same zoom out, even tho the text changes"). Labeling the two inner
+        // rings with their actual distance for the current tier makes the zoom
+        // unmistakable — updated in build_weather() alongside the range label. The outer
+        // ring skips its own label since s_wxRange already shows that distance; adding a
+        // third label right next to it would just be clutter.
+        if (i == 0) continue;
+        s_wxRingLbl[i] = lv_label_create(wp);
+        lv_obj_set_style_text_font(s_wxRingLbl[i], F12(), 0);
+        lv_obj_set_style_text_color(s_wxRingLbl[i], UI_GREEN, 0);
+        lv_obj_set_style_text_opa(s_wxRingLbl[i], 150, 0);
+        lv_label_set_text(s_wxRingLbl[i], "");
+        // Left side, mirroring s_wxRange's right-side placement at the same height —
+        // clear of the top status/airport labels, the bottom-center footer/meta text,
+        // and the center marker.
+        lv_obj_align(s_wxRingLbl[i], LV_ALIGN_TOP_MID, -(ringSize[i] / 2 - 12), 228);
     }
     s_wxNorth = lv_label_create(wp);
     lv_obj_set_style_text_font(s_wxNorth, F12(), 0);
@@ -937,6 +940,36 @@ void ui_create(void) {
     lv_obj_set_style_text_color(s_wxRange, UI_GREEN, 0);
     lv_label_set_text(s_wxRange, "75 KM");
     lv_obj_align(s_wxRange, LV_ALIGN_TOP_MID, 128, 225);
+
+    s_wxUpdateOverlay = lv_label_create(wp);
+    lv_obj_set_style_text_font(s_wxUpdateOverlay, &lv_font_montserrat_16, 0);
+    lv_obj_set_style_text_color(s_wxUpdateOverlay, UI_GREEN, 0);
+    lv_obj_set_style_bg_color(s_wxUpdateOverlay, lv_color_black(), 0);
+    lv_obj_set_style_bg_opa(s_wxUpdateOverlay, 220, 0);
+    lv_obj_set_style_pad_left(s_wxUpdateOverlay, 16, 0);
+    lv_obj_set_style_pad_right(s_wxUpdateOverlay, 16, 0);
+    lv_obj_set_style_pad_top(s_wxUpdateOverlay, 10, 0);
+    lv_obj_set_style_pad_bottom(s_wxUpdateOverlay, 10, 0);
+    lv_obj_set_style_radius(s_wxUpdateOverlay, 8, 0);
+    lv_label_set_text(s_wxUpdateOverlay, "UPDATING");
+    lv_obj_align(s_wxUpdateOverlay, LV_ALIGN_TOP_MID, 0, 214);   // centered over the canvas/rings
+    lv_obj_add_flag(s_wxUpdateOverlay, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_move_foreground(s_wxUpdateOverlay);
+    lv_timer_create([](lv_timer_t *) {
+        if (!s_wxUpdateOverlay) return;
+        if (!s_wxUpdating || s_weatherMode != WEATHER_RADAR) {
+            lv_obj_add_flag(s_wxUpdateOverlay, LV_OBJ_FLAG_HIDDEN);
+            return;
+        }
+        lv_obj_clear_flag(s_wxUpdateOverlay, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_move_foreground(s_wxUpdateOverlay);
+        s_wxUpdateDots = (s_wxUpdateDots + 1) % 4;
+        char b[16];
+        snprintf(b, sizeof(b), "UPDATING%.*s", s_wxUpdateDots, "...");
+        lv_label_set_text(s_wxUpdateOverlay, b);
+    }, 400, nullptr);
+
+    lv_timer_create(wx_anim_cb, WX_ANIM_STEP_MS, nullptr);   // 2s/frame, 5s hold on newest (see wx_anim_cb)
 
     s_wxFooter = lv_label_create(wp);
     lv_obj_set_width(s_wxFooter, 360);
@@ -1026,22 +1059,9 @@ void ui_create(void) {
     lv_label_set_text(s_fcUpdated, "");
     lv_obj_align(s_fcUpdated, LV_ALIGN_TOP_MID, 0, 365);
 
-    s_weatherModeBtn = lv_btn_create(wp);
-    lv_obj_set_size(s_weatherModeBtn, 164, 34);
-    lv_obj_align(s_weatherModeBtn, LV_ALIGN_BOTTOM_MID, 0, -18);
-    lv_obj_set_style_radius(s_weatherModeBtn, 17, 0);
-    lv_obj_set_style_bg_color(s_weatherModeBtn, UI_PANEL, 0);
-    lv_obj_set_style_border_color(s_weatherModeBtn, UI_GREEN, 0);
-    lv_obj_set_style_border_width(s_weatherModeBtn, 1, 0);
-    lv_obj_clear_flag(s_weatherModeBtn, LV_OBJ_FLAG_SCROLL_CHAIN);
-    lv_obj_add_event_cb(s_weatherModeBtn, weather_mode_cb, LV_EVENT_CLICKED, nullptr);
-    s_weatherModeLbl = lv_label_create(s_weatherModeBtn);
-    lv_obj_set_style_text_font(s_weatherModeLbl, F12(), 0);
-    lv_obj_set_style_text_color(s_weatherModeLbl, UI_GREEN, 0);
-    lv_label_set_text(s_weatherModeLbl, "3-DAY FORECAST");
-    lv_obj_center(s_weatherModeLbl);
-
+    umark("after weather tile");
     lv_obj_set_tile_id(s_tv, 0, 0, LV_ANIM_OFF);
 
     ui_splash_show();   // branded boot splash on top (auto-fades)
+    umark("after splash");
 }
