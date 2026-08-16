@@ -17,3 +17,25 @@ dist/
 
 # Secrets (WiFi creds live in NVS on the device, never in the repo)
 secrets.h
+
+# ESP-IDF component manager (unused; project builds via PlatformIO)
+CMakeLists.txt
+dependencies.lock
+managed_components/
+.dummy/
+
+# Generated staging trees, not source
+sdcard_stage/
+sim/
+data/
+
+# Working asset dumps (source of truth is elsewhere; too large/churny for git)
+tools/data/
+tools/hands/
+
+# Watch-script runtime state
+orb_watch.log
+orb_watch.pid
+
+# Orphaned, unreferenced by platformio.ini
+partitions_16MB_video.csv

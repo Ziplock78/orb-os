@@ -1,0 +1,223 @@
+#pragma once
+// Per-theme visual style (colors/positions/formats/geometry) — the runtime half of
+// the multi-theme SD system. Art (plate/overlay/hand/blip PNGs) already travels per
+// theme via /themes/<slug>/*.png (see theme_sd.h + each screen's own decode_sd_first
+// pattern). Until this module existed, STYLE (everything a Launch Kit push bakes as a
+// CUSTOM_* #define into custom_clock.h/custom_radar.h/custom_settings.h/custom_menu.h)
+// was compile-time only — one shared firmware binary, so switching the active SD theme
+// via Settings > Design swapped the art but not the color/format/layout, which stayed
+// stuck on whichever theme's screen was pushed last (see git history/PRs referencing
+// "theme bleeding"). This reads a small per-theme JSON file alongside the art
+// (/themes/<slug>/{clock,radar,settings,menu}_style.json, written by Launch Kit on
+// every push — see server.js's writeSimSdAsset("*_style.json", ...) call sites) and
+// overrides the compiled CUSTOM_* defaults with it, per field, per theme.
+//
+// NOT covered (known, deliberate limitations — same class of "compile-time only" gap
+// that already existed for these before this module, unchanged by it):
+//   - Fonts (CUSTOM_*_FONT) — real compiled LVGL glyph bitmaps, not simple values;
+//     making these travel per-theme needs LVGL's binary font/lv_fs runtime-loading
+//     path, a separate, much larger undertaking. Whichever theme's screen was pushed
+//     last still wins the font family/size/weight.
+//   - Radar blip icon pivot and radar layer order — plain numbers, but tightly coupled
+//     to whichever blip PNG is actually decoded (a pivot only makes sense against its
+//     own image's pixel dimensions).
+//
+// FIXED since this comment was written (these now DO travel per theme):
+//   - Clock hand art, pivot, center, blend, draw order, and the per-hand show/hide
+//     gates. Art comes from /themes/<slug>/clock_hand_{hour,minute,second}.png and
+//     clock_static{1,2}.png; geometry from the "hands" block in clock_style.json.
+//   - Which apps appear in the knob menu, from /themes/<slug>/theme.json.
+//   - Radar's operational params (home lat/lon, range, max aircraft, hide-ground,
+//     min-altitude) — device config baked alongside style in the same header, but
+//     already just a one-time boot default the user can (and typically does)
+//     override live afterward; a stale default is a minor inconvenience, not a
+//     visual bug.
+//   - The CUSTOM_HAS_* show/hide gates themselves (whether a banner/highlight/menu
+//     slot exists at all) stay compile-time: whichever theme was pushed last decides
+//     if the code path is compiled in. If it is, this module makes ITS VALUES correct
+//     per active theme; if a different installed theme never used that element at
+//     all, it may still show (with that theme's own values, or the compiled default)
+//     rather than correctly staying hidden.
+#include <lvgl.h>
+
+namespace theme_style {
+
+struct ClockText {
+    bool     show   = false;
+    int      x      = 233;
+    int      y      = 233;
+    uint32_t color  = 0xF2F5F9;
+    int      glow   = 0;
+    uint32_t glowColor = 0xF2F5F9;
+    char     fmt[32] = "";
+    bool     curved = false;
+    int      curveR = 0;
+    float    arcDeg = 0.0f;
+    int      align  = 0;   // 0 left, 1 center, 2 right
+};
+
+// One rotating (or static) clock-face image layer. `show` is the runtime replacement for
+// the CUSTOM_HAS_{HOUR,MINUTE,SECOND,STATIC1,STATIC2} compile-time gates: a theme that
+// has no second hand sets show=false and no second hand is drawn, whatever the last
+// flashed theme happened to compile in. Geometry travels with the art because a pivot is
+// only meaningful against its own image's pixel dimensions.
+struct Hand {
+    bool show    = false;
+    int  pivotX  = 0,   pivotY  = 0;
+    int  centerX = 233, centerY = 233;
+    int  blend   = 0;
+};
+
+struct Clock {
+    uint32_t  bg = 0x000000;
+    ClockText text1;
+    ClockText text2;
+    Hand      hand[5];                        // 0=hour 1=minute 2=second 3=static1 4=static2
+    int       order[5] = { 3, 4, 0, 1, 2 };   // back-to-front draw order, kind indices
+    int       orderN   = 5;
+};
+
+// Which apps this theme puts in the knob menu. Was custom_apps.h, compiled in, so it was
+// one roster for the whole device rather than one per theme. Settings is deliberately
+// absent: it is a system screen, not an app, and a theme that could switch it off would
+// strand the user with no way back to WiFi, brightness, or theme selection.
+struct Apps {
+    bool clock        = true;
+    bool flight       = true;
+    bool weather      = true;
+    bool intel        = true;
+    bool surveillance = true;
+};
+
+struct RadarText {
+    bool     show   = false;
+    int      x      = 233;
+    int      y      = 233;
+    uint32_t color  = 0xFFFFFF;
+    int      glow   = 0;
+    uint32_t glowColor = 0xFFFFFF;
+    char     fmt[80] = "";
+    bool     curved = false;
+    int      curveR = 0;
+    float    arcDeg = 0.0f;
+    int      align  = 0;
+};
+
+// A plain decorative overlay (Static 1/2, see custom_radar_static.h) — no
+// rotation/pivot, just a position and opacity. New with this struct itself
+// (no legacy compile-time macro carries a default), so a missing/older
+// radar_style.json just leaves it hidden (show=false), not mis-positioned.
+struct RadarStatic {
+    bool  show = false;
+    int   x = 233;
+    int   y = 233;
+    int   opacity = 255;
+    float scale = 1.0f;
+};
+
+struct Radar {
+    bool     sweepEnabled    = true;
+    bool     sweepTypeImage  = false;  // new with this field — see RadarStatic above for why there's no compiled-macro fallback
+    uint32_t sweepColor      = 0x39FF14;
+    uint32_t sweepLeadColor  = 0xC8FFB0;
+    int      sweepTrailDeg   = 38;
+    int      sweepOpacity    = 60;    // 0..100
+    int      sweepLength     = 233;
+    int      sweepSpeed      = 45;
+
+    bool     blipEnabled     = true;  // new with this field — see RadarStatic above for why there's no compiled-macro fallback
+    bool     blipTypeImage   = false;
+    bool     blipRotate      = true;  // new with this field — see RadarStatic above for why there's no compiled-macro fallback
+    bool     blipKiteShape   = false;
+    int      blipSize        = 9;
+    int      blipKiteT       = 0;     // 0..100
+    bool     blipFixedColorMode = false;
+    uint32_t blipFixedColor  = 0x39FF14;
+    uint32_t blipAltGround   = 0x888888;
+    uint32_t blipAltLow      = 0xFF5A3C;
+    uint32_t blipAltMid      = 0xFFB23C;
+    uint32_t blipAltHigh     = 0xC8FF3C;
+    uint32_t blipAltCruise   = 0x39FF14;
+    uint32_t blipAltJet      = 0x3CE0FF;
+    int      blipGlow        = 0;
+    uint32_t blipGlowColor   = 0xFFFFFF;
+    bool     blipImageTint   = true;
+
+    bool     selEnabled      = true;
+    int      selStyle        = 0;  // 0=ring, 1=glow the aircraft, 2=recolor the aircraft — new with this field, see RadarStatic above for why there's no compiled-macro fallback
+    uint32_t selColor        = 0xFF9D3C;
+    int      selWidth        = 2;
+    int      selDiameter     = 30;
+    int      selGlow         = 0;
+    uint32_t selGlowColor    = 0xFF9D3C;
+
+    bool     offRangeEnabled = true;
+    uint32_t offRangeColor   = 0xFF9D3C;
+    int      offRangeSize    = 5;
+
+    bool     centerEnabled     = true;  // new with this field — see RadarStatic above for why there's no compiled-macro fallback
+    int      centerRadius      = 6;
+    uint32_t centerColor       = 0xFF9D3C;
+    int      centerInnerRadius = 2;
+    uint32_t centerInnerColor  = 0x0B1F0F;
+
+    RadarText rtext[4];
+    RadarStatic static1, static2;
+
+    bool     overlayEnabled  = false;  // new with this field — see RadarStatic above for why there's no compiled-macro fallback
+    uint32_t overlayColor    = 0x000000;
+    int      overlayOpacity  = 0;      // 0..255, same convention as RadarStatic::opacity
+};
+
+struct MenuText {
+    bool     show  = false;
+    int      x     = 233;
+    int      y     = 233;
+    uint32_t color = 0xFFFFFF;
+    int      glow  = 0;
+    uint32_t glowColor = 0xFFFFFF;
+    char     fmt[64] = "{name}";
+    int      align = 0;
+};
+
+struct Menu {
+    MenuText current;
+    MenuText prev;
+    MenuText next;
+};
+
+struct Settings {
+    float    wheelR       = 170.0f;
+    float    wheelRx      = 18.0f;
+    float    wheelStepDeg = 22.0f;
+    float    wheelCy      = 0.0f;
+    float    wheelFade    = 2.0f;
+    uint32_t selColor     = 0xFFFFFF;
+    uint32_t itemColor    = 0x6A7078;
+    int      glow         = 0;
+    uint32_t glowColor    = 0xFFFFFF;
+    bool     hlShow       = true;
+    uint32_t hlColor      = 0x232A36;
+    int      hlOpacity    = 255;
+    int      hlW          = 300;
+    int      hlH          = 44;
+    int      hlRadius     = 10;
+    int      defaultSel   = 0;
+};
+
+// Reads /themes/<slug>/{clock,radar,settings,menu}_style.json (theme_select::activeSlug())
+// and populates the runtime structs below, field by field — any file that's missing, or
+// any field a file doesn't set, keeps the CUSTOM_* compile-time default (so a theme
+// exported before this module existed, or a stock/no-design build, behaves exactly as
+// before). Call once at boot, right after theme_select::init() resolves the active slug
+// (theme_select::set() always triggers a real reboot/re-exec, so init() — and this —
+// naturally reruns on every theme switch too; no live-reload path needed).
+void load();
+
+const Clock    &clock();
+const Radar     &radar();
+const Menu      &menu();
+const Settings  &settings();
+const Apps      &apps();      // from /themes/<slug>/theme.json
+
+} // namespace theme_style
