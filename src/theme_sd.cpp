@@ -22,9 +22,19 @@ uint8_t *read_whole(const char *path, size_t &outLen, size_t maxBytes) {
     if (sz == 0 || sz > maxBytes) { f.close(); return nullptr; }
     uint8_t *buf = (uint8_t *)heap_caps_malloc(sz, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     if (!buf) { f.close(); return nullptr; }
+    // Timed separately from the PNG decode that follows it. The card sits on a 20 MHz SPI
+    // bus (the board does not route 4-bit SD_MMC), so "read the file" and "unpack the file"
+    // are different costs with different cures: a slow read is only fixed by moving the
+    // asset off the card, a slow decode by pre-baking the pixels. Guessing which one
+    // dominates is how the wrong fix gets built.
+    const uint32_t t0 = millis();
     const size_t got = f.read(buf, sz);
+    const uint32_t readMs = millis() - t0;
     f.close();
     if (got != sz) { heap_caps_free(buf); return nullptr; }
+    Serial.printf("[theme_sd] %s: read %u KB in %u ms (%u KB/s)\n",
+                  path, (unsigned)(sz / 1024), (unsigned)readMs,
+                  (unsigned)(readMs ? (size_t)(sz / 1024) * 1000 / readMs : 0));
     outLen = sz;
     return buf;
 }

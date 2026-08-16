@@ -1,0 +1,11 @@
+# Custom 16MB partition table — single app slot (no OTA), most of the flash handed to
+# SPIFFS for Spy Cam video frames. Replaces the stock default_16MB.csv dual-OTA-bank
+# layout: this device is always flashed over USB, wireless (OTA) firmware updates were
+# never used, so that reserved second app bank (~6.25MB) is reclaimed for video instead.
+# Total video storage goes from ~3.4MB (default_16MB.csv's spiffs) to ~8.8MB.
+#
+# Name,   Type, SubType, Offset,  Size,     Flags
+nvs,      data, nvs,     0x9000,  0x5000,
+app0,     app,  factory, 0x10000, 0x700000,
+spiffs,   data, spiffs,  0x710000,0x8E0000,
+coredump, data, coredump,0xFF0000,0x10000,

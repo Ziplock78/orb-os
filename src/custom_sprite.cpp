@@ -26,6 +26,7 @@ static uint32_t millis() {
 #include "custom_hands.h"
 #include "theme_sd.h"   // theme_sd::read_whole/free — SD-hosted plate/overlay, one rung above flash
 #include "theme_select.h"   // theme_select::activeSlug() — which /themes/<slug>/ folder to read from
+#include "theme_art.h"      // pre-baked RGB565 in flash — tried before the card, costs nothing
 
 namespace {
 
@@ -127,7 +128,15 @@ bool      s_handTried[5] = { false, false, false, false, false };
 const uint16_t *custom_plate() {
     if (!s_plate && !s_plateTried) {
         s_plateTried = true;
-        uint8_t *o = nullptr; int w, h;
+        int w = 0, h = 0;
+        // Pre-baked in flash? Then there is nothing to do at all: no 226 ms card read,
+        // no 205 ms decode, no 424 KB of PSRAM. See theme_art.h.
+        if (const uint8_t *p = theme_art::find_active("clock_plate.png", theme_art::FMT_RGB565, w, h)) {
+            s_plate = (uint16_t *)p;
+            Serial.printf("[custom_sprite] plate: flash-resident %dx%d (0 ms, 0 KB PSRAM)\n", w, h);
+            return s_plate;
+        }
+        uint8_t *o = nullptr;
 #if CUSTOM_HAS_PLATE
         if (decode_sd_first("clock_plate.png", CUSTOM_PLATE_PNG, CUSTOM_PLATE_PNG_LEN, false, o, w, h, "plate")) s_plate = (uint16_t *)o;
 #else
@@ -140,7 +149,13 @@ const uint16_t *custom_plate() {
 const uint8_t *custom_overlay() {
     if (!s_overlay && !s_overlayTried) {
         s_overlayTried = true;
-        uint8_t *o = nullptr; int w, h;
+        int w = 0, h = 0;
+        if (const uint8_t *p = theme_art::find_active("clock_overlay.png", theme_art::FMT_RGB565_ALPHA, w, h)) {
+            s_overlay = (uint8_t *)p;
+            Serial.printf("[custom_sprite] overlay: flash-resident %dx%d (0 ms, 0 KB PSRAM)\n", w, h);
+            return s_overlay;
+        }
+        uint8_t *o = nullptr;
 #if CUSTOM_HAS_OVERLAY
         if (decode_sd_first("clock_overlay.png", CUSTOM_OVERLAY_PNG, CUSTOM_OVERLAY_PNG_LEN, true, o, w, h, "overlay")) s_overlay = o;
 #else
@@ -177,7 +192,12 @@ CustomSprite custom_hand(int kind) {
             "clock_hand_hour.png", "clock_hand_minute.png", "clock_hand_second.png",
             "clock_static1.png",   "clock_static2.png",
         };
-        uint8_t *o = nullptr; int w = 0, h = 0;
+        int w = 0, h = 0;
+        if (const uint8_t *p = theme_art::find_active(sdName[kind], theme_art::FMT_RGB565_ALPHA, w, h)) {
+            s_hand[kind] = (uint8_t *)p; s_handW[kind] = w; s_handH[kind] = h;
+            return { s_hand[kind], s_handW[kind], s_handH[kind] };
+        }
+        uint8_t *o = nullptr;
         if (decode_sd_first(sdName[kind], png, len, true, o, w, h, "hand")) {
             s_hand[kind] = o; s_handW[kind] = w; s_handH[kind] = h;
         }
@@ -193,11 +213,16 @@ CustomSprite custom_hand(int kind) {
 void custom_sprite_release() {
     const uint32_t t0 = millis();
     size_t freed = 0;
-    if (s_plate)   { freed += (size_t)SCREEN_W * SCREEN_H * 2; heap_caps_free(s_plate);   s_plate = nullptr; }
-    if (s_overlay) { freed += (size_t)SCREEN_W * SCREEN_H * 3; heap_caps_free(s_overlay); s_overlay = nullptr; }
+    // theme_art::owns() means the pixels live in memory-mapped flash: nothing was
+    // allocated, so the reference is dropped rather than freed.
+    if (s_plate)   { if (!theme_art::owns(s_plate))   { freed += (size_t)SCREEN_W * SCREEN_H * 2; heap_caps_free(s_plate); }   s_plate = nullptr; }
+    if (s_overlay) { if (!theme_art::owns(s_overlay)) { freed += (size_t)SCREEN_W * SCREEN_H * 3; heap_caps_free(s_overlay); } s_overlay = nullptr; }
     for (int i = 0; i < 5; ++i) if (s_hand[i]) {
-        freed += (size_t)s_handW[i] * s_handH[i] * 3;
-        heap_caps_free(s_hand[i]); s_hand[i] = nullptr; s_handW[i] = 0; s_handH[i] = 0;
+        if (!theme_art::owns(s_hand[i])) {
+            freed += (size_t)s_handW[i] * s_handH[i] * 3;
+            heap_caps_free(s_hand[i]);
+        }
+        s_hand[i] = nullptr; s_handW[i] = 0; s_handH[i] = 0;
     }
     s_plateTried = s_overlayTried = false;
     for (int i = 0; i < 5; ++i) s_handTried[i] = false;

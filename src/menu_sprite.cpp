@@ -19,6 +19,7 @@ static void heap_caps_free(void *p) { free(p); }
 #include "custom_menu_overlay.h"
 #include "theme_sd.h"   // theme_sd::read_whole/free — SD-hosted plate/overlay, one rung above flash
 #include "theme_select.h"   // theme_select::activeSlug() — which /themes/<slug>/ folder to read from
+#include "theme_art.h"      // pre-baked RGB565 in flash — tried before the card, costs nothing
 
 namespace {
 
@@ -94,6 +95,17 @@ bool decode_sd_first(const char *assetName, const uint8_t *flashPng, uint32_t fl
 
 uint8_t     *s_plateBuf = nullptr;   lv_img_dsc_t s_plateDsc;   bool s_plateTried = false;
 uint8_t     *s_overlayBuf = nullptr; lv_img_dsc_t s_overlayDsc; bool s_overlayTried = false;
+// Try the pre-baked copy in flash before touching the card. A hit costs nothing at all:
+// no SD read (226 ms), no PNG decode (205 ms), no PSRAM (424 KB). See theme_art.h.
+bool plate_from_flash(uint8_t *&out, int &w, int &h) {
+    const uint8_t *p = nullptr;
+    theme_art::Format fmt = theme_art::FMT_RGB565;
+    if (!theme_art::lookup(theme_select::activeSlug(), "menu_plate.png", p, w, h, fmt)) return false;
+    if (fmt != theme_art::FMT_RGB565) return false;   // plate is drawn as TRUE_COLOR
+    out = (uint8_t *)p;
+    Serial.printf("[menu_sprite] plate: flash-resident %dx%d (0 ms, 0 KB PSRAM)\n", w, h);
+    return true;
+}
 
 } // namespace
 
@@ -101,11 +113,14 @@ const lv_img_dsc_t *menu_custom_plate() {
     if (!s_plateTried) {
         s_plateTried = true;
         int w = 0, h = 0;
+        bool ok = plate_from_flash(s_plateBuf, w, h);
+        if (!ok) {
 #if CUSTOM_HAS_MENU_PLATE
-        const bool ok = decode_sd_first("menu_plate.png", CUSTOM_MENU_PLATE_PNG, CUSTOM_MENU_PLATE_PNG_LEN, false, s_plateBuf, w, h, "plate");
+            ok = decode_sd_first("menu_plate.png", CUSTOM_MENU_PLATE_PNG, CUSTOM_MENU_PLATE_PNG_LEN, false, s_plateBuf, w, h, "plate");
 #else
-        const bool ok = decode_sd_first("menu_plate.png", nullptr, 0, false, s_plateBuf, w, h, "plate");
+            ok = decode_sd_first("menu_plate.png", nullptr, 0, false, s_plateBuf, w, h, "plate");
 #endif
+        }
         if (ok) {
             s_plateDsc.header.always_zero = 0;
             s_plateDsc.header.w = w;
@@ -142,7 +157,9 @@ const lv_img_dsc_t *menu_custom_overlay() {
 }
 
 void menu_sprite_release() {
-    if (s_plateBuf)   { heap_caps_free(s_plateBuf);   s_plateBuf = nullptr; }
-    if (s_overlayBuf) { heap_caps_free(s_overlayBuf); s_overlayBuf = nullptr; }
+    // theme_art::owns() means the pixels are memory-mapped flash, never an allocation:
+    // freeing that would be a wild pointer into the partition.
+    if (s_plateBuf)   { if (!theme_art::owns(s_plateBuf))   heap_caps_free(s_plateBuf);   s_plateBuf = nullptr; }
+    if (s_overlayBuf) { if (!theme_art::owns(s_overlayBuf)) heap_caps_free(s_overlayBuf); s_overlayBuf = nullptr; }
     s_plateTried = s_overlayTried = false;
 }

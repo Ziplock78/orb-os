@@ -22,6 +22,7 @@ static void heap_caps_free(void *p) { free(p); }
 #include "custom_radar_sweep.h"
 #include "theme_sd.h"   // theme_sd::read_whole/free — SD-hosted plate/overlay, one rung above flash
 #include "theme_select.h"   // theme_select::activeSlug() — which /themes/<slug>/ folder to read from
+#include "theme_art.h"      // pre-baked RGB565 in flash — tried before the card, costs nothing
 
 namespace {
 
@@ -96,6 +97,20 @@ bool decode_sd_first(const char *assetName, const uint8_t *flashPng, uint32_t fl
     return decode(flashPng, flashLen, alpha, out, w, h, tag);
 }
 
+// Flash first, card second. Deliberately the same signature as decode_sd_first() above,
+// so every call site below is just a rename: a hit costs nothing at all (no SD read, no
+// PNG decode, no PSRAM), and a miss falls through to exactly the previous behaviour.
+bool load_asset(const char *assetName, const uint8_t *flashPng, uint32_t flashLen,
+                bool alpha, uint8_t *&out, int &w, int &h, const char *tag) {
+    if (const uint8_t *p = theme_art::find_active(
+            assetName, alpha ? theme_art::FMT_RGB565_ALPHA : theme_art::FMT_RGB565, w, h)) {
+        out = (uint8_t *)p;
+        Serial.printf("[radar_sprite] %s: flash-resident %dx%d (0 ms, 0 KB PSRAM)\n", tag, w, h);
+        return true;
+    }
+    return decode_sd_first(assetName, flashPng, flashLen, alpha, out, w, h, tag);
+}
+
 uint8_t     *s_plateBuf = nullptr;   lv_img_dsc_t s_plateDsc;   bool s_plateTried = false;
 uint8_t     *s_overlayBuf = nullptr; lv_img_dsc_t s_overlayDsc; bool s_overlayTried = false;
 uint8_t     *s_blipBuf = nullptr;    lv_img_dsc_t s_blipDsc;    bool s_blipTried = false;
@@ -109,9 +124,9 @@ const lv_img_dsc_t *radar_custom_plate() {
         s_plateTried = true;
         int w = 0, h = 0;
 #if CUSTOM_HAS_RADAR_PLATE
-        const bool ok = decode_sd_first("radar_plate.png", CUSTOM_RADAR_PLATE_PNG, CUSTOM_RADAR_PLATE_PNG_LEN, false, s_plateBuf, w, h, "plate");
+        const bool ok = load_asset("radar_plate.png", CUSTOM_RADAR_PLATE_PNG, CUSTOM_RADAR_PLATE_PNG_LEN, false, s_plateBuf, w, h, "plate");
 #else
-        const bool ok = decode_sd_first("radar_plate.png", nullptr, 0, false, s_plateBuf, w, h, "plate");
+        const bool ok = load_asset("radar_plate.png", nullptr, 0, false, s_plateBuf, w, h, "plate");
 #endif
         if (ok) {
             s_plateDsc.header.always_zero = 0;
@@ -131,9 +146,9 @@ const lv_img_dsc_t *radar_custom_overlay() {
         s_overlayTried = true;
         int w = 0, h = 0;
 #if CUSTOM_HAS_RADAR_OVERLAY
-        const bool ok = decode_sd_first("radar_overlay.png", CUSTOM_RADAR_OVERLAY_PNG, CUSTOM_RADAR_OVERLAY_PNG_LEN, true, s_overlayBuf, w, h, "overlay");
+        const bool ok = load_asset("radar_overlay.png", CUSTOM_RADAR_OVERLAY_PNG, CUSTOM_RADAR_OVERLAY_PNG_LEN, true, s_overlayBuf, w, h, "overlay");
 #else
-        const bool ok = decode_sd_first("radar_overlay.png", nullptr, 0, true, s_overlayBuf, w, h, "overlay");
+        const bool ok = load_asset("radar_overlay.png", nullptr, 0, true, s_overlayBuf, w, h, "overlay");
 #endif
         if (ok) {
             s_overlayDsc.header.always_zero = 0;
@@ -158,9 +173,9 @@ const lv_img_dsc_t *radar_custom_blip_icon() {
         s_blipTried = true;
         int w = 0, h = 0;
 #if CUSTOM_HAS_RADAR_BLIP_IMAGE
-        const bool ok = decode_sd_first("radar_blip.png", CUSTOM_RADAR_BLIP_PNG, CUSTOM_RADAR_BLIP_PNG_LEN, true, s_blipBuf, w, h, "blip");
+        const bool ok = load_asset("radar_blip.png", CUSTOM_RADAR_BLIP_PNG, CUSTOM_RADAR_BLIP_PNG_LEN, true, s_blipBuf, w, h, "blip");
 #else
-        const bool ok = decode_sd_first("radar_blip.png", nullptr, 0, true, s_blipBuf, w, h, "blip");
+        const bool ok = load_asset("radar_blip.png", nullptr, 0, true, s_blipBuf, w, h, "blip");
 #endif
         if (ok) {
             s_blipDsc.header.always_zero = 0;
@@ -187,15 +202,15 @@ const lv_img_dsc_t *radar_custom_static(int idx) {
         bool ok;
         if (idx == 0) {
 #if CUSTOM_HAS_RADAR_STATIC1
-            ok = decode_sd_first("radar_static1.png", CUSTOM_RADAR_STATIC1_PNG, CUSTOM_RADAR_STATIC1_PNG_LEN, true, s_staticBuf[0], w, h, "static1");
+            ok = load_asset("radar_static1.png", CUSTOM_RADAR_STATIC1_PNG, CUSTOM_RADAR_STATIC1_PNG_LEN, true, s_staticBuf[0], w, h, "static1");
 #else
-            ok = decode_sd_first("radar_static1.png", nullptr, 0, true, s_staticBuf[0], w, h, "static1");
+            ok = load_asset("radar_static1.png", nullptr, 0, true, s_staticBuf[0], w, h, "static1");
 #endif
         } else {
 #if CUSTOM_HAS_RADAR_STATIC2
-            ok = decode_sd_first("radar_static2.png", CUSTOM_RADAR_STATIC2_PNG, CUSTOM_RADAR_STATIC2_PNG_LEN, true, s_staticBuf[1], w, h, "static2");
+            ok = load_asset("radar_static2.png", CUSTOM_RADAR_STATIC2_PNG, CUSTOM_RADAR_STATIC2_PNG_LEN, true, s_staticBuf[1], w, h, "static2");
 #else
-            ok = decode_sd_first("radar_static2.png", nullptr, 0, true, s_staticBuf[1], w, h, "static2");
+            ok = load_asset("radar_static2.png", nullptr, 0, true, s_staticBuf[1], w, h, "static2");
 #endif
         }
         if (ok) {
@@ -219,9 +234,9 @@ const lv_img_dsc_t *radar_custom_sweep() {
         s_sweepTried = true;
         int w = 0, h = 0;
 #if CUSTOM_HAS_SWEEP_IMAGE
-        const bool ok = decode_sd_first("radar_sweep.png", CUSTOM_SWEEP_IMAGE_PNG, CUSTOM_SWEEP_IMAGE_PNG_LEN, true, s_sweepBuf, w, h, "sweep");
+        const bool ok = load_asset("radar_sweep.png", CUSTOM_SWEEP_IMAGE_PNG, CUSTOM_SWEEP_IMAGE_PNG_LEN, true, s_sweepBuf, w, h, "sweep");
 #else
-        const bool ok = decode_sd_first("radar_sweep.png", nullptr, 0, true, s_sweepBuf, w, h, "sweep");
+        const bool ok = load_asset("radar_sweep.png", nullptr, 0, true, s_sweepBuf, w, h, "sweep");
 #endif
         if (ok) {
             s_sweepDsc.header.always_zero = 0;
@@ -242,11 +257,16 @@ const lv_img_dsc_t *radar_custom_sweep() {
 // clock-face release so a design's decoded pixels aren't held resident while
 // some other app is in front.
 void radar_sprite_release() {
-    if (s_plateBuf)   { heap_caps_free(s_plateBuf);   s_plateBuf = nullptr; }
-    if (s_overlayBuf) { heap_caps_free(s_overlayBuf); s_overlayBuf = nullptr; }
-    if (s_blipBuf)    { heap_caps_free(s_blipBuf);    s_blipBuf = nullptr; }
-    for (int i = 0; i < 2; ++i) if (s_staticBuf[i]) { heap_caps_free(s_staticBuf[i]); s_staticBuf[i] = nullptr; }
-    if (s_sweepBuf) { heap_caps_free(s_sweepBuf); s_sweepBuf = nullptr; }
+    // theme_art::owns() means the pixels are memory-mapped flash, never an allocation:
+    // freeing that would be a wild pointer into the partition.
+    if (s_plateBuf)   { if (!theme_art::owns(s_plateBuf))   heap_caps_free(s_plateBuf);   s_plateBuf = nullptr; }
+    if (s_overlayBuf) { if (!theme_art::owns(s_overlayBuf)) heap_caps_free(s_overlayBuf); s_overlayBuf = nullptr; }
+    if (s_blipBuf)    { if (!theme_art::owns(s_blipBuf))    heap_caps_free(s_blipBuf);    s_blipBuf = nullptr; }
+    for (int i = 0; i < 2; ++i) if (s_staticBuf[i]) {
+        if (!theme_art::owns(s_staticBuf[i])) heap_caps_free(s_staticBuf[i]);
+        s_staticBuf[i] = nullptr;
+    }
+    if (s_sweepBuf) { if (!theme_art::owns(s_sweepBuf)) heap_caps_free(s_sweepBuf); s_sweepBuf = nullptr; }
     s_plateTried = s_overlayTried = s_blipTried = false;
     s_staticTried[0] = s_staticTried[1] = false;
     s_sweepTried = false;

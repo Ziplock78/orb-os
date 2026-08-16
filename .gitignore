@@ -36,6 +36,3 @@ tools/hands/
 # Watch-script runtime state
 orb_watch.log
 orb_watch.pid
-
-# Orphaned, unreferenced by platformio.ini
-partitions_16MB_video.csv

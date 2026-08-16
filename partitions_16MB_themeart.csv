@@ -1,0 +1,25 @@
+# Custom 16MB partition table — identical to the stock default_16MB.csv except that the
+# dead `spiffs` partition is replaced by `themeart`.
+#
+# Why: nothing in this firmware ever used SPIFFS. Spy Cam reads its JPEG frames from the
+# microSD card (/spycam_frames/, see spycam_view.cpp), not from internal flash, so those
+# 3.375 MB sat unused from the first build. Theme art now lives there instead, pre-baked
+# by Launch Kit into the exact RGB565 layout the panel wants, so the device can memory-map
+# it and draw straight from flash: no SD read, no PNG decode, no PSRAM copy.
+#
+# Deliberately NOT reclaiming app1 (the 6.25 MB OTA slot). ArduinoOTA and the browser
+# firmware-upload page in main.cpp both need a second app partition to write into, and a
+# buyer who cannot flash over USB has no other way to update. See
+# partitions_16MB_video.csv for the layout that does reclaim it, if that ever changes.
+#
+# nvs stays at 0x9000 size 0x5000, byte-identical to the stock table, so stored WiFi
+# credentials survive this change. Flashing only writes the bootloader, the partition
+# table and the app; nvs is never erased.
+#
+# Name,   Type, SubType, Offset,  Size, Flags
+nvs,      data, nvs,     0x9000,  0x5000,
+otadata,  data, ota,     0xe000,  0x2000,
+app0,     app,  ota_0,   0x10000, 0x640000,
+app1,     app,  ota_1,   0x650000,0x640000,
+themeart, data, 0x40,    0xc90000,0x360000,
+coredump, data, coredump,0xFF0000,0x10000,
