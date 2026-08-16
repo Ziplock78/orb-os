@@ -1,0 +1,41 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Navigator — "spy cam" footage tests v2</title>
+<style>
+  body { margin:0; background:#0d0f12; color:#c9cdd3; font:15px/1.5 -apple-system,Segoe UI,Roboto,sans-serif; }
+  header { padding:22px 28px 6px; }
+  header h1 { margin:0; font-size:20px; font-weight:600; color:#eef1f5; letter-spacing:.02em; }
+  header p { margin:4px 0 0; color:#8a9099; }
+  .grid { display:flex; flex-wrap:wrap; gap:28px; padding:22px 28px 60px; }
+  .card { width:380px; }
+  .frame { width:380px; height:380px; border-radius:14px; overflow:hidden;
+           background:#000; box-shadow:0 6px 26px rgba(0,0,0,.5); }
+  .frame video { width:100%; height:100%; object-fit:cover; display:block; }
+  .cap { margin-top:10px; }
+  .cap b { color:#eef1f5; }
+  .cap span { color:#8a9099; }
+</style>
+</head>
+<body>
+<header>
+  <h1>"Spy cam" loop footage — v2 (refined)</h1>
+  <p>1:1, 720p, 10s each — command tent (brief figure), WWII airfield, richer perimeter</p>
+</header>
+<div class="grid">
+  <div class="card">
+    <div class="frame"><video src="https://d8j0ntlcm91z4.cloudfront.net/user_362FrLDKNAszgWbsJnmwxLlb2EF/hf_20260729_215606_c975bbe9-ee8f-4024-b81a-9547e19f5812.mp4" controls autoplay loop muted></video></div>
+    <div class="cap"><b>1 — Command tent (v2)</b><br><span>officer walks through once, briefly, then stillness</span></div>
+  </div>
+  <div class="card">
+    <div class="frame"><video src="https://d8j0ntlcm91z4.cloudfront.net/user_362FrLDKNAszgWbsJnmwxLlb2EF/hf_20260729_215609_d33704c1-d490-45b4-b4f3-33ea49112644.mp4" controls autoplay loop muted></video></div>
+    <div class="cap"><b>2 — WWII airfield (v2)</b><br><span>P-51 Mustangs + a taxiing B-17</span></div>
+  </div>
+  <div class="card">
+    <div class="frame"><video src="https://d8j0ntlcm91z4.cloudfront.net/user_362FrLDKNAszgWbsJnmwxLlb2EF/hf_20260729_215611_e45d9b3f-a991-412c-b0ec-dbae5b865b1c.mp4" controls autoplay loop muted></video></div>
+    <div class="cap"><b>3 — Night vision perimeter (v2)</b><br><span>barbed wire, watchtower, guard, fog</span></div>
+  </div>
+</div>
+</body>
+</html>
