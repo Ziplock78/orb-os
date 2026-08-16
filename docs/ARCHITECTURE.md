@@ -97,10 +97,24 @@ retained, for exactly this one purpose.
 ## Memory
 
 - Full RGB565 framebuffer is 466 x 466 x 2, about 434 KB, allocated in PSRAM.
+- **Prefer not decoding at all.** Baked assets live in flash and are drawn through the
+  memory map, costing no time and no PSRAM. See *Pre-baked art* below. The two rules
+  under this one apply to whatever is left on the SD path.
 - **Decode once, never per frame.** Every SD read is a one-time cost on entry or theme
   switch. No per-draw filesystem access, ever.
 - **Free what you decode.** Each screen's `*_sprite_release()` runs on `onExit`. This is
-  what keeps 8 MB of PSRAM from filling over a long session.
+  what keeps 8 MB of PSRAM from filling over a long session. Release paths ask
+  `theme_art::owns()` first: a flash-resident pointer was never allocated and must not be
+  freed.
+
+Internal RAM is a separate, much smaller pool than PSRAM, and it is the one that runs
+out. mbedTLS takes its TLS handshake buffers from it, so anything opening repeated
+outbound connections fragments it. This is why the aircraft feed polls only while Flight
+Tracker is on screen (`g_radarViewActive` in `main.cpp`): polling it in the background
+drove the largest free internal block down to 14 KB and caused allocation failures on
+completely unrelated screens. **When something fails to allocate, check
+`psram_largest_kb` and `heap_largest_kb` from `/health`, not the free totals.**
+Fragmentation, not exhaustion, has been the cause every time so far.
 
 Known constraint: outbound TLS is memory-tight on this board. A previous attempt to
 move mbedTLS buffers into PSRAM only relocated the `-32512` failure rather than fixing
@@ -132,6 +146,43 @@ data): fonts, clock hand pivot/blend/order, radar blip pivot and layer order, an
 `CUSTOM_HAS_*` gates that decide whether an element exists at all. The header comment
 in `src/theme_style.h` carries the current, honest list.
 
+### Pre-baked art (`src/theme_art.*`)
+
+A PNG is a compressed picture; the panel wants raw RGB565. Measured on a 466x466 plate,
+the SD path costs **226 ms to read the file and 205 ms to unpack it, every single time
+the screen is shown**, plus 424 KB of PSRAM held while it is up. Storing raw pixels on
+the card does not fix it: the raw file is *bigger* (424 KB vs 342 KB) and the 20 MHz SPI
+card is the slow half, so it would still cost ~283 ms.
+
+Flash does fix it. The ESP32-S3 memory-maps flash through its cache, so a baked asset is
+just a pointer: no read, no decode, no PSRAM, nothing per show.
+
+- `partitions_16MB_themeart.csv` is the stock `default_16MB.csv` with its **SPIFFS
+  partition replaced by `themeart`**. Nothing ever used SPIFFS (Surveillance reads its
+  frames off the SD card), so 3.375 MB had been dead since the first build. `app0`/`app1`
+  are untouched, so OTA still works, and `nvs` keeps its offset and size, so stored WiFi
+  credentials survive the switch.
+- `theme_art_bake.cpp` converts the active theme once, on the first boot after a push,
+  inside the reboot the user is already waiting through. Its `ASSETS[]` table is in
+  priority order, most-frequently-shown first, because a rich theme does not fit whole.
+- **Sector alignment is not optional.** Flash erases 4 KB at a time. Packing blobs
+  tightly meant each asset's erase clipped the tail of the one before it, and erased
+  flash reads as `0xFF`, i.e. opaque white. It showed up as white bands along the bottom
+  of most artwork, and small assets sharing a sector went entirely white.
+- **Every blob is read back and compared after writing.** A mismatch rejects the asset to
+  the SD path instead of displaying garbage. Corruption here is invisible in code and
+  only surfaces as wrong pixels on a screen nobody may look at for days.
+- **Bump `VERSION` whenever the baked layout changes.** Any other value makes the cache
+  read as empty, so the next boot re-bakes. That is the only safe way to retire bad data.
+
+Flash is a cache in front of the SD path, never a precondition for it. A miss, a format
+mismatch, an asset that does not fit, or a failed verify all fall through to
+`decode_sd_first()` unchanged.
+
+The simulator has no flash partition, so `theme_art` is stubbed out there and the sim
+always takes the SD path. **Flash-path changes cannot be verified in the simulator** and
+have to be checked on the device.
+
 ## Storage and persistence
 
 - **NVS (`Preferences`)**: WiFi credentials, home lat/lon, range, units, mute, active
@@ -139,7 +190,11 @@ in `src/theme_style.h` carries the current, honest list.
 - **microSD**: plain SPI (not SD_MMC), 20 MHz. MOSI 1, SCK 2, MISO 3, CS 41. No
   card-detect line is wired. Mounted early in `setup()`, before the display starts, so
   SD-hosted splash art is not a boot-ordering problem. Holds theme folders,
-  Surveillance clips, and road tile data.
+  Surveillance clips, and road tile data. **Measured throughput is ~1.5 MB/s**, which is
+  the whole reason pre-baked art lives in flash rather than as raw files on the card.
+- **`themeart` flash partition**: 3.375 MB of raw, pre-converted theme pixels, written at
+  install and read through the memory map. Rebuilt from the card whenever the active
+  theme changes or the bake `VERSION` moves.
 
 ## Versioning
 
