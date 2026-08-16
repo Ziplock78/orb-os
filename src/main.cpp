@@ -27,6 +27,7 @@
 #include "ui.h"
 #include "app_theme.h"
 #include "theme_select.h"  // which Launch Kit theme (of however many are on the SD card) is active
+#include "theme_art.h"     // pre-baked RGB565 art in flash: no SD read, no decode, no PSRAM
 #include "theme_style.h"   // per-theme app roster (theme_style::apps())
 #include "display.h"                  // M0: CO5300 + LVGL bring-up
 #include "imu_qmi8658.h"             // face-down sleep
@@ -102,6 +103,13 @@ static std::vector<Aircraft> g_snap;                                 // last sna
 static volatile bool         g_requery = false;                      // range changed -> adsb_task re-begins
 static float                 g_requeryKm = 0.0f;
 static volatile bool         g_feedOk = true;                        // ADS-B feed healthy? (HUD warning)
+// Flight Tracker is the only consumer of ADS-B data, but adsb_task used to poll it
+// every 2s regardless of which app was on screen. Each poll opens a fresh TLS
+// session (WiFiClientSecure), and mbedTLS's handshake buffers come from internal
+// RAM, not PSRAM — dozens of alloc/free cycles a minute fragment that heap even
+// while the user is sitting on Clock or the menu. Set true only while Flight
+// Tracker is the entered app (radar_show_home_custom / radar_exit_release_style).
+static volatile bool         g_radarViewActive = false;
 static volatile uint32_t     g_lastFeedOkMs = 0;                     // millis() of the last good poll (HUD staleness)
 static volatile uint32_t     g_rebootAtMs = 0;                       // !=0: reboot when millis() reaches it (clean start after WiFi config)
 static String                g_tz = TZ_STR;                          // POSIX timezone (web-configurable, NVS); applied via configTzTime
@@ -150,8 +158,18 @@ static void adsb_task(void*) {
     uint32_t wxGen = 0;                        // refresh generation, bumped each full loop
     uint32_t nextLocInfoAt = UINT32_MAX;
     uint32_t lastFeedOk = millis();          // self-heal: time of last good (or no-WiFi) poll
+    bool wasRadarActive = false;
     for (;;) {
         const bool conn = (WiFi.status() == WL_CONNECTED);
+        const bool radarActive = g_radarViewActive;
+        if (radarActive && !wasRadarActive) {
+            // Just entered Flight Tracker: poll right away and give the stuck-feed
+            // watchdog a fresh 180s window instead of one aged by however long the
+            // user was on another app (where lastFeedOk was frozen, not stale-broken).
+            lastPoll = 0;
+            lastFeedOk = millis();
+        }
+        wasRadarActive = radarActive;
         if (conn && !wasConnected) {
             // disable WiFi modem power-save: on a mains-powered desk gadget it just adds latency
             // and makes RSSI bounce (feed goes stale -> amber bars) even sitting next to the router.
@@ -168,7 +186,7 @@ static void adsb_task(void*) {
         wasConnected = conn;
         // self-heal: a long feed outage while WiFi is up usually means the internal heap
         // fragmented and the TLS handshake can't allocate -> reboot to recover (settings persist).
-        if (!conn) lastFeedOk = millis();
+        if (!conn || !radarActive) lastFeedOk = millis();
         else if (millis() - lastFeedOk > 180000UL) {
             Serial.println("[adsb] feed stuck >180s with WiFi up -> restarting to recover");
             diag::log("feed stuck 180s -> reboot (heap %u)", (unsigned)ESP.getFreeHeap());
@@ -187,7 +205,7 @@ static void adsb_task(void*) {
             const uint32_t nowMs = millis();
             const uint32_t pollInterval =
                 (g_onBattery ? POLL_INTERVAL_BATTERY_MS : POLL_INTERVAL_MS) + adsbBackoffMs;
-            if (lastPoll == 0 || nowMs - lastPoll >= pollInterval) {  // aircraft feed
+            if (radarActive && (lastPoll == 0 || nowMs - lastPoll >= pollInterval)) {  // aircraft feed, Flight Tracker only
                 lastPoll = nowMs;
                 static int failCount = 0;
                 // poll() tries the fallback provider after a primary failure; keep the HUD
@@ -508,10 +526,11 @@ static void radar_show_weather() { ui_show_view(1); }   // tile 1 since list/sta
 static void radar_show_home_custom() {
     radar_show_home();
     radar::knobEnter();   // re-attach style + land in the default view (knob released)
+    g_radarViewActive = true;    // adsb_task may now poll; see g_radarViewActive above
 }
 static void radar_turn_select(int delta) { radar::knobTurn(delta); }
 static void radar_press_custom_or_theme() { radar::knobPress(); }
-static void radar_exit_release_style() { radar::knobExit(); }
+static void radar_exit_release_style() { radar::knobExit(); g_radarViewActive = false; }
 void host_wx_zoom_set(int tier);   // defined below, near the other weather-units hosts
 int  host_wx_zoom_tier();
 
@@ -1644,6 +1663,14 @@ void setup() {
     app_theme::init();     // load the saved app skin (Default/Office) before any view reads it
     theme_select::init();  // load the saved Launch Kit theme slug before any screen reads it
     psram_mark("after theme_select");
+
+    // Pre-baked theme art in flash. Must come after theme_select::init() (it needs the
+    // active slug) and before any view asks for artwork, so the first request already
+    // finds it. The bake itself only runs on the first boot after a theme push; every
+    // later boot just maps the partition and returns.
+    theme_art::begin();
+    theme_art::bake_active_theme();
+    psram_mark("after theme_art");
 
     // --- Display + LVGL (M0) ----------------------------------------------
     // CO5300 AMOLED over QSPI + LVGL draw buffers in PSRAM, then a hello screen.
