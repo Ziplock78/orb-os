@@ -24,6 +24,11 @@ Radar    s_radar;
 Menu     s_menu;
 Settings s_settings;
 Apps     s_apps;
+// The theme's declared asset list (theme.json "assets"). s_assetN == 0 means the theme
+// did not declare one, which hasAsset() treats as "allow everything".
+constexpr size_t MAX_ASSETS = 24;
+char   s_asset[MAX_ASSETS][28] = {};
+size_t s_assetN = 0;
 
 constexpr size_t MAX_STYLE_JSON_BYTES = 8192;
 
@@ -447,6 +452,27 @@ void load() {
                 if (a["intel"].is<bool>())        s_apps.intel        = a["intel"].as<bool>();
                 if (a["surveillance"].is<bool>()) s_apps.surveillance = a["surveillance"].as<bool>();
             }
+            // "assets": every image this theme actually ships. See hasAsset() in the
+            // header for why an undeclared file on the card must be ignored rather than
+            // trusted. Absent list -> s_assetN stays 0 -> hasAsset() answers true for
+            // everything, which is the old behaviour.
+            JsonArrayConst list = doc["assets"].as<JsonArrayConst>();
+            if (!list.isNull()) {
+                s_assetN = 0;
+                for (JsonVariantConst v : list) {
+                    const char *n = v.as<const char *>();
+                    if (!n || !*n) continue;
+                    if (s_assetN >= MAX_ASSETS) {
+                        printf("[theme_style] more than %d assets declared, ignoring the rest\n",
+                                      (int)MAX_ASSETS);
+                        break;
+                    }
+                    strncpy(s_asset[s_assetN], n, sizeof(s_asset[0]) - 1);
+                    s_asset[s_assetN][sizeof(s_asset[0]) - 1] = '\0';
+                    ++s_assetN;
+                }
+                printf("[theme_style] theme declares %d asset(s)\n", (int)s_assetN);
+            }
         }
     }
 }
@@ -456,5 +482,26 @@ const Radar &radar() { return s_radar; }
 const Menu &menu() { return s_menu; }
 const Settings &settings() { return s_settings; }
 const Apps &apps() { return s_apps; }
+
+uint32_t assetsFingerprint() {
+    // FNV-1a over the declared names. theme_art stores this next to a bake and re-bakes
+    // when it moves, so adding, removing or renaming a layer in a theme is picked up
+    // automatically. 0 means "no manifest", which never matches a real bake.
+    if (!s_assetN) return 0;
+    uint32_t h = 2166136261u;
+    for (size_t i = 0; i < s_assetN; ++i) {
+        for (const char *p = s_asset[i]; *p; ++p) { h ^= (uint8_t)*p; h *= 16777619u; }
+        h ^= (uint8_t)'\n'; h *= 16777619u;
+    }
+    return h ? h : 1u;      // never collide with the "no manifest" sentinel
+}
+
+bool hasAsset(const char *name) {
+    if (!s_assetN) return true;      // theme declared no list: allow everything (old themes)
+    if (!name || !*name) return false;
+    for (size_t i = 0; i < s_assetN; ++i)
+        if (strcmp(s_asset[i], name) == 0) return true;
+    return false;
+}
 
 } // namespace theme_style

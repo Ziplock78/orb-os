@@ -20,7 +20,7 @@ constexpr uint32_t MAGIC       = 0x4F524254;   // 'ORBT'
 // makes the cache look empty, which makes the next boot re-bake from the card. That is
 // the only safe way to retire bad data: v1 packed blobs tightly and let each erase clip
 // the previous blob's tail, leaving white bands baked into the artwork.
-constexpr uint32_t VERSION     = 3;
+constexpr uint32_t VERSION     = 4;
 constexpr size_t   INDEX_BYTES = 8192;         // two 4 KB sectors
 constexpr size_t   SECTOR      = 4096;
 
@@ -29,6 +29,7 @@ struct Header {
     uint32_t version;
     uint32_t count;
     uint32_t used;      // bytes consumed by blobs, from INDEX_BYTES
+    uint32_t manifest;  // theme_style::assetsFingerprint() at bake time; re-bake if it moves
 };
 
 struct Entry {              // exactly 64 bytes, so the index size is trivially checkable
@@ -145,6 +146,8 @@ bool slug_baked(const char *slug) {
     return false;
 }
 
+uint32_t baked_manifest() { return s_hdr.count ? s_hdr.manifest : 0; }
+
 size_t space_total() { return s_part ? (s_part->size - INDEX_BYTES) : 0; }
 
 size_t space_free() {
@@ -223,7 +226,7 @@ bool install_asset(const char *slug, const char *assetName,
     return true;
 }
 
-bool install_commit() {
+bool install_commit(uint32_t manifestFingerprint) {
     if (!s_installing || !s_part) return false;
     s_installing = false;
 
@@ -232,7 +235,7 @@ bool install_commit() {
     // entries that point at blobs which may not have been written.
     if (esp_partition_write(s_part, sizeof(Header), s_index,
                             s_insCount * sizeof(Entry)) != ESP_OK) return false;
-    Header h = { MAGIC, VERSION, s_insCount, s_insUsed };
+    Header h = { MAGIC, VERSION, s_insCount, s_insUsed, manifestFingerprint };
     if (esp_partition_write(s_part, 0, &h, sizeof(h)) != ESP_OK) return false;
 
     if (!map_partition()) return false;     // re-map so the new blobs are visible
@@ -256,7 +259,8 @@ bool owns(const void *) { return false; }
 bool slug_baked(const char *) { return false; }
 bool install_begin() { return false; }
 bool install_asset(const char *, const char *, int, int, Format, const uint8_t *, size_t) { return false; }
-bool install_commit() { return false; }
+bool install_commit(uint32_t) { return false; }
+uint32_t baked_manifest() { return 0; }
 size_t space_free()  { return 0; }
 size_t space_total() { return 0; }
 } // namespace theme_art

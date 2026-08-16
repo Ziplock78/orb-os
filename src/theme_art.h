@@ -57,7 +57,7 @@ bool install_begin();
 bool install_asset(const char *slug, const char *assetName,
                    int w, int h, Format fmt, const uint8_t *data, size_t len);
 // Write the index and re-map. Nothing is visible to lookup() until this succeeds.
-bool install_commit();
+bool install_commit(uint32_t manifestFingerprint);
 
 // Bytes free for further install_asset() calls.
 size_t space_free();
@@ -68,6 +68,10 @@ size_t space_total();
 // of tracking a per-asset "came from flash" flag: a buffer that theme_art owns was never
 // allocated, so freeing it would be a wild pointer into flash.
 bool owns(const void *p);
+
+// The asset-list fingerprint stored with the current bake, or 0 if nothing is baked.
+// Compared against theme_style::assetsFingerprint() to decide whether a re-bake is due.
+uint32_t baked_manifest();
 
 // Does the cache already hold anything for this theme?
 bool slug_baked(const char *slug);

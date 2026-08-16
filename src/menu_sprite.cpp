@@ -19,6 +19,7 @@ static void heap_caps_free(void *p) { free(p); }
 #include "custom_menu_overlay.h"
 #include "theme_sd.h"   // theme_sd::read_whole/free — SD-hosted plate/overlay, one rung above flash
 #include "theme_select.h"   // theme_select::activeSlug() — which /themes/<slug>/ folder to read from
+#include "theme_style.h"   // hasAsset() — ignore files the theme does not declare
 #include "theme_art.h"      // pre-baked RGB565 in flash — tried before the card, costs nothing
 
 namespace {
@@ -78,7 +79,10 @@ bool decode(const uint8_t *png, uint32_t len, bool alpha, uint8_t *&out, int &w,
 constexpr size_t SD_ASSET_MAX_BYTES = 2 * 1024 * 1024;
 bool decode_sd_first(const char *assetName, const uint8_t *flashPng, uint32_t flashLen, bool alpha, uint8_t *&out, int &w, int &h, const char *tag) {
     const char *slug = theme_select::activeSlug();
-    if (slug[0]) {
+    // Only read what the theme says it ships. A push never deletes from the card, so
+    // files from older pushes linger; trusting them meant decoding and drawing layers
+    // the theme had already dropped. See theme_style::hasAsset().
+    if (slug[0] && theme_style::hasAsset(assetName)) {
         char path[64];
         snprintf(path, sizeof(path), "/themes/%s/%s", slug, assetName);
         size_t sdLen = 0;

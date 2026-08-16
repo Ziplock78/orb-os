@@ -9,6 +9,10 @@
 
 #ifdef ARDUINO
 #include <Arduino.h>
+// theme_style.h pulls in lvgl, and it MUST come before PNGdec: PNGdec bundles zlib,
+// whose `#define local static` leaks out and mangles the `bool local` parameter in
+// lvgl's lv_meter.h if lvgl is included afterwards.
+#include "theme_style.h"   // hasAsset() — never bake a file the theme does not declare
 #include <PNGdec.h>
 #include <esp_heap_caps.h>
 #include "theme_sd.h"
@@ -104,10 +108,18 @@ bool bake_active_theme() {
     const char *slug = theme_select::activeSlug();
     if (!slug || !slug[0]) return false;
     if (!space_total()) return false;              // no partition on this layout
-    if (slug_baked(slug)) {
-        Serial.printf("[theme_art] '%s' already baked — nothing to do\n", slug);
+    // Re-bake when the theme's declared asset list has moved, not only when nothing is
+    // baked at all. Without this, adding a layer to a theme would never reach flash and
+    // removing one would leave the old pixels cached: the cache would quietly drift from
+    // the theme and only a firmware VERSION bump would ever resync it.
+    const uint32_t want = theme_style::assetsFingerprint();
+    if (slug_baked(slug) && baked_manifest() == want && want != 0) {
+        Serial.printf("[theme_art] '%s' already baked and unchanged — nothing to do\n", slug);
         return false;
     }
+    if (slug_baked(slug))
+        Serial.printf("[theme_art] '%s' asset list changed (%08x -> %08x) — re-baking\n",
+                      slug, (unsigned)baked_manifest(), (unsigned)want);
 
     Serial.printf("[theme_art] baking '%s' into flash (one time, this boot only)\n", slug);
     const uint32_t t0 = millis();
@@ -115,6 +127,11 @@ bool bake_active_theme() {
 
     int baked = 0;
     for (size_t i = 0; i < ASSET_N; ++i) {
+        // Never bake something the theme does not declare. Stale files from older pushes
+        // sit on the card forever, and baking them wastes flash on artwork that is not
+        // part of this theme: two undeclared empty overlays cost 1.3 MB before this
+        // check existed. See theme_style::hasAsset().
+        if (!theme_style::hasAsset(ASSETS[i].name)) continue;
         char path[80];
         snprintf(path, sizeof(path), "/themes/%s/%s", slug, ASSETS[i].name);
         size_t pngLen = 0;
@@ -138,7 +155,7 @@ bool bake_active_theme() {
     }
 
     if (!baked) { Serial.println("[theme_art] nothing baked"); return false; }
-    if (!install_commit()) { Serial.println("[theme_art] commit failed — staying on SD"); return false; }
+    if (!install_commit(want)) { Serial.println("[theme_art] commit failed — staying on SD"); return false; }
     Serial.printf("[theme_art] baked %d asset(s) in %u ms — subsequent shows are free\n",
                   baked, (unsigned)(millis() - t0));
     return true;

@@ -17,6 +17,9 @@ static uint32_t millis() {
 #define MALLOC_CAP_SPIRAM 0
 #define MALLOC_CAP_8BIT 0
 #endif
+// Before PNGdec on purpose: it bundles zlib, whose `#define local static` leaks and
+// breaks the `bool local` parameter in lvgl's lv_meter.h if lvgl is included after.
+#include "theme_style.h"   // hasAsset() — ignore files the theme does not declare
 #include <PNGdec.h>
 #include <new>
 #include <string.h>
@@ -91,7 +94,10 @@ bool decode(const uint8_t *png, uint32_t len, bool alpha, uint8_t *&out, int &w,
 constexpr size_t SD_ASSET_MAX_BYTES = 2 * 1024 * 1024;   // a 466x466 plate/overlay PNG is never remotely this big
 bool decode_sd_first(const char *assetName, const uint8_t *flashPng, uint32_t flashLen, bool alpha, uint8_t *&out, int &w, int &h, const char *tag) {
     const char *slug = theme_select::activeSlug();
-    if (slug[0]) {
+    // Only read what the theme says it ships. A push never deletes from the card, so
+    // files from older pushes linger; trusting them meant decoding and drawing layers
+    // the theme had already dropped. See theme_style::hasAsset().
+    if (slug[0] && theme_style::hasAsset(assetName)) {
         char path[64];
         snprintf(path, sizeof(path), "/themes/%s/%s", slug, assetName);
         size_t sdLen = 0;

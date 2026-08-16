@@ -220,4 +220,24 @@ const Menu      &menu();
 const Settings  &settings();
 const Apps      &apps();      // from /themes/<slug>/theme.json
 
+// Does the active theme actually contain this asset, e.g. "menu_plate.png"?
+//
+// theme.json carries an "assets" list of every image the theme ships. Launch Kit rebuilds
+// it from what is genuinely on disk at push time, so a layer it decided not to ship (a
+// fully transparent overlay, say) is absent from the list as well as from the folder.
+//
+// This exists because pushing a theme never deletes anything from the card: files from
+// older pushes just sit there, and the firmware kept finding them, decoding them, baking
+// them into flash and drawing them. Measured on the Steam Punk card: two empty overlay
+// layers nobody had shipped in months, costing 1.3 MB of flash to draw nothing.
+//
+// A theme whose theme.json has no "assets" list answers true for everything, so older
+// themes already on a card behave exactly as before.
+bool hasAsset(const char *name);
+
+// A hash of the declared asset list, or 0 when the theme declares none. theme_art stores
+// this alongside a bake and re-bakes whenever it changes, so editing a theme's layers is
+// picked up on the next boot without anyone remembering to invalidate a cache.
+uint32_t assetsFingerprint();
+
 } // namespace theme_style

@@ -1,25 +1,27 @@
-# Custom 16MB partition table — identical to the stock default_16MB.csv except that the
-# dead `spiffs` partition is replaced by `themeart`.
+# Custom 16MB partition table: one app slot, the rest handed to pre-baked theme art.
 #
-# Why: nothing in this firmware ever used SPIFFS. Spy Cam reads its JPEG frames from the
-# microSD card (/spycam_frames/, see spycam_view.cpp), not from internal flash, so those
-# 3.375 MB sat unused from the first build. Theme art now lives there instead, pre-baked
-# by Launch Kit into the exact RGB565 layout the panel wants, so the device can memory-map
-# it and draw straight from flash: no SD read, no PNG decode, no PSRAM copy.
+# Two partitions from the stock default_16MB.csv layout are reclaimed here:
 #
-# Deliberately NOT reclaiming app1 (the 6.25 MB OTA slot). ArduinoOTA and the browser
-# firmware-upload page in main.cpp both need a second app partition to write into, and a
-# buyer who cannot flash over USB has no other way to update. See
-# partitions_16MB_video.csv for the layout that does reclaim it, if that ever changes.
+#   spiffs (3.375 MB) — never used. Spy Cam reads its JPEG frames from the microSD card
+#     (/spycam_frames/, see spycam_view.cpp), so this sat empty from the first build.
 #
-# nvs stays at 0x9000 size 0x5000, byte-identical to the stock table, so stored WiFi
-# credentials survive this change. Flashing only writes the bootloader, the partition
-# table and the app; nvs is never erased.
+#   app1 + otadata (6.25 MB) — the OTA update slot. Reclaimed deliberately on 2026-08-16:
+#     the Orb is always flashed over USB, wireless updates were never used once, and a
+#     buyer has to flash over USB for their first install regardless. ArduinoOTA and the
+#     browser firmware-upload page are compiled out to match (ORB_OTA_ENABLED in main.cpp
+#     — flip that and this file together, never one alone).
+#
+# What the space buys: theme art pre-converted to raw RGB565 and memory-mapped, so a
+# screen costs no SD read, no PNG decode and no PSRAM. One rich theme is ~3.8 MB, so
+# 9.6 MB also leaves room for two to three complete themes to stay resident at once,
+# which is what makes switching themes instant instead of a re-bake.
+#
+# app0 keeps the stock 6.25 MB (firmware is ~5.5 MB, so ~800 KB of headroom) and nvs
+# keeps its stock offset and size, so stored WiFi credentials survive this change.
+# Flashing writes only the bootloader, the partition table and the app; nvs is untouched.
 #
 # Name,   Type, SubType, Offset,  Size, Flags
 nvs,      data, nvs,     0x9000,  0x5000,
-otadata,  data, ota,     0xe000,  0x2000,
-app0,     app,  ota_0,   0x10000, 0x640000,
-app1,     app,  ota_1,   0x650000,0x640000,
-themeart, data, 0x40,    0xc90000,0x360000,
+app0,     app,  factory, 0x10000, 0x640000,
+themeart, data, 0x40,    0x650000,0x9A0000,
 coredump, data, coredump,0xFF0000,0x10000,

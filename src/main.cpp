@@ -58,9 +58,17 @@
 #include <time.h>                   // NTP/RTC clock + date
 #include <WebServer.h>              // configuration web page
 #include <ESPmDNS.h>                // http://capsuleradar.local
+// Wireless firmware update (ArduinoOTA + the browser upload page). Needs a second app
+// partition to write the incoming image into, and partitions_16MB_themeart.csv gives
+// that 6.25 MB to pre-baked theme art instead. Flip this and the partition table
+// together, never one alone: with no OTA partition present the code below would compile
+// and run but fail at the first write, which is worse than not offering it.
+#define ORB_OTA_ENABLED 0
+#if ORB_OTA_ENABLED
 #include <ArduinoOTA.h>             // OTA firmware update over WiFi (PlatformIO/espota)
-#include <esp_system.h>             // esp_reset_reason() for /health
 #include <Update.h>                 // browser OTA: self-flash an uploaded .bin
+#endif
+#include <esp_system.h>             // esp_reset_reason() for /health
 #include <SD.h>                     // /sdput: write theme files straight to the microSD
 #include <esp_heap_caps.h>          // largest-free-block metric (heap health)
 #include <esp_wifi.h>               // WiFi driver control (reset must survive the reboot)
@@ -1147,7 +1155,13 @@ static void handleRoot() {
         "<div class=card><div class=t>Network</div>"
         "<p style='color:#9affc8;font-size:13px;margin:0 0 4px'>Forget the saved WiFi and reopen the setup portal.</p>"
         "<form method=POST action=/wifi><button class=w>Reset WiFi</button></form></div>"
+        // The "Firmware update" link only exists when there is an OTA partition to write
+        // into; otherwise it would advertise a page that 404s.
+#if ORB_OTA_ENABLED
         "<p class=ft>Reach me at <code>capsuleradar.local</code> &middot; <a href=/update style='color:#9affc8'>Firmware update</a> &middot; v" FW_VERSION "</p>"
+#else
+        "<p class=ft>Reach me at <code>capsuleradar.local</code> &middot; Update over USB &middot; v" FW_VERSION "</p>"
+#endif
         "<script>"
         "var C=[%.5f,%.5f];var MAP=L.map('map').setView(C,10);"
         "L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,attribution:'(c) OpenStreetMap'}).addTo(MAP);"
@@ -1455,6 +1469,7 @@ static void handleGps() {   // auto-set the centre point from the LC76G GPS (-G 
     g_web.send(200, "text/plain", "ok");
 }
 
+#if ORB_OTA_ENABLED
 // ---- browser OTA: upload an app .bin over WiFi and self-flash ----
 static void handleUpdatePage() {
     g_web.send(200, "text/html",
@@ -1498,6 +1513,7 @@ static void handleUpdateUpload() {
         else Update.printError(Serial);
     }
 }
+#endif  // ORB_OTA_ENABLED
 
 // ---- theme file upload over WiFi -----------------------------------------
 // POST /sdput?path=/themes/<slug>/<file>, multipart body, streamed to the microSD in
@@ -1969,6 +1985,7 @@ void setup() {
     g_web.on("/rotate", handleRotate);
     g_web.on("/gps", handleGps);
     g_web.on("/units", handleUnits);
+#if ORB_OTA_ENABLED
     g_web.on("/update", HTTP_GET, handleUpdatePage);
     g_web.on("/update", HTTP_POST,
         []() {
@@ -1978,6 +1995,7 @@ void setup() {
             if (ok) ESP.restart();
         },
         handleUpdateUpload);
+#endif
     g_web.begin();
 
     Serial.println("setup done");
@@ -2008,16 +2026,26 @@ void loop() {
     // scheduled reboot after a fresh WiFi config (see setSaveConfigCallback)
     if (g_rebootAtMs && (int32_t)(millis() - g_rebootAtMs) >= 0) { delay(50); ESP.restart(); }
 
-    // OTA: set up once WiFi is up, then service it every loop (flash over the air)
-    static bool otaUp = false;
-    if (!otaUp && WiFi.status() == WL_CONNECTED) {
-        ArduinoOTA.setHostname("capsuleradar");        // -> capsuleradar.local (registers mDNS)
-        ArduinoOTA.begin();
+    // mDNS (and OTA, when it is compiled in): set up once WiFi is up.
+    // ArduinoOTA::setHostname() used to be what registered capsuleradar.local, because it
+    // calls MDNS.begin() internally. Compiling OTA out therefore took the device's whole
+    // .local name with it and broke Launch Kit's pushes, which address it by name.
+    // MDNS.begin() is now called here explicitly and does not depend on OTA at all.
+    static bool mdnsUp = false;
+    if (!mdnsUp && WiFi.status() == WL_CONNECTED) {
+        if (!MDNS.begin("capsuleradar")) Serial.println("[mdns] begin failed");
         MDNS.addService("http", "tcp", 80);            // advertise the config web page
-        otaUp = true;
+#if ORB_OTA_ENABLED
+        ArduinoOTA.setHostname("capsuleradar");
+        ArduinoOTA.begin();
         Serial.println("[ota] ready: pio run -e esp32-s3-amoled-175-ota -t upload");
+#endif
+        mdnsUp = true;
+        Serial.println("[mdns] http://capsuleradar.local/");
     }
-    if (otaUp) ArduinoOTA.handle();
+#if ORB_OTA_ENABLED
+    if (mdnsUp) ArduinoOTA.handle();
+#endif
 
     // Push a fresh ADS-B snapshot to the radar (copy under the mutex, render outside).
     if (g_acDirty) {

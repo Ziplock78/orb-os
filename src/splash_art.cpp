@@ -16,6 +16,10 @@ static uint32_t millis() {
 #define MALLOC_CAP_SPIRAM 0
 #define MALLOC_CAP_8BIT 0
 #endif
+// Before PNGdec on purpose: it bundles zlib, whose `#define local static` leaks and
+// breaks the `bool local` parameter in lvgl's lv_meter.h if lvgl is included after.
+#include "theme_style.h"      // hasAsset() — ignore files the theme does not declare
+#include "theme_art.h"        // pre-baked RGB565 in flash — no read, no decode, no PSRAM
 #include <PNGdec.h>
 #include <new>
 #include <string.h>
@@ -79,13 +83,31 @@ constexpr size_t SD_SPLASH_MAX_BYTES = 2 * 1024 * 1024;   // sanity ceiling; a 4
 } // namespace
 
 bool splash_art_decode(bool office, lv_img_dsc_t *out) {
+    // 0) Pre-baked in flash: no card read, no decode, and — because ensure() is skipped —
+    // not even the 424 KB decode buffer. Checked before ensure() for exactly that reason.
+    {
+        int fw = 0, fh = 0;
+        if (const uint8_t *p = theme_art::find_active("splash.png", theme_art::FMT_RGB565, fw, fh)) {
+            if (fw == SZ && fh == SZ) {
+                out->header.always_zero = 0;
+                out->header.w  = SZ;
+                out->header.h  = SZ;
+                out->header.cf = LV_IMG_CF_TRUE_COLOR;
+                out->data_size = (uint32_t)SZ * SZ * 2;
+                out->data      = p;
+                Serial.printf("[splash] flash-resident %dx%d (0 ms, 0 KB PSRAM)\n", fw, fh);
+                return true;
+            }
+        }
+    }
+
     if (!ensure()) { Serial.printf("[splash] PSRAM alloc failed\n"); return false; }
 
     bool ok = false;
 
     // 1) SD-hosted theme splash, if a theme's selected and the file's there.
     const char *slug = theme_select::activeSlug();
-    if (slug[0]) {
+    if (slug[0] && theme_style::hasAsset("splash.png")) {
         char path[64];
         snprintf(path, sizeof(path), "/themes/%s/splash.png", slug);
         size_t sdLen = 0;
