@@ -1,0 +1,195 @@
+#include "orb_link.h"
+
+#include <Arduino.h>
+#include <stdarg.h>
+#include <stdio.h>
+#include <string.h>
+
+#include "config.h"          // FW_VERSION
+#include "custom_weld.h"     // CUSTOM_WELD_HASH
+#include "theme_select.h"
+#include "theme_style.h"
+
+namespace orb_link {
+namespace {
+
+// One command line. 96 is comfortably past the longest real request ("theme " + a 32-char
+// slug); anything longer is noise or a paste accident, and is dropped rather than wrapped,
+// so a runaway line can never be split into two half-commands that both look valid.
+constexpr size_t CMD_LINE_MAX = 96;
+char   s_line[CMD_LINE_MAX];
+size_t s_len      = 0;
+bool   s_overflow = false;
+
+bool (*s_themeHook)(const char *) = nullptr;
+
+// A reply is assembled in full here and written to the port in ONE call.
+//
+// It is tempting to just print the pieces as they are computed. That was the first version,
+// and it was wrong: theme_style::labelFor() opens theme.json off the SD card, and the SD
+// layer logs a timing line while it does. The log landed in the middle of the JSON array
+// being printed, and the browser received a reply chopped in half by an unrelated sentence.
+// Framing replies is not enough on its own when producing a reply can itself print. So all
+// the work that might log happens first, into this buffer, and only then does anything
+// reach the wire.
+//
+// Static, not stack: at 16 themes this is larger than is polite to put on the Arduino loop
+// task's stack, and only loop() ever touches it.
+constexpr size_t OUT_MAX = 2560;
+char   s_out[OUT_MAX];
+size_t s_out_len  = 0;
+bool   s_out_full = false;
+
+void out_reset() { s_out_len = 0; s_out_full = false; }
+void out_ch(char c) {
+    if (s_out_len < OUT_MAX - 2) s_out[s_out_len++] = c;
+    else                         s_out_full = true;
+}
+void out_str(const char *s) { while (*s) out_ch(*s++); }
+
+// Theme display names come out of a user-authored theme.json, so they can contain quotes
+// and backslashes. Emitting them raw would produce JSON the browser cannot parse, and the
+// failure would look like "the Orb stopped responding" rather than "your theme name has a
+// quote in it". Control characters are dropped: they have no business in a label and
+// escaping them properly would cost more than it buys.
+void out_json_string(const char *s) {
+    out_ch('"');
+    for (const char *p = s; *p; ++p) {
+        const unsigned char c = (unsigned char)*p;
+        if (c == '"' || c == '\\') { out_ch('\\'); out_ch((char)c); }
+        else if (c >= 0x20)        { out_ch((char)c); }
+    }
+    out_ch('"');
+}
+
+void out_fmt(const char *fmt, ...) {
+    va_list ap;
+    va_start(ap, fmt);
+    const int n = vsnprintf(s_out + s_out_len, OUT_MAX - 1 - s_out_len, fmt, ap);
+    va_end(ap);
+    if (n < 0 || (size_t)n >= OUT_MAX - 1 - s_out_len) s_out_full = true;
+    else                                               s_out_len += (size_t)n;
+}
+
+void reply_error(const char *msg);
+
+// One write, tag and payload and newline together, so nothing can be interleaved into it.
+void out_send() {
+    if (s_out_full) { reply_error("reply too large"); return; }
+    s_out[s_out_len++] = '\n';
+    Serial.write((const uint8_t *)RESP_TAG, strlen(RESP_TAG));
+    Serial.write((const uint8_t *)s_out, s_out_len);
+}
+
+void reply_error(const char *msg) {
+    // Built directly, bypassing the shared buffer: this is the path that runs when that
+    // buffer has already overflowed.
+    Serial.print(RESP_TAG);
+    Serial.print("{\"ok\":false,\"error\":\"");
+    Serial.print(msg);
+    Serial.println("\"}");
+}
+
+// Identity. This is what "Connect your Orb" shows, and it is deliberately the same set of
+// facts /health reports over WiFi: one source of truth for what this device is running, so
+// a cable diagnosis and a network diagnosis can never disagree.
+void cmd_hello() {
+    out_reset();
+    out_str("{\"ok\":true,\"product\":");
+    out_json_string(PRODUCT_NAME);
+    out_fmt(",\"proto\":%d,\"fw\":\"%s\"", PROTOCOL_VERSION, FW_VERSION);
+    out_str(",\"slug\":");
+    out_json_string(theme_select::activeSlug());
+    out_str(",\"theme\":");
+    out_json_string(theme_style::themeLabel());
+    out_fmt(",\"weld\":%lu,\"assets\":%lu,\"uptime_s\":%lu}",
+            (unsigned long)CUSTOM_WELD_HASH,
+            (unsigned long)theme_style::assetsFingerprint(),
+            (unsigned long)(millis() / 1000UL));
+    out_send();
+}
+
+// Both the slug (folder id, stable) and the label (display name, themeable) go out. Sending
+// only the slug is what once made "Modern" and "the-office" look like unrelated things.
+void cmd_themes() {
+    static char slugs[theme_select::MAX_THEMES][theme_select::MAX_SLUG_LEN];
+    const int n = theme_select::listInstalled(slugs);
+
+    out_reset();
+    out_str("{\"ok\":true,\"active\":");
+    out_json_string(theme_select::activeSlug());
+    out_str(",\"themes\":[");
+    for (int i = 0; i < n; ++i) {
+        char label[64];
+        theme_style::labelFor(slugs[i], label, sizeof(label));   // reads SD, and logs while it does
+        if (i) out_ch(',');
+        out_str("{\"slug\":");
+        out_json_string(slugs[i]);
+        out_str(",\"name\":");
+        out_json_string(label);
+        out_ch('}');
+    }
+    out_str("]}");
+    out_send();
+}
+
+void cmd_theme(const char *slug) {
+    if (!slug || !*slug)  { reply_error("missing slug");        return; }
+    if (!s_themeHook)     { reply_error("switching unavailable"); return; }
+    // The hook validates against what is actually on the card and defers the reboot; it
+    // does not switch here. theme_select::set() restarts the chip, and restarting before
+    // this reply is flushed would leave the browser watching a port that just vanished
+    // with no answer, which is indistinguishable from a crash.
+    if (!s_themeHook(slug)) { reply_error("no such theme on this Orb"); return; }
+    out_reset();
+    out_str("{\"ok\":true,\"switching\":");
+    out_json_string(slug);
+    out_ch('}');
+    out_send();
+    Serial.flush();   // the reboot is ~400 ms out; do not race it
+}
+
+void dispatch(char *line) {
+    // Split the verb from the rest. Only one argument is ever needed, so the remainder is
+    // taken whole rather than tokenised further: a slug never contains a space, and if one
+    // somehow did, listInstalled validation rejects it anyway.
+    char *arg = strchr(line, ' ');
+    if (arg) { *arg++ = '\0'; while (*arg == ' ') ++arg; }
+
+    if      (!strcmp(line, "hello"))  cmd_hello();
+    else if (!strcmp(line, "themes")) cmd_themes();
+    else if (!strcmp(line, "theme"))  cmd_theme(arg);
+    else                              reply_error("unknown command");
+}
+
+}   // namespace
+
+void setThemeRequestHook(bool (*hook)(const char *)) { s_themeHook = hook; }
+
+void begin() { s_len = 0; s_overflow = false; }
+
+void poll() {
+    // Bounded per call. A host that floods the port cannot hold loop() hostage and stall
+    // the knob; leftovers are simply read on the next pass a few milliseconds later.
+    int budget = 256;
+    while (Serial.available() > 0 && budget-- > 0) {
+        const char c = (char)Serial.read();
+        if (c == '\r') continue;
+        if (c != '\n') {
+            if (s_len < CMD_LINE_MAX - 1) s_line[s_len++] = c;
+            else                      s_overflow = true;   // poisoned; discard at newline
+            continue;
+        }
+        s_line[s_len] = '\0';
+        const size_t len = s_len;
+        s_len = 0;
+        if (s_overflow) { s_overflow = false; continue; }
+
+        // Untagged lines are somebody using the console, not talking to us. Silence is the
+        // right response: echoing an error for every stray keystroke would bury the log.
+        const size_t tag = strlen(REQ_TAG);
+        if (len > tag && !strncmp(s_line, REQ_TAG, tag)) dispatch(s_line + tag);
+    }
+}
+
+}   // namespace orb_link

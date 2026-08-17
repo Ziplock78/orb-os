@@ -724,7 +724,46 @@ static void blend_custom_hand(const uint8_t *src, int sw, int sh, int pivotX, in
 // Nearest-neighbour on purpose. The artwork this exists for is a soft gradient, where
 // bilinear buys nothing visible, and the same choice on the radar sweep earlier roughly
 // doubled that screen's frame rate. Full-screen, so it is worth not paying for.
+// The rotated plate, kept between frames. Rotating is ~217k pixel lookups; a clock with a
+// second hand redraws ~33x a second, and the minute-follow angle moves 0.1 deg in that
+// time — so all but one of those rotations reproduced the previous image exactly.
+// Measured cost of getting this wrong: 993 ms of LVGL time per second, i.e. the CPU
+// pinned inside the graphics library, which starved knob input and read as a sluggish
+// encoder. Now the rotation happens only when the angle has actually moved, and every
+// other frame is a memcpy.
+static void blit_plate_rot_slow(const uint16_t *src, float angleDeg);
+
+static uint16_t *s_rotCache      = nullptr;
+static float     s_rotCacheAngle = 1e9f;    // no cached angle yet
+static const uint16_t *s_rotCacheSrc = nullptr;
+
 static void blit_plate_rot(const uint16_t *src, float angleDeg) {
+    const size_t bytes = (size_t)SCREEN_W * SCREEN_H * sizeof(uint16_t);
+    if (!s_rotCache) {
+#ifdef ESP_PLATFORM
+        s_rotCache = (uint16_t *)heap_caps_malloc(bytes, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+#else
+        s_rotCache = (uint16_t *)malloc(bytes);
+#endif
+    }
+    if (s_rotCache) {
+        // A quarter of a degree is well under one pixel of movement at this radius, so
+        // re-rotating below that threshold buys nothing visible. At minute-follow it means
+        // a real rotation roughly every 2.5 s instead of 33 times a second.
+        if (s_rotCacheSrc == src && fabsf(angleDeg - s_rotCacheAngle) < 0.25f) {
+            memcpy(s_buf, s_rotCache, bytes);
+            return;
+        }
+        blit_plate_rot_slow(src, angleDeg);
+        memcpy(s_rotCache, s_buf, bytes);
+        s_rotCacheAngle = angleDeg;
+        s_rotCacheSrc   = src;
+        return;
+    }
+    blit_plate_rot_slow(src, angleDeg);   // no cache buffer: correct, just slower
+}
+
+static void blit_plate_rot_slow(const uint16_t *src, float angleDeg) {
     const float th = angleDeg * DEG2RAD, ct = cosf(th), st = sinf(th);
     const float cx = SCREEN_W * 0.5f, cy = SCREEN_H * 0.5f;
     uint16_t *dst = (uint16_t *)s_buf;

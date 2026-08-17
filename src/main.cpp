@@ -30,6 +30,7 @@
 #include "theme_art.h"     // pre-baked RGB565 art in flash: no SD read, no decode, no PSRAM
 #include "theme_font.h"    // per-theme fonts, loaded from that same partition
 #include "update_ui.h"     // on-screen "updating…" status, so mid-update never looks like broken
+#include "orb_link.h"      // USB serial command channel: how a browser (Orb Studio) talks to this device
 #include "custom_weld.h"   // CUSTOM_WELD_HASH — lets a push tell whether new firmware is needed
 #include "theme_style.h"   // per-theme app roster (theme_style::apps())
 #include "display.h"                  // M0: CO5300 + LVGL bring-up
@@ -1656,10 +1657,32 @@ static unsigned host_fps() {
     return fps;
 }
 
+// Theme switching asked for over the USB cable. Same two rules as the /theme endpoint it
+// mirrors: only ever switch to a slug that is genuinely installed (a typo would otherwise
+// leave the device pointed at an empty folder, drawing stock art and looking broken), and
+// defer the actual switch, because theme_select::set() reboots and the caller needs its
+// answer first. Shared with orb_link rather than duplicated so the two front doors cannot
+// drift apart.
+static bool request_theme_switch(const char *slug) {
+    if (!slug || !*slug) return false;
+    static char slugs[theme_select::MAX_THEMES][theme_select::MAX_SLUG_LEN];
+    const int n = theme_select::listInstalled(slugs);
+    for (int i = 0; i < n; ++i) {
+        if (!strcmp(slug, slugs[i])) {
+            g_pendingSlug   = slug;
+            g_applySlugAtMs = millis() + 400;
+            return true;
+        }
+    }
+    return false;
+}
+
 void setup() {
     Serial.begin(115200);
     delay(200);
     Serial.println("\nCapsule Radar boot");
+    orb_link::begin();
+    orb_link::setThemeRequestHook(request_theme_switch);
     diag::boot();   // print + continue the RTC-memory event history across this reboot
 
     // Send large allocations (>=4KB) to PSRAM instead of the ~300KB internal heap.
@@ -2061,11 +2084,13 @@ void setup() {
 }
 
 void loop() {
-    display::loop();                // drive LVGL (render dirty areas + run timers)
-    g_wm.process();                 // service the WiFi config portal (non-blocking)
-    g_web.handleClient();           // serve the configuration web page
-    if (g_useGps) gps_poll();       // pull NMEA from the LC76G (only when GPS auto-location is on)
-    knob::poll();                   // read the rotary encoder
+    // INPUT FIRST. The encoder is interrupt-driven, so no detent is ever lost — but this
+    // used to run at the BOTTOM of the loop, after a full LVGL render and after the web
+    // server. A detent arriving while the screen was drawing therefore waited for that
+    // draw to finish, then the network work, then a SECOND full draw before anything
+    // moved: two frames of latency on every turn, which is what made the knob feel
+    // sluggish. Handling it first means a turn is acted on by the very next render.
+    knob::poll();                   // drain detents/presses accumulated by the ISR
     update_hold_warning();          // countdown while the button is held (see build_hold_warning)
     if (knob::takeLongPress()) {    // held ~8 s -> manual recovery reboot
         Serial.println("[main] knob long-press -> reboot");
@@ -2081,6 +2106,16 @@ void loop() {
                                app_shell::name(), app_shell::browsing(), app_shell::captured());
         input_router::dispatch((int)kd, pressed);           // same 3-mode routing the sim uses
     }
+
+    display::loop();                // drive LVGL (render dirty areas + run timers)
+
+    // Network and sensors last: they are throughput work, not interactive. handleClient()
+    // in particular can spend real time on an /sdput chunk, and nothing about it should
+    // sit between a knob turn and the frame that answers it.
+    g_wm.process();                 // service the WiFi config portal (non-blocking)
+    g_web.handleClient();           // serve the configuration web page
+    orb_link::poll();               // answer Orb Studio over the USB cable (bounded, non-blocking)
+    if (g_useGps) gps_poll();       // pull NMEA from the LC76G (only when GPS auto-location is on)
 
     // scheduled reboot after a fresh WiFi config (see setSaveConfigCallback)
     if (g_rebootAtMs && (int32_t)(millis() - g_rebootAtMs) >= 0) { delay(50); ESP.restart(); }

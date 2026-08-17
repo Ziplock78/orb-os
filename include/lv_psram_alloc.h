@@ -19,11 +19,31 @@
 #ifdef ESP_PLATFORM
 #include <esp_heap_caps.h>
 
+// Hybrid, not all-PSRAM. Routing EVERYTHING to PSRAM fixed the font boot-loop but put
+// LVGL's per-draw scratch buffers (glyph masks, blend lines) behind the slower external
+// bus, which surfaced as a sluggish first knob interaction while those buffers warmed up.
+// Small allocations are the hot path and go to internal RAM, exactly where LVGL's own
+// 64 KB pool always lived; only big ones (a parsed font is ~44 KB, the old pool's whole
+// size) go to PSRAM. Each side falls back to the other, so an allocation can degrade to
+// the slow pool or the scarce one, but never to the unchecked null that caused the loop.
+#define ORB_LV_BIG_ALLOC (16 * 1024)
 static inline void *orb_lv_malloc(size_t size) {
-    return heap_caps_malloc(size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (size >= ORB_LV_BIG_ALLOC) {
+        void *p = heap_caps_malloc(size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        return p ? p : heap_caps_malloc(size, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    }
+    void *p = heap_caps_malloc(size, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    return p ? p : heap_caps_malloc(size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
 }
 static inline void *orb_lv_realloc(void *p, size_t size) {
-    return heap_caps_realloc(p, size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    // heap_caps_realloc honours the requested caps and copies across regions when the
+    // block has to move, so a small buffer growing past the threshold migrates to PSRAM.
+    if (size >= ORB_LV_BIG_ALLOC) {
+        void *q = heap_caps_realloc(p, size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        return q ? q : heap_caps_realloc(p, size, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    }
+    void *q = heap_caps_realloc(p, size, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    return q ? q : heap_caps_realloc(p, size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
 }
 static inline void orb_lv_free(void *p) { heap_caps_free(p); }
 
