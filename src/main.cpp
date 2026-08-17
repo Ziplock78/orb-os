@@ -29,6 +29,7 @@
 #include "theme_select.h"  // which Launch Kit theme (of however many are on the SD card) is active
 #include "theme_art.h"     // pre-baked RGB565 art in flash: no SD read, no decode, no PSRAM
 #include "theme_font.h"    // per-theme fonts, loaded from that same partition
+#include "update_ui.h"     // on-screen "updating…" status, so mid-update never looks like broken
 #include "custom_weld.h"   // CUSTOM_WELD_HASH — lets a push tell whether new firmware is needed
 #include "theme_style.h"   // per-theme app roster (theme_style::apps())
 #include "display.h"                  // M0: CO5300 + LVGL bring-up
@@ -1575,7 +1576,14 @@ static void handleSdPutUpload() {
         }
     } else if (up.status == UPLOAD_FILE_END) {
         if (g_sdUpFile) g_sdUpFile.close();
-        if (g_sdUpOk) Serial.printf("[sdput] done %s (%u bytes)\n", g_sdUpPath.c_str(), (unsigned)up.totalSize);
+        if (g_sdUpOk) {
+            Serial.printf("[sdput] done %s (%u bytes)\n", g_sdUpPath.c_str(), (unsigned)up.totalSize);
+            // Tell the user the device is mid-update. Without this, files arrived in
+            // silence and the reboot that follows read as a crash or a stale load.
+            static int s_updateFiles = 0;
+            const int slash = g_sdUpPath.lastIndexOf('/');
+            update_ui::file_received(g_sdUpPath.c_str() + (slash >= 0 ? slash + 1 : 0), ++s_updateFiles);
+        }
     }
 }
 
@@ -1686,12 +1694,12 @@ void setup() {
     theme_select::init();  // load the saved Launch Kit theme slug before any screen reads it
     psram_mark("after theme_select");
 
-    // Pre-baked theme art in flash. Must come after theme_select::init() (it needs the
-    // active slug) and before any view asks for artwork, so the first request already
-    // finds it. The bake itself only runs on the first boot after a theme push; every
-    // later boot just maps the partition and returns.
+    // Map the pre-baked art partition. Must come after theme_select::init() (it needs
+    // the active slug) and before any view asks for artwork. The BAKE, though, now runs
+    // after display::begin(): it used to run here, before the panel was initialised, so
+    // the ~15 s conversion after a theme push happened over a dead screen and looked
+    // exactly like a hang. Deferred so the user can watch it instead.
     theme_art::begin();
-    theme_art::bake_active_theme();
     psram_mark("after theme_art");
 
     // --- Display + LVGL (M0) ----------------------------------------------
@@ -1701,9 +1709,17 @@ void setup() {
     if (!display::begin()) {
         Serial.println("[!] display::begin() failed — check QSPI pins / power.");
     }
-    // After display::begin(), which runs lv_init(): the font loader and the lv_fs driver
-    // it reads through are both LVGL subsystems. Before any view builds, so the first
-    // label already has the theme's typography rather than the compiled fallback.
+    // The bake, now that there is a screen to narrate it on. Only does real work on the
+    // first boot after a theme push; the progress callback puts "Installing update…
+    // preparing artwork k of n" on the panel while it grinds, which is the second-restart
+    // leg of an update the user was previously left to guess about.
+    theme_art::set_progress([](const char *name, int done, int total) {
+        if (done == 0 && !name) update_ui::bake_begin(total);
+        else update_ui::bake_progress(name, done, total);
+    });
+    if (theme_art::bake_active_theme()) update_ui::bake_done();
+    // After the bake and after lv_init(): the font loader reads the freshly baked fonts,
+    // and every view built below gets the theme's typography on its first label.
     theme_font::begin();
     build_hold_warning();   // hold-to-reboot countdown, sits above every app
 
@@ -1948,6 +1964,7 @@ void setup() {
     // response reaches the caller first, same pattern as the settings handlers above.
     g_web.on("/reboot", []{
         g_web.send(200, "text/plain", "rebooting");
+        update_ui::rebooting();     // no-op unless the update overlay is up
         g_rebootAtMs = millis() + 400;
     });
     // Switch the active theme, e.g. /theme?slug=modern. Until this existed, pushing a

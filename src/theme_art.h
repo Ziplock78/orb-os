@@ -95,4 +95,9 @@ bool slug_baked(const char *slug);
 // SD path. Returns true if anything was baked.
 bool bake_active_theme();
 
+// Progress hook for the bake, called from the same task that runs it. First call is
+// (nullptr, 0, total) meaning "starting"; then (assetName, done, total) per asset. Set by
+// main so the boot screen can narrate the install; never required.
+void set_progress(void (*cb)(const char *assetName, int done, int total));
+
 } // namespace theme_art

@@ -60,6 +60,8 @@ const Asset ASSETS[] = {
 constexpr size_t ASSET_N = sizeof(ASSETS) / sizeof(ASSETS[0]);
 constexpr size_t SD_ASSET_MAX_BYTES = 2 * 1024 * 1024;
 
+void (*s_progress)(const char *, int, int) = nullptr;
+
 PNG     *s_png   = nullptr;
 uint8_t *s_buf   = nullptr;
 int      s_w     = 0;
@@ -116,6 +118,8 @@ bool decode_png(const uint8_t *png, size_t len, bool alpha,
 
 } // namespace
 
+void set_progress(void (*cb)(const char *, int, int)) { s_progress = cb; }
+
 bool bake_active_theme() {
     const char *slug = theme_select::activeSlug();
     if (!slug || !slug[0]) return false;
@@ -138,12 +142,19 @@ bool bake_active_theme() {
     if (!install_begin(slug, want)) { Serial.println("[theme_art] install_begin failed — staying on SD"); return false; }
 
     int baked = 0;
+    // Count what will actually be attempted so the on-screen progress has a real total.
+    int totalPlanned = 0;
+    for (size_t i = 0; i < FONT_ASSET_N; ++i) if (theme_style::hasAsset(FONT_ASSETS[i])) ++totalPlanned;
+    for (size_t i = 0; i < ASSET_N; ++i) if (theme_style::hasAsset(ASSETS[i].name)) ++totalPlanned;
+    if (s_progress) s_progress(nullptr, 0, totalPlanned);
+    int attempted = 0;
 
     // Fonts first: they are small (tens of KB) next to a 636 KB layer, and a theme that
     // spilled its font would silently fall back to the previous theme's typography, which
     // is the exact confusion this whole change exists to remove.
     for (size_t i = 0; i < FONT_ASSET_N; ++i) {
         if (!theme_style::hasAsset(FONT_ASSETS[i])) continue;
+        if (s_progress) s_progress(FONT_ASSETS[i], ++attempted, totalPlanned);
         char path[80];
         snprintf(path, sizeof(path), "/themes/%s/%s", slug, FONT_ASSETS[i]);
         size_t len = 0;
@@ -163,6 +174,7 @@ bool bake_active_theme() {
         // part of this theme: two undeclared empty overlays cost 1.3 MB before this
         // check existed. See theme_style::hasAsset().
         if (!theme_style::hasAsset(ASSETS[i].name)) continue;
+        if (s_progress) s_progress(ASSETS[i].name, ++attempted, totalPlanned);
         char path[80];
         snprintf(path, sizeof(path), "/themes/%s/%s", slug, ASSETS[i].name);
         size_t pngLen = 0;
@@ -196,6 +208,9 @@ bool bake_active_theme() {
 
 #else
 
-namespace theme_art { bool bake_active_theme() { return false; } }
+namespace theme_art {
+bool bake_active_theme() { return false; }
+void set_progress(void (*)(const char *, int, int)) {}
+} // namespace theme_art
 
 #endif
