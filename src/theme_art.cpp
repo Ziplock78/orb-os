@@ -20,7 +20,7 @@ constexpr uint32_t MAGIC       = 0x4F524254;   // 'ORBT'
 // makes the cache look empty, which makes the next boot re-bake from the card. That is
 // the only safe way to retire bad data: v1 packed blobs tightly and let each erase clip
 // the previous blob's tail, leaving white bands baked into the artwork.
-constexpr uint32_t VERSION     = 4;
+constexpr uint32_t VERSION     = 5;
 constexpr size_t   INDEX_BYTES = 8192;         // two 4 KB sectors
 constexpr size_t   SECTOR      = 4096;
 
@@ -29,7 +29,6 @@ struct Header {
     uint32_t version;
     uint32_t count;
     uint32_t used;      // bytes consumed by blobs, from INDEX_BYTES
-    uint32_t manifest;  // theme_style::assetsFingerprint() at bake time; re-bake if it moves
 };
 
 struct Entry {              // exactly 64 bytes, so the index size is trivially checkable
@@ -40,7 +39,8 @@ struct Entry {              // exactly 64 bytes, so the index size is trivially 
     uint16_t w;
     uint16_t h;
     uint8_t  fmt;
-    uint8_t  pad[7];
+    uint8_t  pad[3];
+    uint32_t manifest;      // theme_style::assetsFingerprint() for THIS entry's theme
 };
 static_assert(sizeof(Entry) == 64, "Entry must stay 64 bytes: the index size depends on it");
 constexpr size_t MAX_ENTRIES = (INDEX_BYTES - sizeof(Header)) / sizeof(Entry);
@@ -53,9 +53,15 @@ Entry                  s_index[MAX_ENTRIES];
 bool                   s_ready  = false;
 
 // Install-run state (RAM only until commit).
-bool     s_installing = false;
-uint32_t s_insCount   = 0;
-uint32_t s_insUsed    = 0;
+bool        s_installing  = false;
+uint32_t    s_insCount    = 0;
+uint32_t    s_insUsed     = 0;
+const char *s_insSlug     = nullptr;
+uint32_t    s_insManifest = 0;
+// A full rich theme, used to decide when the leftover room is too fragmented to bother
+// keeping other themes' entries. 466x466 with alpha is 636 KB, and a theme runs to ~13
+// of those and their smaller siblings.
+constexpr uint32_t FULL_THEME_BYTES = 4u * 1024 * 1024;
 
 bool map_partition() {
     if (s_mapped) { esp_partition_munmap(s_map); s_mapped = nullptr; s_map = 0; }
@@ -146,7 +152,13 @@ bool slug_baked(const char *slug) {
     return false;
 }
 
-uint32_t baked_manifest() { return s_hdr.count ? s_hdr.manifest : 0; }
+uint32_t baked_manifest(const char *slug) {
+    if (!s_mapped || !s_hdr.count || !slug || !slug[0]) return 0;
+    for (uint32_t i = 0; i < s_hdr.count; ++i)
+        if (strncmp(s_index[i].slug, slug, sizeof(s_index[i].slug)) == 0)
+            return s_index[i].manifest;
+    return 0;
+}
 
 size_t space_total() { return s_part ? (s_part->size - INDEX_BYTES) : 0; }
 
@@ -156,17 +168,46 @@ size_t space_free() {
     return space_total() - used;
 }
 
-bool install_begin() {
-    if (!s_part) return false;
-    // Erase the index first. Until commit writes a valid magic back, lookup() sees
-    // "nothing baked" and every caller uses the SD path — so an install interrupted by a
-    // power cut degrades to slow-but-correct, never to a half-read blob.
+bool install_begin(const char *slug, uint32_t manifestFingerprint) {
+    if (!s_part || !slug || !slug[0]) return false;
+    s_insSlug = slug;
+    s_insManifest = manifestFingerprint;
+
+    // Keep every OTHER theme's entries. The partition holds ~9.6 MB and a rich theme is
+    // ~3.8 MB, so two can live here at once and switching between them costs nothing;
+    // wiping on every bake would make each switch pay the full conversion again.
+    uint32_t kept = 0, end = 0;
+    for (uint32_t i = 0; i < s_hdr.count; ++i) {
+        if (strncmp(s_index[i].slug, slug, sizeof(s_index[i].slug)) == 0) continue;  // replacing this one
+        if (kept != i) s_index[kept] = s_index[i];
+        const uint32_t e = (s_index[kept].offset - INDEX_BYTES)
+                         + (uint32_t)((s_index[kept].len + SECTOR - 1) & ~(SECTOR - 1));
+        if (e > end) end = e;
+        ++kept;
+    }
+
+    // No compaction: a re-bake of an existing theme orphans its old blobs rather than
+    // moving everything down. Rather than grow a moving GC, fall back to a clean slate
+    // when the remainder no longer fits a full theme. Predictable, and rare at 9.6 MB.
+    if (space_total() - end < FULL_THEME_BYTES) {
+        Serial.printf("[theme_art] only %u KB left after keeping %u entries — wiping all themes\n",
+                      (unsigned)((space_total() - end) / 1024), (unsigned)kept);
+        kept = 0;
+        end  = 0;
+    }
+
+    // Erase the index last, once the keep-set is settled. Until commit writes a valid
+    // magic back, lookup() sees "nothing baked" and every caller uses the SD path, so an
+    // install interrupted by a power cut degrades to slow-but-correct, never to a
+    // half-read blob.
     if (esp_partition_erase_range(s_part, 0, INDEX_BYTES) != ESP_OK) return false;
     s_hdr.count = 0;
     s_hdr.used  = 0;
-    s_insCount  = 0;
-    s_insUsed   = 0;
+    s_insCount  = kept;      // kept entries stay at the front of s_index, already in place
+    s_insUsed   = end;
     s_installing = true;
+    if (kept) Serial.printf("[theme_art] keeping %u entr(ies) from other themes, %u KB in use\n",
+                            (unsigned)kept, (unsigned)(end / 1024));
     return true;
 }
 
@@ -221,12 +262,13 @@ bool install_asset(const char *slug, const char *assetName,
     e.w      = (uint16_t)w;
     e.h      = (uint16_t)h;
     e.fmt    = (uint8_t)fmt;
+    e.manifest = s_insManifest;
     ++s_insCount;
     s_insUsed += padded;
     return true;
 }
 
-bool install_commit(uint32_t manifestFingerprint) {
+bool install_commit() {
     if (!s_installing || !s_part) return false;
     s_installing = false;
 
@@ -235,7 +277,7 @@ bool install_commit(uint32_t manifestFingerprint) {
     // entries that point at blobs which may not have been written.
     if (esp_partition_write(s_part, sizeof(Header), s_index,
                             s_insCount * sizeof(Entry)) != ESP_OK) return false;
-    Header h = { MAGIC, VERSION, s_insCount, s_insUsed, manifestFingerprint };
+    Header h = { MAGIC, VERSION, s_insCount, s_insUsed };
     if (esp_partition_write(s_part, 0, &h, sizeof(h)) != ESP_OK) return false;
 
     if (!map_partition()) return false;     // re-map so the new blobs are visible
@@ -257,10 +299,10 @@ bool has(const char *, const char *) { return false; }
 const uint8_t *find_active(const char *, Format, int &, int &) { return nullptr; }
 bool owns(const void *) { return false; }
 bool slug_baked(const char *) { return false; }
-bool install_begin() { return false; }
+bool install_begin(const char *, uint32_t) { return false; }
 bool install_asset(const char *, const char *, int, int, Format, const uint8_t *, size_t) { return false; }
-bool install_commit(uint32_t) { return false; }
-uint32_t baked_manifest() { return 0; }
+bool install_commit() { return false; }
+uint32_t baked_manifest(const char *) { return 0; }
 size_t space_free()  { return 0; }
 size_t space_total() { return 0; }
 } // namespace theme_art

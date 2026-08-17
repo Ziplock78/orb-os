@@ -51,13 +51,15 @@ const uint8_t *find_active(const char *assetName, Format wantFmt, int &w, int &h
 
 // ---- install side (used by the /artput upload route) ----
 
-// Erase the partition and start a fresh index. Called once before an install run.
-bool install_begin();
+// Start an install run for one theme. Entries belonging to OTHER themes are kept, so a
+// second theme can be baked alongside the first and switching between them is free. Falls
+// back to wiping everything when too little contiguous room is left.
+bool install_begin(const char *slug, uint32_t manifestFingerprint);
 // Append one baked asset. `data` is raw pixels, already in `fmt` layout.
 bool install_asset(const char *slug, const char *assetName,
                    int w, int h, Format fmt, const uint8_t *data, size_t len);
 // Write the index and re-map. Nothing is visible to lookup() until this succeeds.
-bool install_commit(uint32_t manifestFingerprint);
+bool install_commit();
 
 // Bytes free for further install_asset() calls.
 size_t space_free();
@@ -69,9 +71,11 @@ size_t space_total();
 // allocated, so freeing it would be a wild pointer into flash.
 bool owns(const void *p);
 
-// The asset-list fingerprint stored with the current bake, or 0 if nothing is baked.
+// The asset-list fingerprint stored with this theme's bake, or 0 if it is not baked.
 // Compared against theme_style::assetsFingerprint() to decide whether a re-bake is due.
-uint32_t baked_manifest();
+// Per theme, not per partition: several themes stay baked at once, and each has to be
+// able to go stale on its own.
+uint32_t baked_manifest(const char *slug);
 
 // Does the cache already hold anything for this theme?
 bool slug_baked(const char *slug);

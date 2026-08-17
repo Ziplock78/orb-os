@@ -113,17 +113,17 @@ bool bake_active_theme() {
     // removing one would leave the old pixels cached: the cache would quietly drift from
     // the theme and only a firmware VERSION bump would ever resync it.
     const uint32_t want = theme_style::assetsFingerprint();
-    if (slug_baked(slug) && baked_manifest() == want && want != 0) {
+    if (slug_baked(slug) && baked_manifest(slug) == want && want != 0) {
         Serial.printf("[theme_art] '%s' already baked and unchanged — nothing to do\n", slug);
         return false;
     }
     if (slug_baked(slug))
         Serial.printf("[theme_art] '%s' asset list changed (%08x -> %08x) — re-baking\n",
-                      slug, (unsigned)baked_manifest(), (unsigned)want);
+                      slug, (unsigned)baked_manifest(slug), (unsigned)want);
 
     Serial.printf("[theme_art] baking '%s' into flash (one time, this boot only)\n", slug);
     const uint32_t t0 = millis();
-    if (!install_begin()) { Serial.println("[theme_art] install_begin failed — staying on SD"); return false; }
+    if (!install_begin(slug, want)) { Serial.println("[theme_art] install_begin failed — staying on SD"); return false; }
 
     int baked = 0;
     for (size_t i = 0; i < ASSET_N; ++i) {
@@ -155,7 +155,7 @@ bool bake_active_theme() {
     }
 
     if (!baked) { Serial.println("[theme_art] nothing baked"); return false; }
-    if (!install_commit(want)) { Serial.println("[theme_art] commit failed — staying on SD"); return false; }
+    if (!install_commit()) { Serial.println("[theme_art] commit failed — staying on SD"); return false; }
     Serial.printf("[theme_art] baked %d asset(s) in %u ms — subsequent shows are free\n",
                   baked, (unsigned)(millis() - t0));
     return true;
