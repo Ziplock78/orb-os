@@ -568,25 +568,25 @@ static void sim_register_apps(lv_obj_t *radarScreen) {
     // Same lineup + same hidden-app subset as the device (custom_apps.h): every app
     // is registered so indices line up, but the ones a theme flash turns off are
     // skipped when the knob cycles the menu.
-    app_shell::add(clockview::screen(), "Clock", clockview::onPress, nullptr, false, nullptr, nullptr, !theme_style::apps().clock);   // push flips clock face
+    app_shell::add(clockview::screen(), theme_style::names().clock, clockview::onPress, nullptr, false, nullptr, nullptr, !theme_style::apps().clock);   // push flips clock face
     // Exact same knob state machine as the device (main.cpp) — both wire the
     // shared radar::knob* handlers, so the simulator and Orb behave identically:
     // default view (knob released, a turn opens the switcher), push to enter
     // selection mode (turn cycles aircraft), push again or wait 5s to drop back.
-    app_shell::add(radarScreen, "Flight Tracker",
+    app_shell::add(radarScreen, theme_style::names().flight,
                    radar::knobPress,                              // onPress
                    radar::knobTurn,                               // onTurn (only while captured)
                    false,                                         // start uncaptured (default view)
                    []() { ui_show_view(0); radar::knobEnter(); }, // onEnter: show scope, then land in default view
                    radar::knobExit,                               // onExit: free style + reset selection
                    !theme_style::apps().flight);
-    app_shell::add(radarScreen, "Weather Radar",
+    app_shell::add(radarScreen, theme_style::names().weather,
                    []() { static bool fc = false; fc = !fc; ui_set_weather_forecast(fc); },  // push toggles WX/forecast
                    nullptr, false, []() { ui_show_view(1); }, nullptr, !theme_style::apps().weather);
-    app_shell::add(locationview::screen(), "Intel",
+    app_shell::add(locationview::screen(), theme_style::names().intel,
                    locationview::onPress, nullptr, false, locationview::onEnter, nullptr, !theme_style::apps().intel);   // push = mock refresh (same wiring as main.cpp)
-    app_shell::add(survScreen,  "Surveillance", nullptr, nullptr, false, nullptr, nullptr, !theme_style::apps().surveillance);
-    app_shell::add(settingsview::screen(), "Settings",
+    app_shell::add(survScreen,  theme_style::names().surveillance, nullptr, nullptr, false, nullptr, nullptr, !theme_style::apps().surveillance);
+    app_shell::add(settingsview::screen(), theme_style::names().settings,
                    settingsview::onPress, settingsview::onTurn, true, settingsview::onEnter, settingsview::onExit, false);
     app_shell::begin();   // start on Clock (index 0), matching the device
 }
@@ -849,6 +849,23 @@ int main(int argc, char **argv) {
                 SDL_FreeSurface(surf);
                 printf("[sim] themeshot: %s\n", path);
             }
+        }
+        // ...and the app switcher itself, which no per-app capture ever shows because it
+        // is an overlay, not an app. It is also the screen whose typography is hardest to
+        // verify any other way: menu fonts are compiled in, so what it renders depends on
+        // which theme was pushed last, not on anything the SD card carries.
+        app_shell::openSwitcher();
+        for (int i = 0; i < 200; ++i) { lv_timer_handler(); SDL_Delay(2); }
+        lv_refr_now(NULL);
+        SDL_RenderClear(s_ren);
+        SDL_RenderCopy(s_ren, s_tex, NULL, NULL);
+        if (SDL_Surface *surf = SDL_CreateRGBSurfaceWithFormat(0, ow, oh, 32, SDL_PIXELFORMAT_ARGB8888)) {
+            SDL_RenderReadPixels(s_ren, NULL, SDL_PIXELFORMAT_ARGB8888, surf->pixels, surf->pitch);
+            char path[300];
+            snprintf(path, sizeof(path), "%s-menu.bmp", themeShot);
+            SDL_SaveBMP(surf, path);
+            SDL_FreeSurface(surf);
+            printf("[sim] themeshot: %s\n", path);
         }
         SDL_Quit();
         return 0;

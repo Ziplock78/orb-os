@@ -442,7 +442,14 @@ namespace {
     void refresh_designSelect() {
         s_designCount = theme_select::listInstalled(s_designSlugs);
         if (s_designCount > theme_select::MAX_THEMES) s_designCount = theme_select::MAX_THEMES;
-        for (int i = 0; i < s_designCount; ++i) lv_label_set_text(s_designItems[i], s_designSlugs[i]);
+        // Show each theme's display name, never its folder slug. The theme shown as
+        // "Modern" lives in a folder called `the-office` (its former name), and putting
+        // the slug on screen made the two look like different themes.
+        for (int i = 0; i < s_designCount; ++i) {
+            char label[32];
+            theme_style::labelFor(s_designSlugs[i], label, sizeof(label));
+            lv_label_set_text(s_designItems[i], label);
+        }
         lv_label_set_text(s_designItems[s_designCount], "Back");
         for (int i = s_designCount + 1; i < theme_select::MAX_THEMES + 1; ++i) lv_label_set_text(s_designItems[i], "");
         if (s_designSel > s_designCount) s_designSel = s_designCount;

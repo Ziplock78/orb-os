@@ -24,6 +24,7 @@ Radar    s_radar;
 Menu     s_menu;
 Settings s_settings;
 Apps     s_apps;
+Names    s_names;
 // The theme's declared asset list (theme.json "assets"). s_assetN == 0 means the theme
 // did not declare one, which hasAsset() treats as "allow everything".
 constexpr size_t MAX_ASSETS = 24;
@@ -39,6 +40,7 @@ constexpr size_t MAX_STYLE_JSON_BYTES = 8192;
 void seed_defaults() {
     s_clock = Clock{};
     s_clock.bg = (uint32_t)CUSTOM_CLOCK.bg;
+    s_clock.plateFollow = 0;      // static plate unless the theme says otherwise
 #if CUSTOM_HAS_TEXT1
     s_clock.text1.show = true;
     s_clock.text1.x = CUSTOM_TEXT1_X;
@@ -91,6 +93,7 @@ void seed_defaults() {
 
     // App roster. Settings is not here on purpose: it is a system screen, always present.
     s_apps = Apps{};
+    s_names = Names{};      // stock labels; theme.json may relabel any of them
     s_apps.clock        = (bool)CUSTOM_APP_CLOCK;
     s_apps.flight       = (bool)CUSTOM_APP_FLIGHT;
     s_apps.weather      = (bool)CUSTOM_APP_WEATHER;
@@ -326,6 +329,10 @@ void load() {
         JsonDocument doc;
         if (read_style_json(slug, "clock_style.json", doc)) {
             if (doc["bg"].is<uint32_t>()) s_clock.bg = doc["bg"].as<uint32_t>();
+            // "plateFollow": which hand the background plate rotates with — 0 none,
+            // 1 hour, 2 minute, 3 second. The exported plate PNG carries only its static
+            // rotation, so this angle is applied live on top (see clock_view draw_custom).
+            if (doc["plateFollow"].is<int>()) s_clock.plateFollow = doc["plateFollow"].as<int>();
             merge_text(doc["text1"], s_clock.text1);
             merge_text(doc["text2"], s_clock.text2);
             // "hands": { "hour": {...}, "minute": {...}, "second": {...},
@@ -452,6 +459,26 @@ void load() {
                 if (a["intel"].is<bool>())        s_apps.intel        = a["intel"].as<bool>();
                 if (a["surveillance"].is<bool>()) s_apps.surveillance = a["surveillance"].as<bool>();
             }
+            // Display labels. Purely cosmetic: they never affect which folder is read or
+            // which app is which, so a theme can rename Flight Tracker freely.
+            if (doc["name"].is<const char *>())
+                snprintf(s_names.theme, sizeof(s_names.theme), "%s", doc["name"].as<const char *>());
+            JsonVariantConst nm = doc["names"];
+            if (!nm.isNull()) {
+                struct { const char *key; char *dst; size_t cap; } map[] = {
+                    { "clock",        s_names.clock,        sizeof(s_names.clock)        },
+                    { "flight",       s_names.flight,       sizeof(s_names.flight)       },
+                    { "weather",      s_names.weather,      sizeof(s_names.weather)      },
+                    { "intel",        s_names.intel,        sizeof(s_names.intel)        },
+                    { "surveillance", s_names.surveillance, sizeof(s_names.surveillance) },
+                    { "settings",     s_names.settings,     sizeof(s_names.settings)     },
+                };
+                for (auto &m : map) {
+                    JsonVariantConst v = nm[m.key];
+                    if (v.is<const char *>() && v.as<const char *>()[0])
+                        snprintf(m.dst, m.cap, "%s", v.as<const char *>());
+                }
+            }
             // "assets": every image this theme actually ships. See hasAsset() in the
             // header for why an undeclared file on the card must be ignored rather than
             // trusted. Absent list -> s_assetN stays 0 -> hasAsset() answers true for
@@ -482,6 +509,23 @@ const Radar &radar() { return s_radar; }
 const Menu &menu() { return s_menu; }
 const Settings &settings() { return s_settings; }
 const Apps &apps() { return s_apps; }
+const Names &names() { return s_names; }
+
+void labelFor(const char *slug, char *out, size_t cap) {
+    if (!out || !cap) return;
+    snprintf(out, cap, "%s", (slug && slug[0]) ? slug : "");   // slug is the fallback label
+    if (!slug || !slug[0]) return;
+    JsonDocument doc;
+    if (!read_style_json(slug, "theme.json", doc)) return;
+    if (doc["name"].is<const char *>() && doc["name"].as<const char *>()[0])
+        snprintf(out, cap, "%s", doc["name"].as<const char *>());
+}
+
+const char *themeLabel() {
+    if (s_names.theme[0]) return s_names.theme;
+    const char *slug = theme_select::activeSlug();
+    return (slug && slug[0]) ? slug : "Stock";
+}
 
 uint32_t assetsFingerprint() {
     // FNV-1a over the declared names. theme_art stores this next to a bake and re-bakes

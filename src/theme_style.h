@@ -70,6 +70,14 @@ struct Hand {
 
 struct Clock {
     uint32_t  bg = 0x000000;
+    // Rotate the whole background plate in lockstep with a hand: 0 none, 1 hour,
+    // 2 minute, 3 second. Launch Kit's "Rotate with" control on the background.
+    //
+    // The exported plate PNG is baked with only its static rotation applied (the editor
+    // explicitly leaves the follow angle out), so the device adds the live hand angle on
+    // top. Without this the border sat at one fixed angle while the hand moved, lining up
+    // once an hour by coincidence.
+    int       plateFollow = 0;
     ClockText text1;
     ClockText text2;
     Hand      hand[5];                        // 0=hour 1=minute 2=second 3=static1 4=static2
@@ -87,6 +95,27 @@ struct Apps {
     bool weather      = true;
     bool intel        = true;
     bool surveillance = true;
+};
+
+// Display names, kept strictly separate from the identifiers they label.
+//
+// The identifiers here — the theme's folder slug, and the app keys "clock", "flight" and
+// so on — are permanent. They are paths on the card, NVS values, and struct fields, so
+// renaming one orphans data on every card already in the wild. The names below are just
+// labels: a theme may call Flight Tracker whatever suits it, and change its mind, without
+// anything underneath moving.
+//
+// Not having this distinction cost real time: the theme displayed as "Modern" lives in a
+// folder called `the-office` (its former name), so "push Modern to the Orb" and
+// "/themes/the-office/" looked like unrelated things.
+struct Names {
+    char theme[32]        = "";              // the theme's own label, e.g. "Modern"
+    char clock[20]        = "Clock";
+    char flight[20]       = "Flight Tracker";
+    char weather[20]      = "Weather Radar";
+    char intel[20]        = "Intel";
+    char surveillance[20] = "Surveillance";
+    char settings[20]     = "Settings";      // renameable, but never hideable
 };
 
 struct RadarText {
@@ -219,6 +248,16 @@ const Radar     &radar();
 const Menu      &menu();
 const Settings  &settings();
 const Apps      &apps();      // from /themes/<slug>/theme.json
+const Names     &names();     // display labels; see the Names comment on why these are not ids
+
+// The theme's display name, falling back to its slug when it has none. Use this anywhere
+// a person reads it (Settings > Design, /health), never the raw slug.
+const char *themeLabel();
+
+// The display name for any installed theme, not just the active one — Settings > Design
+// lists them all. Falls back to the slug when a theme declares no name. Reads that
+// theme's theme.json, so call it when a page opens, not per frame.
+void labelFor(const char *slug, char *out, size_t cap);
 
 // Does the active theme actually contain this asset, e.g. "menu_plate.png"?
 //
