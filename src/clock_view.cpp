@@ -45,7 +45,8 @@ static void *heap_caps_malloc(size_t sz, int) { return malloc(sz); }
 #include "custom_hands.h"   // CUSTOM_HAS_* / CUSTOM_*_PIVOT_* / CUSTOM_*_BLEND / CUSTOM_HAND_ORDER
 #include "custom_text.h"    // CUSTOM_HAS_TEXT* (compile-time show/hide gate) / CUSTOM_TEXT*_FONT (compiled glyphs, not per-theme — see theme_style.h)
 #include "custom_sprite.h"  // custom_plate()/custom_overlay()/custom_hand()
-#include "theme_style.h"    // per-theme bg/text position/color/format — the runtime half of custom_text.h's macros (theme_style.h explains what stays compile-time and why)
+#include "theme_style.h"
+#include "theme_font.h"   // per-theme fonts, with the compiled font as fallback    // per-theme bg/text position/color/format — the runtime half of custom_text.h's macros (theme_style.h explains what stays compile-time and why)
 
 // ---- palette ----------------------------------------------------------------
 static const lv_color_t COL_HAND      = LV_COLOR_MAKE(0xE4, 0xE9, 0xF0);  // imperial silver
@@ -766,15 +767,15 @@ static void draw_custom(const struct tm *ti) {
 #if CUSTOM_HAS_TEXT1
     {
         const theme_style::ClockText &t = theme_style::clock().text1;
-        if (t.curved) draw_baked_arc_text(CUSTOM_TEXT1_FONT, t.fmt, (float)t.curveR, t.arcDeg, t.color, ti);
-        else draw_baked_text(CUSTOM_TEXT1_FONT, t.fmt, t.x, t.y, t.color, t.glow, t.glowColor, t.align, ti);
+        if (t.curved) draw_baked_arc_text(theme_font::clock_text1(), t.fmt, (float)t.curveR, t.arcDeg, t.color, ti);
+        else draw_baked_text(theme_font::clock_text1(), t.fmt, t.x, t.y, t.color, t.glow, t.glowColor, t.align, ti);
     }
 #endif
 #if CUSTOM_HAS_TEXT2
     {
         const theme_style::ClockText &t = theme_style::clock().text2;
-        if (t.curved) draw_baked_arc_text(CUSTOM_TEXT2_FONT, t.fmt, (float)t.curveR, t.arcDeg, t.color, ti);
-        else draw_baked_text(CUSTOM_TEXT2_FONT, t.fmt, t.x, t.y, t.color, t.glow, t.glowColor, t.align, ti);
+        if (t.curved) draw_baked_arc_text(theme_font::clock_text2(), t.fmt, (float)t.curveR, t.arcDeg, t.color, ti);
+        else draw_baked_text(theme_font::clock_text2(), t.fmt, t.x, t.y, t.color, t.glow, t.glowColor, t.align, ti);
     }
 #endif
 

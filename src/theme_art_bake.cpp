@@ -26,6 +26,18 @@ namespace {
 // entirely. Baking in this order means the cheap wins land first and whatever spills over
 // is the artwork shown least often. install_asset() logs each skip.
 struct Asset { const char *name; bool alpha; };
+
+// Fonts, stored byte-for-byte rather than decoded. They are lv_font_conv binaries that
+// LVGL parses itself (see theme_font.cpp), so there is nothing to convert here — the
+// point is only that they live in the same fast, memory-mapped cache as the artwork.
+// Listed first in the bake so typography never loses the space race to a background.
+const char *FONT_ASSETS[] = {
+    "font_menu_current.bin", "font_menu_prev.bin", "font_menu_next.bin",
+    "font_clock1.bin", "font_clock2.bin",
+    "font_settings.bin",
+    "font_radar1.bin", "font_radar2.bin", "font_radar3.bin", "font_radar4.bin",
+};
+constexpr size_t FONT_ASSET_N = sizeof(FONT_ASSETS) / sizeof(FONT_ASSETS[0]);
 const Asset ASSETS[] = {
     { "menu_plate.png",        false },   // every menu open — the whole reason for this
     { "settings_plate.png",    false },
@@ -126,6 +138,25 @@ bool bake_active_theme() {
     if (!install_begin(slug, want)) { Serial.println("[theme_art] install_begin failed — staying on SD"); return false; }
 
     int baked = 0;
+
+    // Fonts first: they are small (tens of KB) next to a 636 KB layer, and a theme that
+    // spilled its font would silently fall back to the previous theme's typography, which
+    // is the exact confusion this whole change exists to remove.
+    for (size_t i = 0; i < FONT_ASSET_N; ++i) {
+        if (!theme_style::hasAsset(FONT_ASSETS[i])) continue;
+        char path[80];
+        snprintf(path, sizeof(path), "/themes/%s/%s", slug, FONT_ASSETS[i]);
+        size_t len = 0;
+        uint8_t *buf = theme_sd::read_whole(path, len, SD_ASSET_MAX_BYTES);
+        if (!buf) continue;
+        if (install_asset(slug, FONT_ASSETS[i], 0, 0, FMT_RAW, buf, len)) {
+            ++baked;
+            Serial.printf("[theme_art] baked %-22s %u KB (font)\n",
+                          FONT_ASSETS[i], (unsigned)(len / 1024));
+        }
+        theme_sd::free(buf);
+    }
+
     for (size_t i = 0; i < ASSET_N; ++i) {
         // Never bake something the theme does not declare. Stale files from older pushes
         // sit on the card forever, and baking them wastes flash on artwork that is not

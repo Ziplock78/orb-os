@@ -46,7 +46,11 @@ lv_fs_res_t fs_read(lv_fs_drv_t *, void *fp, void *buf, uint32_t btr, uint32_t *
     const size_t n = btr < avail ? btr : avail;
     memcpy(buf, h->data + h->pos, n);
     h->pos += n;
-    *br = (uint32_t)n;
+    // LVGL's font loader calls lv_fs_read() with a NULL byte-count on its fast path
+    // (lv_font_loader.c:444). The wrapper substitutes its own, but a driver that
+    // dereferences blindly is one refactor away from a null write, and that is exactly
+    // the failure mode that just cost a boot loop.
+    if (br) *br = (uint32_t)n;
     return LV_FS_RES_OK;
 }
 lv_fs_res_t fs_seek(lv_fs_drv_t *, void *fp, uint32_t pos, lv_fs_whence_t whence) {
@@ -134,6 +138,15 @@ void begin() {
         // Cheap existence check before asking LVGL to parse: a theme that ships no font
         // for a slot is the normal case, not an error worth a log line each boot.
         if (!theme_art::find_blob(theme_select::activeSlug(), SLOT_FILE[i], data, len)) continue;
+        // lv_font_load() parses the whole face into LVGL's heap. That heap is PSRAM now
+        // (LV_MEM_CUSTOM in lv_conf.h); while it was the 64 KB internal pool, a 44 KB face
+        // exhausted it, LVGL did not check the failed allocation, and load_glyph() wrote
+        // through the null pointer — a boot loop before any screen drew.
+        //
+        // Still a copy rather than a read in place, which is not the ideal shape given the
+        // bytes are already memory-mapped. It is bounded (tens of KB against megabytes
+        // free) and uses LVGL's own tested parser, so the remaining zero-copy version is
+        // an optimisation, not a correctness fix.
         char path[40];
         snprintf(path, sizeof(path), "%c:%s", DRIVE_LETTER, SLOT_FILE[i]);
         const lv_font_t *f = lv_font_load(path);

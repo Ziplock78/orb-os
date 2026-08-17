@@ -1,7 +1,8 @@
 #include "settings_text.h"
 #include "config.h"             // SCREEN_W / SCREEN_H
-#include "custom_settings.h"    // CUSTOM_HAS_SETTINGS / CUSTOM_SETTINGS_FONT
-#include "theme_style.h"        // per-theme glow/glowColor — see theme_style.h
+#include "custom_settings.h"    // CUSTOM_HAS_SETTINGS / theme_font::settings_item()
+#include "theme_style.h"
+#include "theme_font.h"   // per-theme fonts, with the compiled font as fallback        // per-theme glow/glowColor — see theme_style.h
 #include <math.h>
 #include <string.h>
 #include <stdio.h>
@@ -153,7 +154,7 @@ void begin_frame() {
 void draw_item(const char *str, float x, float y, lv_color_t color, lv_opa_t opa) {
 #if CUSTOM_HAS_SETTINGS
     if (!s_canvas || !str || !str[0] || opa == 0) return;
-    const lv_font_t *font = CUSTOM_SETTINGS_FONT;
+    const lv_font_t *font = theme_font::settings_item();
     const int n = (int)strlen(str), cap = n < 40 ? n : 40;
     float w[40], total = 0.0f;
     for (int i = 0; i < cap; ++i) {

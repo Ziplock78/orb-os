@@ -14,7 +14,8 @@
 #include "custom_settings.h"    // CUSTOM_HAS_SETTINGS (compile-time show/hide gate) + compiled fallback defaults — see theme_style.h
 #include "settings_sprite.h"    // settings_custom_plate()/settings_custom_overlay() — the editor's baked background / CRT+glass
 #include "settings_text.h"      // settings_text::draw_item() — the wheel's glow-capable text, shared by every list
-#include "theme_style.h"        // per-theme wheel geometry/colors/highlight/default-selection — the runtime half of custom_settings.h's macros
+#include "theme_style.h"
+#include "theme_font.h"   // per-theme fonts, with the compiled font as fallback        // per-theme wheel geometry/colors/highlight/default-selection — the runtime half of custom_settings.h's macros
 
 // Shared with main.cpp.
 extern int  host_get_brightness();
@@ -350,7 +351,7 @@ namespace {
             // THEME's font and colours: the canvas only ever added glow on top of those,
             // and falling back to the stock font stepping made a themed device suddenly
             // render Settings in the wrong size and weight.
-            lv_obj_set_style_text_font(items[i], CUSTOM_SETTINGS_FONT, 0);
+            lv_obj_set_style_text_font(items[i], theme_font::settings_item(), 0);
             lv_obj_set_style_text_opa(items[i], opa, 0);
             lv_obj_set_style_text_color(items[i],
                 lv_color_hex(i == sel ? theme_style::settings().selColor

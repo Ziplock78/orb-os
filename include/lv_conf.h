@@ -27,15 +27,15 @@
  *=========================*/
 /* Object/style pool (internal RAM). Big bitmap draw buffers are allocated
    separately in PSRAM in display.cpp. Bump this if the radar UI grows. */
-#define LV_MEM_CUSTOM 0
-#ifdef LV_MEM_SIZE_NATIVE_OVERRIDE
-// Desktop simulator only (see [env:native] in platformio.ini): a screenshot run
-// loads several apps' worth of screens/objects at once in one process, more than
-// the on-device 64 KB pool budgets for one app at a time. Device build is untouched.
-#define LV_MEM_SIZE LV_MEM_SIZE_NATIVE_OVERRIDE
-#else
-#define LV_MEM_SIZE (64U * 1024U)
-#endif
+// LVGL's heap comes from PSRAM, not the 64 KB internal pool it used to own. A theme's
+// font is parsed into this heap by lv_font_load(), and one 71 px face is 44 KB, which the
+// old pool could not serve — LVGL does not check the failed allocation and panics on the
+// null pointer. See include/lv_psram_alloc.h for the full reasoning.
+#define LV_MEM_CUSTOM 1
+#define LV_MEM_CUSTOM_INCLUDE "lv_psram_alloc.h"
+#define LV_MEM_CUSTOM_ALLOC   orb_lv_malloc
+#define LV_MEM_CUSTOM_FREE    orb_lv_free
+#define LV_MEM_CUSTOM_REALLOC orb_lv_realloc
 #define LV_MEM_ADR 0
 #define LV_MEM_BUF_MAX_NUM 16
 #define LV_MEMCPY_MEMSET_STD 0

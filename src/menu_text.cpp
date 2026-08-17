@@ -1,7 +1,8 @@
 #include "menu_text.h"
 #include "config.h"          // SCREEN_W / SCREEN_H
 #include "custom_menu.h"     // CUSTOM_HAS_MENU* (compile-time show/hide gates) + CUSTOM_MENU_*_FONT
-#include "theme_style.h"     // per-theme position/color/glow/format/align — see theme_style.h
+#include "theme_style.h"
+#include "theme_font.h"   // per-theme fonts, with the compiled font as fallback     // per-theme position/color/glow/format/align — see theme_style.h
 #include <math.h>
 #include <string.h>
 #include <stdio.h>
@@ -451,7 +452,7 @@ void refresh(const char *prevName, const char *curName, const char *nextName) {
     if (prevName && prevName[0]) {
         const theme_style::MenuText &t = theme_style::menu().prev;
         format_name(t.fmt, prevName, out, sizeof(out));
-        draw_straight(CUSTOM_MENU_PREV_FONT, out, (float)t.x, (float)t.y,
+        draw_straight(theme_font::menu_prev(), out, (float)t.x, (float)t.y,
                      lv_color_hex(t.color), t.glow, lv_color_hex(t.glowColor), t.align);
     }
 #endif
@@ -459,7 +460,7 @@ void refresh(const char *prevName, const char *curName, const char *nextName) {
     if (nextName && nextName[0]) {
         const theme_style::MenuText &t = theme_style::menu().next;
         format_name(t.fmt, nextName, out, sizeof(out));
-        draw_straight(CUSTOM_MENU_NEXT_FONT, out, (float)t.x, (float)t.y,
+        draw_straight(theme_font::menu_next(), out, (float)t.x, (float)t.y,
                      lv_color_hex(t.color), t.glow, lv_color_hex(t.glowColor), t.align);
     }
 #endif
@@ -467,7 +468,7 @@ void refresh(const char *prevName, const char *curName, const char *nextName) {
     if (curName && curName[0]) {
         const theme_style::MenuText &t = theme_style::menu().current;
         format_name(t.fmt, curName, out, sizeof(out));
-        draw_wrapped(CUSTOM_MENU_CURRENT_FONT, out, (float)t.x, (float)t.y,
+        draw_wrapped(theme_font::menu_current(), out, (float)t.x, (float)t.y,
                      lv_color_hex(t.color), t.glow, lv_color_hex(t.glowColor), t.align,
                      t.wrapWidth, t.lineGap, t.lineStep);
     }

@@ -15,7 +15,8 @@
 #include "radar_sprite.h"    // radar_custom_plate()/radar_custom_overlay()/radar_custom_blip_icon() — the editor's baked background+rings+crosshair / CRT+glass / aircraft-icon layers
 #include "custom_radar_blip.h"   // CUSTOM_HAS_RADAR_BLIP_IMAGE / CUSTOM_RADAR_BLIP_PIVOT_X/Y
 #include "custom_radar_sweep.h"  // CUSTOM_SWEEP_IMAGE_PIVOT_X/Y / CUSTOM_SWEEP_IMAGE_CENTER_X/Y — compile-time, coupled to whichever sweep sprite is baked in
-#include "theme_style.h"     // per-theme sweep/blip/selection/off-range/center/RTEXT values — see theme_style.h for what's covered vs. stays compile-time
+#include "theme_style.h"
+#include "theme_font.h"   // per-theme fonts, with the compiled font as fallback     // per-theme sweep/blip/selection/off-range/center/RTEXT values — see theme_style.h for what's covered vs. stays compile-time
 #include <lvgl.h>
 #include <math.h>
 #include <stdio.h>
@@ -1817,20 +1818,20 @@ static void refresh_custom_text() {
 #if CUSTOM_HAS_RTEXT1
         { const theme_style::RadarText &t = theme_style::radar().rtext[0];
           char buf[64]; if (radar_fmt(buf, sizeof(buf), t.fmt, in)) {
-          if (t.curved) rtext_draw_curved(CUSTOM_RTEXT1_FONT, buf, (float)t.curveR, t.arcDeg, lv_color_hex(t.color), t.glow, lv_color_hex(t.glowColor));
-          else rtext_draw_straight(CUSTOM_RTEXT1_FONT, buf, (float)t.x, (float)t.y, lv_color_hex(t.color), t.glow, lv_color_hex(t.glowColor), t.align); } }
+          if (t.curved) rtext_draw_curved(theme_font::radar_text(0), buf, (float)t.curveR, t.arcDeg, lv_color_hex(t.color), t.glow, lv_color_hex(t.glowColor));
+          else rtext_draw_straight(theme_font::radar_text(0), buf, (float)t.x, (float)t.y, lv_color_hex(t.color), t.glow, lv_color_hex(t.glowColor), t.align); } }
 #endif
 #if CUSTOM_HAS_RTEXT2
         { const theme_style::RadarText &t = theme_style::radar().rtext[1];
           char buf[64]; if (radar_fmt(buf, sizeof(buf), t.fmt, in)) {
-          if (t.curved) rtext_draw_curved(CUSTOM_RTEXT2_FONT, buf, (float)t.curveR, t.arcDeg, lv_color_hex(t.color), t.glow, lv_color_hex(t.glowColor));
-          else rtext_draw_straight(CUSTOM_RTEXT2_FONT, buf, (float)t.x, (float)t.y, lv_color_hex(t.color), t.glow, lv_color_hex(t.glowColor), t.align); } }
+          if (t.curved) rtext_draw_curved(theme_font::radar_text(1), buf, (float)t.curveR, t.arcDeg, lv_color_hex(t.color), t.glow, lv_color_hex(t.glowColor));
+          else rtext_draw_straight(theme_font::radar_text(1), buf, (float)t.x, (float)t.y, lv_color_hex(t.color), t.glow, lv_color_hex(t.glowColor), t.align); } }
 #endif
 #if CUSTOM_HAS_RTEXT3
         { const theme_style::RadarText &t = theme_style::radar().rtext[2];
           char buf[64]; if (radar_fmt(buf, sizeof(buf), t.fmt, in)) {
-          if (t.curved) rtext_draw_curved(CUSTOM_RTEXT3_FONT, buf, (float)t.curveR, t.arcDeg, lv_color_hex(t.color), t.glow, lv_color_hex(t.glowColor));
-          else rtext_draw_straight(CUSTOM_RTEXT3_FONT, buf, (float)t.x, (float)t.y, lv_color_hex(t.color), t.glow, lv_color_hex(t.glowColor), t.align); } }
+          if (t.curved) rtext_draw_curved(theme_font::radar_text(2), buf, (float)t.curveR, t.arcDeg, lv_color_hex(t.color), t.glow, lv_color_hex(t.glowColor));
+          else rtext_draw_straight(theme_font::radar_text(2), buf, (float)t.x, (float)t.y, lv_color_hex(t.color), t.glow, lv_color_hex(t.glowColor), t.align); } }
 #endif
     }
     // The range banner describes the scope itself (its configured radius), not a
@@ -1839,8 +1840,8 @@ static void refresh_custom_text() {
 #if CUSTOM_HAS_RTEXT4
     { const theme_style::RadarText &t = theme_style::radar().rtext[3];
       char buf[64]; radar_range_fmt(buf, sizeof(buf), t.fmt);
-      if (t.curved) rtext_draw_curved(CUSTOM_RTEXT4_FONT, buf, (float)t.curveR, t.arcDeg, lv_color_hex(t.color), t.glow, lv_color_hex(t.glowColor));
-      else rtext_draw_straight(CUSTOM_RTEXT4_FONT, buf, (float)t.x, (float)t.y, lv_color_hex(t.color), t.glow, lv_color_hex(t.glowColor), t.align); }
+      if (t.curved) rtext_draw_curved(theme_font::radar_text(3), buf, (float)t.curveR, t.arcDeg, lv_color_hex(t.color), t.glow, lv_color_hex(t.glowColor));
+      else rtext_draw_straight(theme_font::radar_text(3), buf, (float)t.x, (float)t.y, lv_color_hex(t.color), t.glow, lv_color_hex(t.glowColor), t.align); }
 #endif
     lv_obj_invalidate(s_textCanvas);
 }

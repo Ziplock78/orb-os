@@ -13,7 +13,8 @@ static uint32_t millis() {
 #include "config.h"     // SCREEN_W / SCREEN_H
 #include "diag_log.h"
 #include "app_theme.h"
-#include "theme_style.h"     // menu colour/position for the no-canvas fallback
+#include "theme_style.h"
+#include "theme_font.h"   // per-theme fonts, with the compiled font as fallback     // menu colour/position for the no-canvas fallback
 #include "custom_menu.h"     // CUSTOM_HAS_MENU — a Launch Kit push replaces this overlay's look
 #include "menu_sprite.h"     // menu_custom_plate()/menu_custom_overlay() — the editor's baked background / CRT+glass
 #include "menu_text.h"       // menu_text::refresh() — the editor's current/prev/next banners
@@ -130,7 +131,7 @@ namespace {
             // no-canvas branch.
             const theme_style::MenuText &mc = theme_style::menu().current;
             lv_obj_set_style_text_color(s_overlayLabel, lv_color_hex(mc.color), 0);
-            lv_obj_set_style_text_font(s_overlayLabel, CUSTOM_MENU_CURRENT_FONT, 0);
+            lv_obj_set_style_text_font(s_overlayLabel, theme_font::menu_current(), 0);
             lv_obj_set_style_text_align(s_overlayLabel, LV_TEXT_ALIGN_CENTER, 0);
             // Wrapping belongs here too, not only on the glow canvas: menu_text's
             // draw_wrapped never ran for a no-glow theme, so "Wrap at" appeared to do
@@ -142,7 +143,7 @@ namespace {
             // same never-split-a-word rule the canvas renderer and Studio's preview use,
             // so all three agree.
             char wrapped[160];
-            menu_text::wrap_text(CUSTOM_MENU_CURRENT_FONT, name, mc.wrapWidth, wrapped, sizeof(wrapped));
+            menu_text::wrap_text(theme_font::menu_current(), name, mc.wrapWidth, wrapped, sizeof(wrapped));
             lv_label_set_text(s_overlayLabel, wrapped);
             lv_obj_set_width(s_overlayLabel, SCREEN_W);
             lv_obj_set_style_text_line_space(s_overlayLabel, mc.lineGap, 0);

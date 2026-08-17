@@ -1983,7 +1983,11 @@ void setup() {
         snprintf(b, sizeof(b),
                  // slug is the permanent folder id, theme is the display name. Reporting
                  // only the slug is what made "Modern" and "the-office" look unrelated.
-                 "{\"fw\":\"%s\",\"slug\":\"%s\",\"theme\":\"%s\",\"weld\":%lu,\"uptime_s\":%lu,"
+                 // `assets` is the fingerprint of the theme data this device is actually
+                 // running. Launch Kit compares it with the staged theme to decide whether
+                 // anything needs sending at all, which is what turns a no-op push into a
+                 // few seconds instead of shipping twenty unchanged files.
+                 "{\"fw\":\"%s\",\"slug\":\"%s\",\"theme\":\"%s\",\"weld\":%lu,\"assets\":%lu,\"uptime_s\":%lu,"
                  "\"psram_free_kb\":%u,\"psram_largest_kb\":%u,"
                  "\"heap_free_kb\":%u,\"heap_largest_kb\":%u,"
                  "\"fps\":%u,\"lvgl_ms_per_s\":%u,\"flush_ms_per_s\":%u,"
@@ -1991,6 +1995,7 @@ void setup() {
                  "\"wifi_rssi\":%d,\"boot_reason\":\"%s\"}",
                  FW_VERSION, theme_select::activeSlug(), theme_style::themeLabel(),
                  (unsigned long)CUSTOM_WELD_HASH,
+                 (unsigned long)theme_style::assetsFingerprint(),
                  (unsigned long)(millis() / 1000UL),
                  (unsigned)(ESP.getFreePsram() / 1024),
                  (unsigned)(heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM) / 1024),
