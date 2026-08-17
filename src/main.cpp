@@ -119,7 +119,11 @@ static volatile bool         g_feedOk = true;                        // ADS-B fe
 // Tracker is the entered app (radar_show_home_custom / radar_exit_release_style).
 static volatile bool         g_radarViewActive = false;
 static volatile uint32_t     g_lastFeedOkMs = 0;                     // millis() of the last good poll (HUD staleness)
-static volatile uint32_t     g_rebootAtMs = 0;                       // !=0: reboot when millis() reaches it (clean start after WiFi config)
+static volatile uint32_t     g_rebootAtMs = 0;
+// /theme?slug=... — applied from loop() rather than the request handler, because
+// theme_select::set() reboots and would cut the HTTP reply off mid-flight.
+static String                g_pendingSlug;
+static volatile uint32_t     g_applySlugAtMs = 0;                       // !=0: reboot when millis() reaches it (clean start after WiFi config)
 static String                g_tz = TZ_STR;                          // POSIX timezone (web-configurable, NVS); applied via configTzTime
 static volatile bool         g_weatherDirty = false;
 static volatile bool         g_wxRadarDirty = false;
@@ -1780,19 +1784,19 @@ void setup() {
     psram_mark("after display+radar");
     clockview::init();
     psram_mark("after clockview");
-    app_shell::add(clockview::screen(), "Clock", clockview::onPress, nullptr, false, nullptr, clockview::onExit, !theme_style::apps().clock);  // push flips analog/digital; onExit frees a custom face's decoded PSRAM
-    app_shell::add(radarScreen, "Flight Tracker", radar_press_custom_or_theme, radar_turn_select, false, radar_show_home_custom, radar_exit_release_style, !theme_style::apps().flight);
-    app_shell::add(radarScreen, "Weather Radar",  weather_press_cycle, nullptr, false, radar_show_weather, nullptr, !theme_style::apps().weather);
+    app_shell::add(clockview::screen(), theme_style::names().clock, clockview::onPress, nullptr, false, nullptr, clockview::onExit, !theme_style::apps().clock);  // push flips analog/digital; onExit frees a custom face's decoded PSRAM
+    app_shell::add(radarScreen, theme_style::names().flight, radar_press_custom_or_theme, radar_turn_select, false, radar_show_home_custom, radar_exit_release_style, !theme_style::apps().flight);
+    app_shell::add(radarScreen, theme_style::names().weather,  weather_press_cycle, nullptr, false, radar_show_weather, nullptr, !theme_style::apps().weather);
     locationview::init();
     psram_mark("after locationview");
-    app_shell::add(locationview::screen(), "Intel",
+    app_shell::add(locationview::screen(), theme_style::names().intel,
                    locationview::onPress, nullptr, false, locationview::onEnter, nullptr, !theme_style::apps().intel);  // push refreshes
     spycamview::init();
     psram_mark("after spycamview");
-    app_shell::add(spycamview::screen(), "Surveillance", spycamview::onPress, nullptr, false, nullptr, nullptr, !theme_style::apps().surveillance);  // push cycles cams; clip loads lazily on commit
+    app_shell::add(spycamview::screen(), theme_style::names().surveillance, spycamview::onPress, nullptr, false, nullptr, nullptr, !theme_style::apps().surveillance);  // push cycles cams; clip loads lazily on commit
     settingsview::init();
     psram_mark("after settingsview");
-    app_shell::add(settingsview::screen(), "Settings",
+    app_shell::add(settingsview::screen(), theme_style::names().settings,
                    settingsview::onPress, settingsview::onTurn,
                    true, settingsview::onEnter, settingsview::onExit, false);  // captures the knob on entry; onEnter resets to the menu and takes the text canvas, onExit gives it back
     app_shell::begin();                // start on the clock (index 0 — see comment above)
@@ -1940,20 +1944,46 @@ void setup() {
         g_web.send(200, "text/plain", "rebooting");
         g_rebootAtMs = millis() + 400;
     });
+    // Switch the active theme, e.g. /theme?slug=modern. Until this existed, pushing a
+    // theme from Launch Kit copied its files onto the card but left the device running
+    // whichever theme it was already on, so "push Modern to the Orb" produced the old
+    // theme's artwork wearing the new theme's compiled fonts. Settings > Design was the
+    // only way to actually select one, which is a menu dive for something the push
+    // already knows. theme_select::set() persists to NVS and reboots by itself.
+    g_web.on("/theme", []{
+        const String slug = g_web.arg("slug");
+        if (!slug.length()) { g_web.send(400, "text/plain", "missing slug"); return; }
+        // Only switch to a theme that is genuinely on the card; a typo would otherwise
+        // leave the device pointing at an empty folder and drawing stock art.
+        static char slugs[theme_select::MAX_THEMES][theme_select::MAX_SLUG_LEN];
+        const int n = theme_select::listInstalled(slugs);
+        bool found = false;
+        for (int i = 0; i < n && !found; ++i) found = (slug == slugs[i]);
+        if (!found) { g_web.send(404, "text/plain", "no such theme on the card"); return; }
+
+        g_web.send(200, "text/plain", "switching");
+        Serial.printf("[theme] switching to '%s' by request\n", slug.c_str());
+        // Applied from loop(), not here: theme_select::set() reboots, which would cut the
+        // HTTP response off before the client ever saw it.
+        g_pendingSlug   = slug;
+        g_applySlugAtMs = millis() + 400;
+    });
     // Machine-readable device state, so diagnosis starts from facts instead of from a
     // photograph of the screen (workflow rule R2). largest_block matters as much as
     // free: an allocation can fail with plenty of total free PSRAM if churn has
     // fragmented it below the requested size.
     g_web.on("/health", []{
-        char b[360];
+        char b[420];
         snprintf(b, sizeof(b),
-                 "{\"fw\":\"%s\",\"slug\":\"%s\",\"uptime_s\":%lu,"
+                 // slug is the permanent folder id, theme is the display name. Reporting
+                 // only the slug is what made "Modern" and "the-office" look unrelated.
+                 "{\"fw\":\"%s\",\"slug\":\"%s\",\"theme\":\"%s\",\"uptime_s\":%lu,"
                  "\"psram_free_kb\":%u,\"psram_largest_kb\":%u,"
                  "\"heap_free_kb\":%u,\"heap_largest_kb\":%u,"
                  "\"fps\":%u,\"lvgl_ms_per_s\":%u,\"flush_ms_per_s\":%u,"
                  "\"screens_per_s\":%u,"
                  "\"wifi_rssi\":%d,\"boot_reason\":\"%s\"}",
-                 FW_VERSION, theme_select::activeSlug(),
+                 FW_VERSION, theme_select::activeSlug(), theme_style::themeLabel(),
                  (unsigned long)(millis() / 1000UL),
                  (unsigned)(ESP.getFreePsram() / 1024),
                  (unsigned)(heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM) / 1024),
@@ -2025,6 +2055,12 @@ void loop() {
 
     // scheduled reboot after a fresh WiFi config (see setSaveConfigCallback)
     if (g_rebootAtMs && (int32_t)(millis() - g_rebootAtMs) >= 0) { delay(50); ESP.restart(); }
+
+    // deferred theme switch from /theme (set() persists to NVS and reboots by itself)
+    if (g_applySlugAtMs && (int32_t)(millis() - g_applySlugAtMs) >= 0) {
+        g_applySlugAtMs = 0;
+        theme_select::set(g_pendingSlug.c_str());
+    }
 
     // mDNS (and OTA, when it is compiled in): set up once WiFi is up.
     // ArduinoOTA::setHostname() used to be what registered capsuleradar.local, because it

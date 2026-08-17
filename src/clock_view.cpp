@@ -715,6 +715,30 @@ static void blend_custom_hand(const uint8_t *src, int sw, int sh, int pivotX, in
 
 // Composite the editor's exact pixels: plate (background) -> live text -> hand
 // sprites (rotated, in the editor's draw order/blend) -> overlay (hub, rim, glass).
+// Copy the plate rotated about the screen centre. Used only by themes whose background
+// "rotates with" a hand (Launch Kit's Rotate-with control): the crescent border in the
+// Modern theme is meant to trail the minute hand, and a static plate made it line up once
+// an hour by coincidence.
+//
+// Nearest-neighbour on purpose. The artwork this exists for is a soft gradient, where
+// bilinear buys nothing visible, and the same choice on the radar sweep earlier roughly
+// doubled that screen's frame rate. Full-screen, so it is worth not paying for.
+static void blit_plate_rot(const uint16_t *src, float angleDeg) {
+    const float th = angleDeg * DEG2RAD, ct = cosf(th), st = sinf(th);
+    const float cx = SCREEN_W * 0.5f, cy = SCREEN_H * 0.5f;
+    uint16_t *dst = (uint16_t *)s_buf;
+    for (int dy = 0; dy < SCREEN_H; ++dy) {
+        const float oy = dy - cy;
+        for (int dx = 0; dx < SCREEN_W; ++dx) {
+            const float ox = dx - cx;
+            const int sx = (int)(ox * ct + oy * st + cx);
+            const int sy = (int)(-ox * st + oy * ct + cy);
+            dst[(size_t)dy * SCREEN_W + dx] =
+                (sx < 0 || sy < 0 || sx >= SCREEN_W || sy >= SCREEN_H) ? 0 : src[(size_t)sy * SCREEN_W + sx];
+        }
+    }
+}
+
 static void draw_custom(const struct tm *ti) {
     // Decode the plate first: it's the whole visible dial and the largest buffer,
     // so it gets first claim on PSRAM. (Text is now a baked font, not a giant
@@ -722,7 +746,16 @@ static void draw_custom(const struct tm *ti) {
     // is decoded next and blitted at the end (over the hands).
     const uint16_t *plate = custom_plate();
     const uint8_t *overlay = custom_overlay();
-    if (plate) memcpy(s_buf, plate, (size_t)SCREEN_W * SCREEN_H * sizeof(lv_color_t));
+    // Angles are needed before the plate now: a theme can ask the plate to rotate with a
+    // hand, in which case the straight copy below becomes a rotated one.
+    const float p_sec = ti->tm_sec, p_min = ti->tm_min + p_sec / 60.0f;
+    const float p_hr = (ti->tm_hour % 12) + p_min / 60.0f;
+    const float followAng[4] = { 0.0f, p_hr * 30.0f, p_min * 6.0f, p_sec * 6.0f };
+    const int pf = theme_style::clock().plateFollow;
+    if (plate) {
+        if (pf > 0 && pf < 4) blit_plate_rot(plate, followAng[pf]);
+        else memcpy(s_buf, plate, (size_t)SCREEN_W * SCREEN_H * sizeof(lv_color_t));
+    }
     else lv_canvas_fill_bg(s_canvas, lv_color_hex(theme_style::clock().bg), LV_OPA_COVER);
 
     // Live text banners in the design's real baked font (+ firmware glow). A

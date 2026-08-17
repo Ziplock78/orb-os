@@ -13,6 +13,7 @@ static uint32_t millis() {
 #include "config.h"     // SCREEN_W / SCREEN_H
 #include "diag_log.h"
 #include "app_theme.h"
+#include "theme_style.h"     // menu colour/position for the no-canvas fallback
 #include "custom_menu.h"     // CUSTOM_HAS_MENU — a Launch Kit push replaces this overlay's look
 #include "menu_sprite.h"     // menu_custom_plate()/menu_custom_overlay() — the editor's baked background / CRT+glass
 #include "menu_text.h"       // menu_text::refresh() — the editor's current/prev/next banners
@@ -120,7 +121,26 @@ namespace {
             menu_text::refresh(prevName, name, nextName);
             if (s_overlayLabel) lv_obj_add_flag(s_overlayLabel, LV_OBJ_FLAG_HIDDEN);
         } else if (s_overlayLabel) {
+            // No canvas, which for a custom design normally means "this theme uses no
+            // glow" (menu_text::acquire skips the 651 KB buffer then). The canvas was
+            // never only about glow though: it also carried the theme's font, colour and
+            // position, so falling back to a stock white Montserrat label threw the whole
+            // menu design away. Dress the plain label in the theme's own values instead —
+            // the same fix settings_view's wheel_layout already carries for its own
+            // no-canvas branch.
+            const theme_style::MenuText &mc = theme_style::menu().current;
             lv_label_set_text(s_overlayLabel, name);
+            lv_obj_set_style_text_color(s_overlayLabel, lv_color_hex(mc.color), 0);
+            lv_obj_set_style_text_font(s_overlayLabel, CUSTOM_MENU_CURRENT_FONT, 0);
+            lv_obj_set_style_text_align(s_overlayLabel, LV_TEXT_ALIGN_CENTER, 0);
+            lv_obj_set_width(s_overlayLabel, SCREEN_W);
+            // lv_obj_align, not lv_obj_set_pos: this label is created aligned to
+            // LV_ALIGN_CENTER, and set_pos on an aligned object is an OFFSET from that
+            // alignment, not an absolute coordinate. Passing the design's y (233, the
+            // middle) as an offset pushed the text 233 px below centre, off the bottom.
+            // Re-aligning to TOP_LEFT makes the coordinate absolute again.
+            lv_obj_align(s_overlayLabel, LV_ALIGN_TOP_LEFT, 0,
+                         mc.y - (int)lv_font_get_line_height(CUSTOM_MENU_CURRENT_FONT) / 2);
             lv_obj_clear_flag(s_overlayLabel, LV_OBJ_FLAG_HIDDEN);
         }
 #else
