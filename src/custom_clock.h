@@ -8,6 +8,6 @@
 static const CustomClockDesign CUSTOM_CLOCK = {
     /* active */ true,
     /* bg     */ 0x000000,
-    /* text1  */ { false, 233, 322, 20, 0xEDE6D3, "%a %d" },
-    /* text2  */ { false, 233, 352, 14, 0xEDE6D3, "%a, %d %b" },
+    /* text1  */ { true, 233, 124, 48, 0x303030, "%I:%M" },
+    /* text2  */ { true, 233, 164, 16, 0x707070, "%a, %d %b" },
 };
