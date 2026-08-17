@@ -129,18 +129,28 @@ namespace {
             // the same fix settings_view's wheel_layout already carries for its own
             // no-canvas branch.
             const theme_style::MenuText &mc = theme_style::menu().current;
-            lv_label_set_text(s_overlayLabel, name);
             lv_obj_set_style_text_color(s_overlayLabel, lv_color_hex(mc.color), 0);
             lv_obj_set_style_text_font(s_overlayLabel, CUSTOM_MENU_CURRENT_FONT, 0);
             lv_obj_set_style_text_align(s_overlayLabel, LV_TEXT_ALIGN_CENTER, 0);
+            // Wrapping belongs here too, not only on the glow canvas: menu_text's
+            // draw_wrapped never ran for a no-glow theme, so "Wrap at" appeared to do
+            // nothing on exactly the themes that take this path.
+            //
+            // Deliberately NOT LVGL's own LV_LABEL_LONG_WRAP. LVGL breaks a word that is
+            // wider than the label mid-word, and with a 71 px font under a narrow wrap
+            // width that turns "Flight" into "Fli/ght". menu_text::wrap_text applies the
+            // same never-split-a-word rule the canvas renderer and Studio's preview use,
+            // so all three agree.
+            char wrapped[160];
+            menu_text::wrap_text(CUSTOM_MENU_CURRENT_FONT, name, mc.wrapWidth, wrapped, sizeof(wrapped));
+            lv_label_set_text(s_overlayLabel, wrapped);
             lv_obj_set_width(s_overlayLabel, SCREEN_W);
-            // lv_obj_align, not lv_obj_set_pos: this label is created aligned to
-            // LV_ALIGN_CENTER, and set_pos on an aligned object is an OFFSET from that
-            // alignment, not an absolute coordinate. Passing the design's y (233, the
-            // middle) as an offset pushed the text 233 px below centre, off the bottom.
-            // Re-aligning to TOP_LEFT makes the coordinate absolute again.
-            lv_obj_align(s_overlayLabel, LV_ALIGN_TOP_LEFT, 0,
-                         mc.y - (int)lv_font_get_line_height(CUSTOM_MENU_CURRENT_FONT) / 2);
+            lv_obj_set_style_text_line_space(s_overlayLabel, mc.lineGap, 0);
+            // Centre the whole label BOX on the design's point. The box grows with the
+            // number of lines, so one-line and two-line names share an optical centre
+            // without computing any line maths here — and unlike lv_obj_set_pos, an
+            // offset from LV_ALIGN_CENTER is what this label's alignment actually means.
+            lv_obj_align(s_overlayLabel, LV_ALIGN_CENTER, mc.x - SCREEN_W / 2, mc.y - SCREEN_H / 2);
             lv_obj_clear_flag(s_overlayLabel, LV_OBJ_FLAG_HIDDEN);
         }
 #else

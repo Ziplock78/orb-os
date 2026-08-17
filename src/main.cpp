@@ -28,6 +28,8 @@
 #include "app_theme.h"
 #include "theme_select.h"  // which Launch Kit theme (of however many are on the SD card) is active
 #include "theme_art.h"     // pre-baked RGB565 art in flash: no SD read, no decode, no PSRAM
+#include "theme_font.h"    // per-theme fonts, loaded from that same partition
+#include "custom_weld.h"   // CUSTOM_WELD_HASH — lets a push tell whether new firmware is needed
 #include "theme_style.h"   // per-theme app roster (theme_style::apps())
 #include "display.h"                  // M0: CO5300 + LVGL bring-up
 #include "imu_qmi8658.h"             // face-down sleep
@@ -1699,6 +1701,10 @@ void setup() {
     if (!display::begin()) {
         Serial.println("[!] display::begin() failed — check QSPI pins / power.");
     }
+    // After display::begin(), which runs lv_init(): the font loader and the lv_fs driver
+    // it reads through are both LVGL subsystems. Before any view builds, so the first
+    // label already has the theme's typography rather than the compiled fallback.
+    theme_font::begin();
     build_hold_warning();   // hold-to-reboot countdown, sits above every app
 
     // restore the saved theme, then persist any future change
@@ -1977,13 +1983,14 @@ void setup() {
         snprintf(b, sizeof(b),
                  // slug is the permanent folder id, theme is the display name. Reporting
                  // only the slug is what made "Modern" and "the-office" look unrelated.
-                 "{\"fw\":\"%s\",\"slug\":\"%s\",\"theme\":\"%s\",\"uptime_s\":%lu,"
+                 "{\"fw\":\"%s\",\"slug\":\"%s\",\"theme\":\"%s\",\"weld\":%lu,\"uptime_s\":%lu,"
                  "\"psram_free_kb\":%u,\"psram_largest_kb\":%u,"
                  "\"heap_free_kb\":%u,\"heap_largest_kb\":%u,"
                  "\"fps\":%u,\"lvgl_ms_per_s\":%u,\"flush_ms_per_s\":%u,"
                  "\"screens_per_s\":%u,"
                  "\"wifi_rssi\":%d,\"boot_reason\":\"%s\"}",
                  FW_VERSION, theme_select::activeSlug(), theme_style::themeLabel(),
+                 (unsigned long)CUSTOM_WELD_HASH,
                  (unsigned long)(millis() / 1000UL),
                  (unsigned)(ESP.getFreePsram() / 1024),
                  (unsigned)(heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM) / 1024),

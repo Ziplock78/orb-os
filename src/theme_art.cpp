@@ -125,6 +125,19 @@ bool lookup(const char *slug, const char *assetName,
     return false;
 }
 
+bool find_blob(const char *slug, const char *assetName, const uint8_t *&data, size_t &len) {
+    if (!s_mapped || !s_hdr.count || !slug || !slug[0] || !assetName) return false;
+    for (uint32_t i = 0; i < s_hdr.count; ++i) {
+        const Entry &e = s_index[i];
+        if (strncmp(e.slug, slug, sizeof(e.slug)) != 0) continue;
+        if (strncmp(e.name, assetName, sizeof(e.name)) != 0) continue;
+        data = (const uint8_t *)s_mapped + e.offset;
+        len  = e.len;
+        return true;
+    }
+    return false;
+}
+
 bool has(const char *slug, const char *assetName) {
     const uint8_t *p = nullptr; int w = 0, h = 0; Format f = FMT_RGB565;
     return lookup(slug, assetName, p, w, h, f);
@@ -296,6 +309,7 @@ namespace theme_art {
 bool begin() { return false; }
 bool lookup(const char *, const char *, const uint8_t *&, int &, int &, Format &) { return false; }
 bool has(const char *, const char *) { return false; }
+bool find_blob(const char *, const char *, const uint8_t *&, size_t &) { return false; }
 const uint8_t *find_active(const char *, Format, int &, int &) { return nullptr; }
 bool owns(const void *) { return false; }
 bool slug_baked(const char *) { return false; }

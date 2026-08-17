@@ -353,6 +353,77 @@ void release() {
 #endif
 }
 
+// Width of a substring in the given font, in pixels.
+static float measure(const lv_font_t *font, const char *s, int len) {
+    float total = 0.0f;
+    for (int i = 0; i < len; ++i) {
+        lv_font_glyph_dsc_t g;
+        if (lv_font_get_glyph_dsc(font, &g, (uint32_t)(uint8_t)s[i], 0)) total += (float)g.adv_w;
+    }
+    return total;
+}
+
+// Draw a name, wrapping on spaces when it is wider than wrapWidth, and centring the
+// resulting stack as a block on `by`.
+//
+// draw_straight() puts one line's visual middle on `by`. Stacking naively from there
+// would hang extra lines below the anchor and make a two-word name look dropped rather
+// than deliberate; instead the whole block's middle lands on `by`, so "Clock" and
+// "Flight Tracker" sit at the same optical centre. wrapWidth 0 keeps the old
+// single-line behaviour exactly, which is what every existing theme gets.
+void draw_wrapped(const lv_font_t *font, const char *str, float bx, float by,
+                  lv_color_t col, int glow, lv_color_t glowCol, int align,
+                  int wrapWidth, int lineGap, int lineStep) {
+    if (!font || !str || !str[0]) return;
+    char wrapped[160];
+    const int lines = wrap_text(font, str, wrapWidth, wrapped, sizeof(wrapped));
+    if (lines <= 1) { draw_straight(font, str, bx, by, col, glow, glowCol, align); return; }
+
+    // Use the editor's exact step when it sent one. Deriving it here from
+    // lv_font_get_line_height() while Studio derived it from size*1.2 put the two a few
+    // pixels apart, which is enough to make a two-line name look right in the preview and
+    // slightly off on the dial. The fallback only serves themes pushed before lineStep
+    // existed.
+    const float step = (lineStep > 0) ? (float)lineStep
+                                      : ((float)lv_font_get_line_height(font) + (float)lineGap);
+    // Same expression Studio uses: centre the line CENTRES about by, so a one-line and a
+    // two-line name share an optical centre.
+    const float firstY = by - (lines - 1) * step * 0.5f;
+
+    char line[80];
+    const char *p = wrapped;
+    for (int i = 0; i < lines; ++i) {
+        const char *nl = strchr(p, '\n');
+        const size_t len = nl ? (size_t)(nl - p) : strlen(p);
+        const size_t cap = len < sizeof(line) - 1 ? len : sizeof(line) - 1;
+        memcpy(line, p, cap);
+        line[cap] = '\0';
+        draw_straight(font, line, bx, firstY + i * step, col, glow, glowCol, align);
+        if (!nl) break;
+        p = nl + 1;
+    }
+}
+
+int wrap_text(const lv_font_t *font, const char *in, int wrapWidth, char *out, size_t cap) {
+    (void)font; (void)wrapWidth;
+    if (!out || !cap) return 0;
+    out[0] = '\0';
+    if (!in || !in[0]) return 0;
+    // Explicit breaks, not measured ones. Auto-wrapping meant three separate width
+    // calculations (Studio's canvas metrics, LVGL's font metrics, and this renderer's)
+    // agreeing on where a line ends, which they did not: the same name broke in different
+    // places in the preview and on the dial. The designer types '|' where the break
+    // belongs and every consumer just honours it.
+    size_t w = 0;
+    int lines = 1;
+    for (const char *p = in; *p && w + 1 < cap; ++p) {
+        if (*p == '|' || *p == '\n') { out[w++] = '\n'; ++lines; }
+        else out[w++] = *p;
+    }
+    out[w] = '\0';
+    return lines;
+}
+
 void refresh(const char *prevName, const char *curName, const char *nextName) {
 #if CUSTOM_HAS_MENU
     if (!s_canvas) return;
@@ -396,8 +467,9 @@ void refresh(const char *prevName, const char *curName, const char *nextName) {
     if (curName && curName[0]) {
         const theme_style::MenuText &t = theme_style::menu().current;
         format_name(t.fmt, curName, out, sizeof(out));
-        draw_straight(CUSTOM_MENU_CURRENT_FONT, out, (float)t.x, (float)t.y,
-                     lv_color_hex(t.color), t.glow, lv_color_hex(t.glowColor), t.align);
+        draw_wrapped(CUSTOM_MENU_CURRENT_FONT, out, (float)t.x, (float)t.y,
+                     lv_color_hex(t.color), t.glow, lv_color_hex(t.glowColor), t.align,
+                     t.wrapWidth, t.lineGap, t.lineStep);
     }
 #endif
     lv_obj_invalidate(s_canvas);

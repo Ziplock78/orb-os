@@ -30,6 +30,7 @@ Names    s_names;
 constexpr size_t MAX_ASSETS = 24;
 char   s_asset[MAX_ASSETS][28] = {};
 size_t s_assetN = 0;
+uint32_t s_assetsHash = 0;   // theme.json "assetsHash": covers contents, not just names
 
 constexpr size_t MAX_STYLE_JSON_BYTES = 8192;
 
@@ -94,6 +95,7 @@ void seed_defaults() {
     // App roster. Settings is not here on purpose: it is a system screen, always present.
     s_apps = Apps{};
     s_names = Names{};      // stock labels; theme.json may relabel any of them
+    s_assetsHash = 0;
     s_apps.clock        = (bool)CUSTOM_APP_CLOCK;
     s_apps.flight       = (bool)CUSTOM_APP_FLIGHT;
     s_apps.weather      = (bool)CUSTOM_APP_WEATHER;
@@ -301,6 +303,9 @@ void merge_menu_text(JsonVariantConst j, MenuText &t) {
     if (j["glowColor"].is<uint32_t>()) t.glowColor = j["glowColor"].as<uint32_t>();
     if (j["fmt"].is<const char *>()) snprintf(t.fmt, sizeof(t.fmt), "%s", j["fmt"].as<const char *>());
     if (j["align"].is<int>()) t.align = j["align"].as<int>();
+    if (j["wrapWidth"].is<int>()) t.wrapWidth = j["wrapWidth"].as<int>();
+    if (j["lineGap"].is<int>()) t.lineGap = j["lineGap"].as<int>();
+    if (j["lineStep"].is<int>()) t.lineStep = j["lineStep"].as<int>();
 }
 
 // Reads /themes/<slug>/<name> into `doc`. Returns false (doc left empty) if the
@@ -483,6 +488,7 @@ void load() {
             // header for why an undeclared file on the card must be ignored rather than
             // trusted. Absent list -> s_assetN stays 0 -> hasAsset() answers true for
             // everything, which is the old behaviour.
+            if (doc["assetsHash"].is<uint32_t>()) s_assetsHash = doc["assetsHash"].as<uint32_t>();
             JsonArrayConst list = doc["assets"].as<JsonArrayConst>();
             if (!list.isNull()) {
                 s_assetN = 0;
@@ -528,9 +534,11 @@ const char *themeLabel() {
 }
 
 uint32_t assetsFingerprint() {
-    // FNV-1a over the declared names. theme_art stores this next to a bake and re-bakes
-    // when it moves, so adding, removing or renaming a layer in a theme is picked up
-    // automatically. 0 means "no manifest", which never matches a real bake.
+    // Prefer Launch Kit's "assetsHash", which covers the asset CONTENTS. The name-only
+    // hash below cannot see a replaced image: swap a background for a different picture
+    // of the same name and the fingerprint never moves, so the device keeps serving the
+    // previously baked pixels and the new artwork silently never appears.
+    if (s_assetsHash) return s_assetsHash;
     if (!s_assetN) return 0;
     uint32_t h = 2166136261u;
     for (size_t i = 0; i < s_assetN; ++i) {

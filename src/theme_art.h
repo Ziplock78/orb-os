@@ -27,6 +27,10 @@ namespace theme_art {
 enum Format : uint8_t {
     FMT_RGB565       = 0,   // 2 bytes/px, opaque (plates, splash)
     FMT_RGB565_ALPHA = 1,   // 3 bytes/px, RGB565 + 8-bit alpha (overlays, hands)
+    // Stored verbatim, not pixels. Fonts arrive as lv_font_conv binaries and are read
+    // back through an lv_fs driver (theme_font.cpp), which is what lets a theme carry its
+    // own typography instead of having it compiled into the firmware.
+    FMT_RAW          = 2,
 };
 
 // Map the partition once at boot. Safe to call more than once; later calls are no-ops.
@@ -65,6 +69,10 @@ bool install_commit();
 size_t space_free();
 // Total usable bytes in the partition (0 when the partition is absent).
 size_t space_total();
+
+// Raw bytes of a baked asset, whatever its format. Used for FMT_RAW blobs (fonts),
+// where there is nothing to interpret and the caller just wants a pointer and a length.
+bool find_blob(const char *slug, const char *assetName, const uint8_t *&data, size_t &len);
 
 // Does this pointer aim into the memory-mapped partition? Release paths use this instead
 // of tracking a per-asset "came from flash" flag: a buffer that theme_art owns was never

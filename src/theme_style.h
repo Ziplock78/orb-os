@@ -207,6 +207,15 @@ struct MenuText {
     uint32_t glowColor = 0xFFFFFF;
     char     fmt[64] = "{name}";
     int      align = 0;
+    // Word wrap for long app names. 0 = never wrap, draw on one line however wide it
+    // gets (which is what ran "Flight Tracker" off the edge of the dial). Above 0, the
+    // string breaks on spaces once it exceeds this many pixels, and the resulting stack
+    // is centred as a block on y, so one-word and two-word names both sit right.
+    int      wrapWidth = 0;
+    int      lineGap   = 0;    // extra pixels between stacked lines
+    // Exact pixel distance between stacked line centres, computed by Launch Kit. Used
+    // verbatim when > 0; the lineH + lineGap fallback below only serves older themes.
+    int      lineStep  = 0;
 };
 
 struct Menu {
