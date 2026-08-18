@@ -204,6 +204,10 @@ struct Radar {
     int      maxAircraft     = -1;     // how many contacts the scope follows at once
     int      minAltFt        = -1;     // ignore anything below this altitude
     int      hideGround      = -1;     // 1 = never show aircraft on the ground, 0 = show, -1 = unset
+    // Synthesised traffic instead of the live feed. For judging a design without waiting
+    // on whatever happens to be overhead, and for watching masking behave against motion
+    // that is predictable rather than whatever the sky is doing.
+    bool     simulate        = false;
 
     // Exclusion zones: circles on the 466x466 dial where aircraft are not drawn.
     //

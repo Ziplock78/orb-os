@@ -419,6 +419,7 @@ void load() {
             if (doc["maxAircraft"].is<int>())    s_radar.maxAircraft    = doc["maxAircraft"].as<int>();
             if (doc["minAltFt"].is<int>())       s_radar.minAltFt       = doc["minAltFt"].as<int>();
             if (doc["hideGround"].is<bool>())    s_radar.hideGround     = doc["hideGround"].as<bool>() ? 1 : 0;
+            if (doc["simulate"].is<bool>())      s_radar.simulate       = doc["simulate"].as<bool>();
             s_radar.zoneCount = 0;
             bool s_radarHasInvertZone = false;
             if (doc["zones"].is<JsonArrayConst>()) {

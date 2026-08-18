@@ -231,8 +231,65 @@ static void adsb_task(void*) {
                 static int failCount = 0;
                 // poll() tries the fallback provider after a primary failure; keep the HUD
                 // healthy through isolated misses and warn only after a sustained outage.
-                if (g_adsb.poll(fresh)) {
-                    Serial.printf("[adsb] fetched %u aircraft\n", (unsigned)fresh.size());
+                // Synthesised traffic, when the active theme asks for it. Straight courses at
+                // fixed speeds, seeded once so the same aircraft persist and actually travel
+                // rather than teleporting each poll — which is what makes trails, sticky
+                // tracking and zone masking all observable without waiting on the sky.
+                // Positions advance by real elapsed time, so it runs at the same pace
+                // whatever the poll interval is.
+                const bool simulated = theme_style::radar().simulate;
+                if (simulated) {
+                    static bool     simInit = false;
+                    static uint32_t simT0 = 0;
+                    struct SimAc { double lat0, lon0; float brgDeg, gsKt, altFt; const char *call; const char *type; };
+                    static SimAc sim[8];
+                    if (!simInit) {
+                        simInit = true;
+                        simT0 = millis();
+                        // Spread around the home point at varied radii and headings, so some
+                        // cross the middle, some skirt the rim, and some pass through
+                        // whatever keep-out areas a design has drawn.
+                        for (int i = 0; i < 8; ++i) {
+                            const float a = (float)i * 45.0f;
+                            const float rKm = 8.0f + (float)(i % 4) * 9.0f;
+                            sim[i].lat0   = g_settings.homeLat + (double)(rKm / 111.0f) * cos(a * (float)M_PI / 180.0f);
+                            sim[i].lon0   = g_settings.homeLon + (double)(rKm / 111.0f) * sin(a * (float)M_PI / 180.0f)
+                                            / cos(g_settings.homeLat * (double)M_PI / 180.0);
+                            sim[i].brgDeg = fmodf(a + 115.0f, 360.0f);   // not radial: they cross the scope
+                            sim[i].gsKt   = 180.0f + (float)(i % 5) * 55.0f;
+                            sim[i].altFt  = 3500.0f + (float)i * 2600.0f;
+                            sim[i].call   = "SIM";
+                            sim[i].type   = "SIM";
+                        }
+                    }
+                    const float hrs = (float)(millis() - simT0) / 3600000.0f;
+                    fresh.clear();
+                    for (int i = 0; i < 8; ++i) {
+                        const float nm  = sim[i].gsKt * hrs;
+                        const float km  = nm * 1.852f;
+                        const float brg = sim[i].brgDeg * (float)M_PI / 180.0f;
+                        Aircraft a;
+                        char hexBuf[8]; snprintf(hexBuf, sizeof(hexBuf), "sim%03d", i);
+                        a.hex     = hexBuf;
+                        char callBuf[10]; snprintf(callBuf, sizeof(callBuf), "SIM%03d", i);
+                        a.flight  = callBuf;
+                        a.type    = "SIM";
+                        a.lat     = sim[i].lat0 + (double)(km / 111.0f) * cos(brg);
+                        a.lon     = sim[i].lon0 + (double)(km / 111.0f) * sin(brg)
+                                    / cos(g_settings.homeLat * (double)M_PI / 180.0);
+                        a.altBaro = sim[i].altFt;
+                        a.onGround = false;
+                        a.track   = sim[i].brgDeg;
+                        a.gs      = sim[i].gsKt;
+                        a.baroRate = 0.0f;
+                        a.squawk  = 1200;
+                        a.seenPos = 0;
+                        a.lastUpdateMs = millis();
+                        fresh.push_back(a);
+                    }
+                }
+                if (simulated || g_adsb.poll(fresh)) {
+                    if (!simulated) Serial.printf("[adsb] fetched %u aircraft\n", (unsigned)fresh.size());
                     failCount = 0;
                     adsbBackoffMs = 0;                        // recovered: back to real-time polling
                     g_feedOk = true;
