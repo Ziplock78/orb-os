@@ -1679,6 +1679,12 @@ static bool request_theme_switch(const char *slug) {
 }
 
 void setup() {
+    // Room for one full orb_link put-data line (~400 bytes) to ARRIVE IN ONE USB burst
+    // while loop() is busy rendering a frame. The default RX ring is 256 bytes, so a
+    // long line overflowed it, the tail was dropped, and the half-line was discarded by
+    // the overflow guard — which read as "put-data never gets a reply" while short
+    // commands worked perfectly. Must be set before begin().
+    Serial.setRxBufferSize(4096);
     Serial.begin(115200);
     delay(200);
     Serial.println("\nCapsule Radar boot");
