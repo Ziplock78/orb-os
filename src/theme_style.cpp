@@ -419,6 +419,18 @@ void load() {
             if (doc["maxAircraft"].is<int>())    s_radar.maxAircraft    = doc["maxAircraft"].as<int>();
             if (doc["minAltFt"].is<int>())       s_radar.minAltFt       = doc["minAltFt"].as<int>();
             if (doc["hideGround"].is<bool>())    s_radar.hideGround     = doc["hideGround"].as<bool>() ? 1 : 0;
+            s_radar.zoneCount = 0;
+            if (doc["zones"].is<JsonArrayConst>()) {
+                for (JsonVariantConst z : doc["zones"].as<JsonArrayConst>()) {
+                    if (s_radar.zoneCount >= theme_style::Radar::MAX_ZONES) break;
+                    const int r = z["r"] | 0;
+                    if (r <= 0) continue;           // a zero-radius zone masks nothing; skip it
+                    theme_style::Radar::Zone &out = s_radar.zones[s_radar.zoneCount++];
+                    out.x = z["x"] | 233;
+                    out.y = z["y"] | 233;
+                    out.r = r;
+                }
+            }
         }
     }
     {

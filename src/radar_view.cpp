@@ -684,6 +684,23 @@ static void sweep_timer_cb(lv_timer_t *t) {
 }
 
 // =============================== aircraft ====================================
+// Is this point inside a theme's exclusion zone? See theme_style::Radar::zones for why
+// these exist: they let decoration sit in the free baked background instead of in an
+// expensive layer above the aircraft. Cheap enough to call per point per frame — at most
+// six squared-distance comparisons, no square roots.
+static inline bool in_excluded_zone(lv_coord_t x, lv_coord_t y) {
+    if (!customStyled()) return false;
+    const theme_style::Radar &rs = theme_style::radar();
+    for (int i = 0; i < rs.zoneCount; ++i) {
+        const long dx = (long)x - rs.zones[i].x;
+        const long dy = (long)y - rs.zones[i].y;
+        const long r  = rs.zones[i].r;
+        if (dx * dx + dy * dy <= r * r) return true;
+    }
+    return false;
+}
+static inline bool ac_masked(const AcDraw &ac) { return in_excluded_zone(ac.pos.x, ac.pos.y); }
+
 static void draw_trail(lv_draw_ctx_t *d, const AcDraw &ac, lv_color_t col) {
     const int n = (int)ac.trail.size();
     if (n < 2) return;
@@ -694,6 +711,9 @@ static void draw_trail(lv_draw_ctx_t *d, const AcDraw &ac, lv_color_t col) {
     for (int i = 1; i < n; ++i) {
         t.opa = (lv_opa_t)(10 + 45 * i / n);
         lv_point_t a = ac.trail[i - 1], b = ac.trail[i];
+        // Hiding the aircraft but still drawing its track across the decoration would
+        // defeat the point, so a segment is dropped if either end sits in a zone.
+        if (in_excluded_zone(a.x, a.y) || in_excluded_zone(b.x, b.y)) continue;
         lv_draw_line(d, &t, &a, &b);
     }
 }
@@ -807,6 +827,9 @@ static void draw_custom_ac(lv_draw_ctx_t *d) {
 #endif
     const theme_style::Radar &rs = theme_style::radar();
     for (const AcDraw &ac : s_acs) {
+        // Masked by an exclusion zone: draw nothing for it at all, icon or off-range
+        // arrow. It reappears the moment it clears the far side.
+        if (ac_masked(ac)) continue;
         if (!ac.inRange) {
             if (!rs.offRangeEnabled) continue;
             const lv_color_t oc = lv_color_hex(rs.offRangeColor);
@@ -985,6 +1008,7 @@ static void ac_draw_cb(lv_event_t *e) {
     int balls = 0, arrows = 0;
 
     for (const AcDraw &ac : s_acs) {
+        if (ac_masked(ac)) continue;   // exclusion zones apply to the stock scopes too
         if (drg) {
             if (ac.inRange) {
                 if (balls >= ORB_BLIPS) continue;   // up to 7 in-range balls
@@ -1794,7 +1818,12 @@ void update(const std::vector<Aircraft> &aircraft, const RadarSettings &s) {
                                abs((int)hist.back().x - (int)target.x) > 0 ||
                                abs((int)hist.back().y - (int)target.y) > 0;
             if (moved) {
-                if (s_flowMax > 0 && !hist.empty()) {
+                // Flow segments persist on their canvas once painted, so a segment laid
+                // down inside a zone would sit on the artwork for its entire lifetime.
+                // Tested here, at creation, rather than at draw time.
+                if (s_flowMax > 0 && !hist.empty() &&
+                    !in_excluded_zone(hist.back().x, hist.back().y) &&
+                    !in_excluded_zone(target.x, target.y)) {
                     FlowSeg seg = { hist.back(), target, s_flowGen };
                     s_flow.push_back(seg);
                     while ((int)s_flow.size() > s_flowMax) s_flow.pop_front();
@@ -2230,7 +2259,10 @@ void select(int idx) {
 // in range), and steps by dir with wraparound.
 void selectNext(int dir) {
     std::vector<int> inRangeIdx;
-    for (int i = 0; i < (int)s_acs.size(); ++i) if (s_acs[i].inRange) inRangeIdx.push_back(i);
+    // Masked aircraft are excluded from the knob's cycle: landing a selection on a
+    // contact the person cannot see reads as the knob doing nothing.
+    for (int i = 0; i < (int)s_acs.size(); ++i)
+        if (s_acs[i].inRange && !ac_masked(s_acs[i])) inRangeIdx.push_back(i);
     const int n = (int)inRangeIdx.size();
     if (n == 0) { select(-1); return; }
     int pos = 0;   // 0 = "none"; 1..n = inRangeIdx[pos-1]

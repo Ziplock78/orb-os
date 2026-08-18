@@ -204,6 +204,22 @@ struct Radar {
     int      maxAircraft     = -1;     // how many contacts the scope follows at once
     int      minAltFt        = -1;     // ignore anything below this altitude
     int      hideGround      = -1;     // 1 = never show aircraft on the ground, 0 = show, -1 = unset
+
+    // Exclusion zones: circles on the 466x466 dial where aircraft are not drawn.
+    //
+    // These exist so decorative artwork can live in the BAKED BACKGROUND instead of in a
+    // layer above the aircraft. Measured 2026-08-17: Steam Punk's brass bezel, as a layer
+    // above the movers, cost 24% of the radar's frame rate; the same art baked into the
+    // background costs nothing at all. A zone gets the same visual result — aircraft never
+    // cross the decoration — for a handful of comparisons per poll.
+    //
+    // Aircraft inside a zone vanish and reappear on the far side. They are hidden, not
+    // dropped: a tracked contact keeps its slot while masked, or the scope would discard
+    // it on entering and adopt a replacement, which is the churn sticky tracking removes.
+    static constexpr int MAX_ZONES = 6;
+    struct Zone { int x = 233, y = 233, r = 0; };   // r <= 0 means the slot is unused
+    Zone     zones[MAX_ZONES];
+    int      zoneCount       = 0;
 };
 
 struct MenuText {
