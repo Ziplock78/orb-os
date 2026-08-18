@@ -2015,6 +2015,15 @@ void setup() {
         g_pendingSlug   = slug;
         g_applySlugAtMs = millis() + 400;
     });
+    // Diagnostic: hide/show one radar layer live, so each layer's per-frame cost can be
+    // priced by watching fps change instead of reflashing once per hypothesis. Nothing
+    // persists it; a reboot or re-entering the app puts every layer back.
+    g_web.on("/rdbg", []{
+        const int  kind = g_web.arg("layer").toInt();
+        const bool hide = (g_web.arg("hide") != "0");
+        radar::debugHideLayer(kind, hide);
+        g_web.send(200, "text/plain", hide ? "hidden" : "shown");
+    });
     // Machine-readable device state, so diagnosis starts from facts instead of from a
     // photograph of the screen (workflow rule R2). largest_block matters as much as
     // free: an allocation can fail with plenty of total free PSRAM if churn has

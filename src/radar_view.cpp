@@ -1086,6 +1086,27 @@ static void applyRadarLayerOrder() {
 
 namespace radar {
 
+// Diagnostic: hide a single layer so its cost shows up as a frame-rate delta.
+// Deliberately blunt and deliberately not persisted — it exists to answer "which
+// layer is expensive" with a measurement rather than an argument.
+void debugHideLayer(int kind, bool hide) {
+    lv_obj_t *o = nullptr;
+    switch (kind) {
+        case 0: o = (customStyled() && theme_style::radar().sweepTypeImage) ? s_sweepImg : s_sweep; break;
+        case 1: o = s_acLayer;      break;
+        case 2: o = s_textCanvas;   break;
+        case 3: o = s_staticImg[0]; break;
+        case 4: o = s_staticImg[1]; break;
+        case 5: o = s_dimLayer;     break;
+        case 6: o = s_plateImg;     break;
+        case 7: o = s_gridLayer;    break;   // map: roads + coastline + airports, re-vectored per draw
+        default: return;
+    }
+    if (o) show(o, !hide);
+    Serial.printf("[radar] debug: layer %d %s\n", kind, hide ? "hidden" : "shown");
+}
+
+
 static void refresh_custom_text();   // defined near select()/selected(); update() below needs it forward-declared
 
 void setTheme(int t) {

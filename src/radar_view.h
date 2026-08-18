@@ -85,6 +85,10 @@ void cycleTheme();
 void flashThemeName();                           // briefly show the current theme's name banner (on touch)
 void setThemeChangedCb(void (*cb)(int theme));   // called when the theme changes (for persistence)
 void setRangeLabelVisible(bool v);               // hide the built-in range label (UI shows its own)
+// Diagnostic only: hide one layer at runtime so its per-frame cost can be priced
+// by difference, instead of reflashing once per hypothesis. kind: 0=sweep,
+// 1=aircraft, 2=text, 3=static1, 4=static2, 5=wash, 6=plate. Not persisted.
+void debugHideLayer(int kind, bool hide);
 void setSweepEnabled(bool on);                   // show/hide the rotating sweep line
 bool sweepEnabled();
 void setAirportsEnabled(bool on);                // show/hide airport markers on the scope
