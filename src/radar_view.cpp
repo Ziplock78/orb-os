@@ -632,7 +632,18 @@ static void sweep_timer_cb(lv_timer_t *t) {
     uint32_t dtMs = s_lastSweepMs ? (uint32_t)(nowMs - s_lastSweepMs) : (uint32_t)SWEEP_FRAME_MS;
     s_lastSweepMs = nowMs;
     if (dtMs > 500) dtMs = SWEEP_FRAME_MS;   // returning from a stall shouldn't teleport the sweep
-    s_sweepDeg += speedDps * (float)dtMs / 1000.0f;
+    // Advance by a SMOOTHED frame time, not the raw one. Raw elapsed-time stepping keeps
+    // the rotation speed exactly right, but when frame times wobble (66-100 ms on this
+    // hardware) the angular step wobbles with them, +-40%, and that variance IS the
+    // stutter the eye picks up. Zion's stated priority is explicit: perfectly even
+    // motion beats exactly correct speed. An EMA drifts the speed by a few percent
+    // while it adapts, which nobody can see; uneven steps are what everybody sees.
+    static float s_emaDtMs = 0.0f;
+    if (s_emaDtMs <= 0.0f) s_emaDtMs = (float)dtMs;
+    s_emaDtMs += 0.08f * ((float)dtMs - s_emaDtMs);
+    if (s_emaDtMs < 20.0f) s_emaDtMs = 20.0f;
+    if (s_emaDtMs > 400.0f) s_emaDtMs = 400.0f;
+    s_sweepDeg += speedDps * s_emaDtMs / 1000.0f;
     if (s_sweepDeg >= 360.0f) s_sweepDeg -= 360.0f;
     // Image-type sweep: same angle, rotated as a real lv_img instead of the
     // vector wedge's manual bounding-box invalidation below.
@@ -1096,6 +1107,8 @@ static void applyRadarLayerOrder() {
 
 namespace radar {
 
+static void apply_grid_visibility();   // defined with the flatten pass, used by the probe below
+
 // Diagnostic: hide a single layer so its cost shows up as a frame-rate delta.
 // Deliberately blunt and deliberately not persisted — it exists to answer "which
 // layer is expensive" with a measurement rather than an argument.
@@ -1112,6 +1125,10 @@ void debugHideLayer(int kind, bool hide) {
         case 7: o = s_gridLayer;    break;   // map: roads + coastline + airports, re-vectored per draw
         default: return;
     }
+    // "Show" for the map layer means "whatever the bake decided", not blindly visible:
+    // un-hiding a map that is baked into the background would turn per-frame
+    // re-vectoring back on, which is exactly what the probe did to tonight's baseline.
+    if (kind == 7 && !hide) { apply_grid_visibility(); return; }
     if (o) show(o, !hide);
     Serial.printf("[radar] debug: layer %d %s\n", kind, hide ? "hidden" : "shown");
 }
