@@ -1377,6 +1377,124 @@ void init(void *lv_parent) {
 }
 
 // (Re-)attach the plate/overlay image sources, decoding lazily if needed.
+// ---------------- flattened static background ----------------
+// The radar's lower layers never change, but every sweep frame made LVGL
+// re-blend all of them across the area the rotating hand dirties (roughly
+// two thirds of the screen). Measured: ~880 ms of every second inside LVGL,
+// ~6 fps, which is what made the sweep step ~2.2 deg at a time instead of turn.
+//
+// So they are composited ONCE here, into a single opaque image, and the plate
+// object is pointed at that instead. Per frame the base then costs one plain
+// copy rather than a stack of alpha blends.
+//
+// Which layers may be absorbed is decided by the theme's own layer order, not
+// assumed: walk it from the back and take static layers until the first thing
+// that moves. Anything above a moving layer has to stay live or it would be
+// drawn underneath something it is supposed to cover. For Steam Punk's
+// { 3, 5, 1, 2, 0, 4 } that absorbs static1 and the colour wash, and leaves
+// static2 alone because it sits above the sweep on purpose.
+//
+// Drawing is done with LVGL's own canvas rather than hand-rolled blending, so
+// the merged result is produced by the exact code path that drew the layers
+// separately. Scale, opacity and centring therefore match by construction.
+static lv_color_t  *s_flatBuf    = nullptr;    // PSRAM, SCREEN_W*SCREEN_H
+static lv_obj_t    *s_flatCanvas = nullptr;    // offscreen only; never parented into the view
+static bool         s_flatOn     = false;
+static bool         s_flatTook[3] = { false, false, false };   // static1, static2, wash
+
+static void release_flat_background() {
+    if (s_flatCanvas) { lv_obj_del(s_flatCanvas); s_flatCanvas = nullptr; }
+    if (s_flatBuf)    { heap_caps_free(s_flatBuf); s_flatBuf = nullptr; }
+    s_flatOn = false;
+    s_flatTook[0] = s_flatTook[1] = s_flatTook[2] = false;
+}
+
+static void rebuild_flat_background() {
+    s_flatOn = false;
+    s_flatTook[0] = s_flatTook[1] = s_flatTook[2] = false;
+    if (!customStyled() || !s_plateImg) return;
+
+    const lv_img_dsc_t *plate = radar_custom_plate();
+    if (!plate) return;   // nothing opaque to build on; leave the live stack alone
+
+    // Which layers sit below the first moving one.
+    static const int order[] = CUSTOM_RADAR_LAYER_ORDER;
+    bool take[3] = { false, false, false };
+    int  taken = 0;
+    for (int i = 0; i < CUSTOM_RADAR_LAYER_ORDER_N; ++i) {
+        const int k = order[i];
+        if (k == 0 || k == 1 || k == 2) break;      // sweep / aircraft / text: stop here
+        if (k == 3) { take[0] = true; ++taken; }
+        else if (k == 4) { take[1] = true; ++taken; }
+        else if (k == 5) { take[2] = true; ++taken; }
+    }
+    if (!taken) return;   // nothing to merge; not worth 434 KB to copy the plate alone
+
+    const theme_style::Radar &rs = theme_style::radar();
+    const theme_style::RadarStatic *st[2] = { &rs.static1, &rs.static2 };
+    // Recheck that the layers we picked are actually contributing; a theme can
+    // list a layer in its order and then switch it off.
+    bool any = false;
+    for (int i = 0; i < 2; ++i) if (take[i] && st[i]->show && radar_custom_static(i)) any = true;
+    if (take[2] && rs.overlayEnabled && rs.overlayOpacity > 0) any = true;
+    if (!any) return;
+
+    if (!s_flatBuf) {
+        s_flatBuf = (lv_color_t *)heap_caps_malloc((size_t)SCREEN_W * SCREEN_H * sizeof(lv_color_t),
+                                                   MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        if (!s_flatBuf) { Serial.println("[radar] flatten: no PSRAM, keeping live layers"); return; }
+    }
+    if (!s_flatCanvas) {
+        // Parented to the screen but permanently hidden: it exists to own the
+        // buffer and give lv_canvas_draw_* somewhere to render, never to display.
+        s_flatCanvas = lv_canvas_create(lv_scr_act());
+        if (!s_flatCanvas) { Serial.println("[radar] flatten: no canvas"); return; }
+        lv_obj_add_flag(s_flatCanvas, LV_OBJ_FLAG_HIDDEN);
+    }
+    lv_canvas_set_buffer(s_flatCanvas, s_flatBuf, SCREEN_W, SCREEN_H, LV_IMG_CF_TRUE_COLOR);
+
+    // 1. the plate, filling the canvas
+    {
+        lv_draw_img_dsc_t d; lv_draw_img_dsc_init(&d);
+        lv_canvas_draw_img(s_flatCanvas, 0, 0, plate, &d);
+    }
+    // 2. the decorative statics we are allowed to absorb, same transform as the
+    //    live path above (zoom about the image's own centre, positioned by
+    //    unscaled w/h so the visual centre lands on x,y at any scale)
+    for (int i = 0; i < 2; ++i) {
+        if (!take[i] || !st[i]->show) continue;
+        const lv_img_dsc_t *img = radar_custom_static(i);
+        if (!img) continue;
+        lv_draw_img_dsc_t d; lv_draw_img_dsc_init(&d);
+        d.zoom    = (uint16_t)lroundf(st[i]->scale * 256.0f);
+        d.opa     = (lv_opa_t)st[i]->opacity;
+        d.pivot.x = (lv_coord_t)(img->header.w / 2);
+        d.pivot.y = (lv_coord_t)(img->header.h / 2);
+        lv_canvas_draw_img(s_flatCanvas,
+                           (lv_coord_t)(st[i]->x - (int)img->header.w / 2),
+                           (lv_coord_t)(st[i]->y - (int)img->header.h / 2), img, &d);
+        s_flatTook[i] = true;
+    }
+    // 3. the colour wash, over everything absorbed so far
+    if (take[2] && rs.overlayEnabled && rs.overlayOpacity > 0) {
+        lv_draw_rect_dsc_t d; lv_draw_rect_dsc_init(&d);
+        d.bg_color = lv_color_hex(rs.overlayColor);
+        d.bg_opa   = (lv_opa_t)rs.overlayOpacity;
+        d.radius   = 0;
+        lv_canvas_draw_rect(s_flatCanvas, 0, 0, SCREEN_W, SCREEN_H, &d);
+        s_flatTook[2] = true;
+    }
+
+    // Swap the plate over to the merged image and retire what it now contains.
+    lv_img_set_src(s_plateImg, lv_canvas_get_img(s_flatCanvas));
+    show(s_plateImg, true);
+    for (int i = 0; i < 2; ++i) if (s_flatTook[i] && s_staticImg[i]) show(s_staticImg[i], false);
+    if (s_flatTook[2] && s_dimLayer) show(s_dimLayer, false);
+    s_flatOn = true;
+    Serial.printf("[radar] flattened into the plate: static1=%d static2=%d wash=%d\n",
+                  (int)s_flatTook[0], (int)s_flatTook[1], (int)s_flatTook[2]);
+}
+
 // Call once at init(), and again from Flight Tracker's onEnter after an
 // onExit released the decoded PSRAM (radar_sprite_release()) — an image
 // object's src has to be re-set after that, the same way the clock's
@@ -1440,6 +1558,12 @@ void refreshCustomStyle() {
             show(s_dimLayer, false);
         }
     }
+    // Merge the unchanging lower layers now that every one of them has been given
+    // its current source, position, scale and opacity. Runs last on purpose: it
+    // reads the finished state rather than trying to predict it, and it hides only
+    // what it has actually absorbed, so a failure here degrades to the live stack
+    // rather than to a missing layer.
+    rebuild_flat_background();
     applyRadarLayerOrder();
 }
 
