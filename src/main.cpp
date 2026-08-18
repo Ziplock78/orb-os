@@ -113,6 +113,10 @@ static volatile bool         g_onBattery = false;                    // discharg
 static bool                  g_rtcSynced = false;                    // RTC written from NTP this session?
 static std::vector<Aircraft> g_snap;                                 // last snapshot (instant re-render on zoom)
 static volatile bool         g_requery = false;                      // range changed -> adsb_task re-begins
+// Diagnostic override for the ADS-B poll interval (0 = use the compiled default). Exists
+// because the poll is the biggest periodic work on the device and the prime suspect for a
+// periodic frame hitch: proving that by changing one number live beats one flash per guess.
+static volatile uint32_t     g_pollOverrideMs = 0;
 static float                 g_requeryKm = 0.0f;
 static volatile bool         g_feedOk = true;                        // ADS-B feed healthy? (HUD warning)
 // Flight Tracker is the only consumer of ADS-B data, but adsb_task used to poll it
@@ -220,7 +224,8 @@ static void adsb_task(void*) {
             // can block this single network task, so it must never get ahead of the feed.
             const uint32_t nowMs = millis();
             const uint32_t pollInterval =
-                (g_onBattery ? POLL_INTERVAL_BATTERY_MS : POLL_INTERVAL_MS) + adsbBackoffMs;
+                (g_pollOverrideMs ? g_pollOverrideMs
+                                  : (g_onBattery ? POLL_INTERVAL_BATTERY_MS : POLL_INTERVAL_MS)) + adsbBackoffMs;
             if (radarActive && (lastPoll == 0 || nowMs - lastPoll >= pollInterval)) {  // aircraft feed, Flight Tracker only
                 lastPoll = nowMs;
                 static int failCount = 0;
@@ -2025,6 +2030,12 @@ void setup() {
     // priced by watching fps change instead of reflashing once per hypothesis. Nothing
     // persists it; a reboot or re-entering the app puts every layer back.
     g_web.on("/rdbg", []{
+        if (g_web.hasArg("poll")) {
+            g_pollOverrideMs = (uint32_t)g_web.arg("poll").toInt();
+            Serial.printf("[adsb] poll interval override -> %lu ms\n", (unsigned long)g_pollOverrideMs);
+            g_web.send(200, "text/plain", "poll set");
+            return;
+        }
         const int  kind = g_web.arg("layer").toInt();
         const bool hide = (g_web.arg("hide") != "0");
         radar::debugHideLayer(kind, hide);
@@ -2169,9 +2180,20 @@ void loop() {
             g_snap.swap(g_aircraft);   // O(1) handoff under the lock; render on g_snap outside it.
             g_acDirty = false;         // g_aircraft now holds the previous snapshot (overwritten next poll)
             xSemaphoreGive(g_ac_mutex);
+            // Timed because this is the one chunk of per-poll work that lands on the
+            // RENDER thread: everything else about a poll happens on core 0. If a poll
+            // costs a visible stutter, this is where it is spent.
+            const uint32_t upd0 = micros();
             radar::update(g_snap, g_settings); // rebuild the glyph/trail layer
+            const uint32_t upd1 = micros();
             ui_on_data_updated();              // refresh card/list/stats
+            const uint32_t upd2 = micros();
             checkAudioEvents();                // ping new-in-range / emergency / military
+            const uint32_t upd3 = micros();
+            Serial.printf("[perf] snapshot %u ac: update %lu us, ui %lu us, audio %lu us, total %lu us\n",
+                          (unsigned)g_snap.size(),
+                          (unsigned long)(upd1 - upd0), (unsigned long)(upd2 - upd1),
+                          (unsigned long)(upd3 - upd2), (unsigned long)(upd3 - upd0));
         }
     }
     if (g_weatherDirty) {

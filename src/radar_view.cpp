@@ -125,7 +125,7 @@ static struct { void printf(const char *fmt, ...) const { va_list a; va_start(a,
 #define AC_INTERP_MS      2000
 #define TRAIL_MAX         7
 #define TAP_RADIUS_PX     40    // generous finger-tap catch radius (picks the nearest glyph within it)
-#define FLOW_MAX          700
+#define FLOW_MAX          240   // see setTrailLength: repaint cost is ~300 us per segment
 #define FLOW_REDRAW_EVERY 80
 #define FLOW_OPA          55
 #define ORB_BLIPS      7
@@ -1228,9 +1228,13 @@ bool airportsEnabled() { return s_airportsEnabled; }
 void setTrailLength(int level) {
     switch (level) {
         case 0: s_trailMax = 0;  s_flowMax = 0;    s_flowGenMax = 0;  break;
-        case 1: s_trailMax = 3;  s_flowMax = 150;  s_flowGenMax = 8;  break;   // ~16 s
-        case 3: s_trailMax = 12; s_flowMax = 1500; s_flowGenMax = 30; break;   // ~60 s
-        default: s_trailMax = 7; s_flowMax = 700;  s_flowGenMax = 14; break;   // ~28 s
+        // Segment counts halved from (150/1500/700). A repaint costs roughly 300 us per
+        // segment on this hardware — that is LVGL canvas draw-call overhead, not line
+        // length — so 700 segments is a 210 ms repaint and 240 is a 70 ms one. Even
+        // batched, a repaint should fit inside about one frame rather than three.
+        case 1: s_trailMax = 3;  s_flowMax = 80;   s_flowGenMax = 8;  break;   // ~16 s
+        case 3: s_trailMax = 12; s_flowMax = 700;  s_flowGenMax = 30; break;   // ~60 s
+        default: s_trailMax = 7; s_flowMax = 240;  s_flowGenMax = 14; break;   // ~28 s
     }
     if (s_flowMax == 0) { s_flow.clear(); s_trails.clear(); }
     else while ((int)s_flow.size() > s_flowMax) s_flow.pop_front();
@@ -1784,12 +1788,32 @@ void update(const std::vector<Aircraft> &aircraft, const RadarSettings &s) {
     // polls so old tracks self-clear even in busy airspace (a 5 nm view doesn't stay caked
     // in green). If any were dropped, repaint the flow canvas so they actually disappear.
     if (s_flowGenMax > 0 && !s_flow.empty()) {
-        bool pruned = false;
-        while (!s_flow.empty() && (uint16_t)(s_flowGen - s_flow.front().gen) > (uint16_t)s_flowGenMax) {
-            s_flow.pop_front();
-            pruned = true;
+        // Expire old segments, but do NOT repaint on every prune.
+        //
+        // The flow canvas is additive, so removing a segment means clearing and redrawing
+        // every remaining one. That made one or two segments ageing out cost a full
+        // repaint of up to 700, measured at 210-330 ms ON THE RENDER THREAD — three-plus
+        // dropped frames, every poll, which is precisely the periodic stutter in the
+        // sweep. The work was wildly disproportionate to the change: repaint everything
+        // to remove two.
+        //
+        // So expiry is batched. Segments linger a little past their age limit until
+        // enough have accumulated to be worth one repaint. A trail tail fading a beat
+        // late is invisible; the sweep hitching is not, and Zion's stated priority is
+        // explicit that even motion wins.
+        size_t expired = 0;
+        while (expired < s_flow.size() &&
+               (uint16_t)(s_flowGen - s_flow[expired].gen) > (uint16_t)s_flowGenMax) {
+            ++expired;
         }
-        if (pruned) flow_redraw_all();
+        const size_t batch = s_flow.size() / 6 > 12 ? s_flow.size() / 6 : 12;
+        // Repaint when a worthwhile batch has expired, or when everything has (the tail
+        // of a fade-out, where waiting for a batch that will never arrive would strand
+        // the last few segments on screen).
+        if (expired >= batch || (expired > 0 && expired == s_flow.size())) {
+            s_flow.erase(s_flow.begin(), s_flow.begin() + expired);
+            flow_redraw_all();
+        }
     }
 
     // nearest first (the blips + the list); cap to keep work bounded (web-configurable)
