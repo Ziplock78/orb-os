@@ -134,7 +134,7 @@ int weatherview::fetchStep(double lat, double lon) {
     if (WiFi.status() != WL_CONNECTED || s_capacity == 0 || !s_scratch || !ensure_decoder()) return 0;
 
     String meta;
-    if (!https_get("https://api.rainviewer.com/public/weather-maps.json", meta, 6500)) {
+    if (!https_get("http://api.rainviewer.com/public/weather-maps.json", meta, 6500)) {
         Serial.println("[wxa] metadata fetch failed"); return 0;
     }
     JsonDocument doc;

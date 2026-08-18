@@ -167,13 +167,21 @@ namespace {
 
 #ifdef ARDUINO
     bool http_json(const char *url, JsonDocument &doc, const JsonDocument *filter) {
-        WiFiClientSecure client;
-        client.setInsecure();
+        // Scheme-aware, because this helper serves three endpoints and they no longer agree:
+        // the two open-meteo/bigdatacloud lookups moved to plain HTTP so they stop dying on
+        // the TLS memory limit (see ADSB_PRIMARY_TLS in config.h), while Wikivoyage redirects
+        // HTTP to HTTPS and so has no choice. Picking off the URL keeps that a per-endpoint
+        // fact rather than one this function has to be told.
+        const bool tls = (strncmp(url, "https://", 8) == 0);
+        WiFiClient       plain;
+        WiFiClientSecure secure;
+        WiFiClient      *client = &plain;
+        if (tls) { secure.setInsecure(); client = &secure; }
         HTTPClient http;
         http.setConnectTimeout(4000);
         http.setTimeout(6000);
         http.setUserAgent("CapsuleRadar/1.0 (esp32; contact: device)");
-        if (!http.begin(client, url)) return false;
+        if (!http.begin(*client, url)) return false;
         const int code = http.GET();
         if (code != 200) { Serial.printf("[locinfo] HTTP %d\n", code); http.end(); return false; }
         // Read the whole body first (handles chunked transfer-encoding, which a raw
@@ -218,7 +226,7 @@ namespace {
     void step_geo(double lat, double lon) {
         char url[224];
         snprintf(url, sizeof(url),
-                 "https://api.bigdatacloud.net/data/reverse-geocode-client?latitude=%.5f&longitude=%.5f&localityLanguage=en",
+                 "http://api.bigdatacloud.net/data/reverse-geocode-client?latitude=%.5f&longitude=%.5f&localityLanguage=en",
                  lat, lon);
         // Filter to just the four fields we use — the full response carries a large
         // localityInfo array that would blow the fragmented internal heap on parse.
@@ -246,7 +254,7 @@ namespace {
     void step_wx(double lat, double lon) {
         char url[224];
         snprintf(url, sizeof(url),
-                 "https://api.open-meteo.com/v1/forecast?latitude=%.5f&longitude=%.5f&current=temperature_2m,surface_pressure&temperature_unit=fahrenheit",
+                 "http://api.open-meteo.com/v1/forecast?latitude=%.5f&longitude=%.5f&current=temperature_2m,surface_pressure&temperature_unit=fahrenheit",
                  lat, lon);
         JsonDocument doc;
         if (http_json(url, doc, nullptr)) {

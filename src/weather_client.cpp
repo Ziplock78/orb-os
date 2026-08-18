@@ -13,13 +13,17 @@ bool weather_fetch(double lat, double lon, WeatherSnapshot &out) {
 
     char url[512];
     snprintf(url, sizeof(url),
-             "https://api.open-meteo.com/v1/forecast?latitude=%.5f&longitude=%.5f"
+             // Plain HTTP, same reason as the ADS-B feed: this board cannot raise the two
+             // contiguous ~16 KB internal buffers a TLS handshake needs, so every HTTPS
+             // request here failed with '-32512 SSL memory allocation failed' and the
+             // weather stayed blank. See the ADSB_PRIMARY_TLS notes in config.h. The
+             // certificate was never verified anyway, and no credentials are sent.
+             "http://api.open-meteo.com/v1/forecast?latitude=%.5f&longitude=%.5f"
              "&current=temperature_2m,apparent_temperature,relative_humidity_2m,weather_code,wind_speed_10m,wind_direction_10m"
              "&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max"
              "&forecast_days=4&timezone=auto", lat, lon);
 
-    WiFiClientSecure client;
-    client.setInsecure();
+    WiFiClient client;
     HTTPClient http;
     http.setReuse(false);
     http.setConnectTimeout(3500);
@@ -32,11 +36,11 @@ bool weather_fetch(double lat, double lon, WeatherSnapshot &out) {
 
     const int status = http.GET();
     if (status != 200) {
-        char tls[128] = "";
-        const int tlsCode = client.lastError(tls, sizeof(tls));
-        Serial.printf("[weather] HTTP %d: %s tls=%d '%s' heap=%u largest=%u psram=%u\n", status,
+        // No TLS state to report now that this runs over plain HTTP; the heap numbers stay
+        // because they are what diagnosed the original failure and are cheap to keep.
+        Serial.printf("[weather] HTTP %d: %s heap=%u largest=%u psram=%u\n", status,
                       status < 0 ? http.errorToString(status).c_str() : "unexpected response",
-                      tlsCode, tls, (unsigned)ESP.getFreeHeap(),
+                      (unsigned)ESP.getFreeHeap(),
                       (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL),
                       (unsigned)ESP.getFreePsram());
         http.end();

@@ -4,32 +4,8 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
-extern const lv_font_t custom_font1;
-extern const lv_font_t custom_font2;
 #ifdef __cplusplus
 }
 #endif
-#define CUSTOM_HAS_TEXT1 1
-#define CUSTOM_TEXT1_FONT (&custom_font1)
-#define CUSTOM_TEXT1_X 233
-#define CUSTOM_TEXT1_Y 124
-#define CUSTOM_TEXT1_COLOR 0x303030
-#define CUSTOM_TEXT1_GLOW 0
-#define CUSTOM_TEXT1_GLOWCOLOR 0xEDE6D3
-#define CUSTOM_TEXT1_FMT "%I:%M"
-#define CUSTOM_TEXT1_CURVED 0
-#define CUSTOM_TEXT1_CURVE_R 0
-#define CUSTOM_TEXT1_ARCDEG 0.00f
-#define CUSTOM_TEXT1_ALIGN 1
-#define CUSTOM_HAS_TEXT2 1
-#define CUSTOM_TEXT2_FONT (&custom_font2)
-#define CUSTOM_TEXT2_X 233
-#define CUSTOM_TEXT2_Y 164
-#define CUSTOM_TEXT2_COLOR 0x707070
-#define CUSTOM_TEXT2_GLOW 0
-#define CUSTOM_TEXT2_GLOWCOLOR 0xEDE6D3
-#define CUSTOM_TEXT2_FMT "%a, %d %b"
-#define CUSTOM_TEXT2_CURVED 0
-#define CUSTOM_TEXT2_CURVE_R 0
-#define CUSTOM_TEXT2_ARCDEG 0.00f
-#define CUSTOM_TEXT2_ALIGN 1
+#define CUSTOM_HAS_TEXT1 0
+#define CUSTOM_HAS_TEXT2 0

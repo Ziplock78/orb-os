@@ -54,8 +54,25 @@ static const float RANGE_STEPS_KM[] = {10.0f, 20.0f, 30.0f, 50.0f, 100.0f};
 #define IDLE_DIM_MS         3600000UL      // default: dim the screen after 1 hour idle (Settings > Display)
 
 // ---------- ADS-B API (free, non-commercial) ----------
-#define ADSB_PRIMARY_HOST   "api.airplanes.live"   // GET /v2/point/{lat}/{lon}/{radius_nm}
-#define ADSB_FALLBACK_HOST  "api.adsb.lol"          // same readsb format
+// Plain HTTP on purpose, and it is what makes the radar work at all.
+//
+// A TLS handshake needs two contiguous ~16 KB buffers from internal RAM, and this board
+// cannot offer them: the largest free internal block is ~17 KB no matter what else is
+// freed. That was measured, not assumed. Routing every LVGL allocation to PSRAM changed
+// the number by exactly zero bytes, because it is a property of the memory map rather than
+// fragmentation anyone can tidy up. So every HTTPS fetch died with '-32512 SSL memory
+// allocation failed', which left the radar with no aircraft, the weather blank, and the
+// device rebooting itself every ~27 minutes on the stuck-feed watchdog.
+//
+// Dropping to HTTP costs almost nothing here, because ADSB_HTTPS_INSECURE was already 1:
+// certificates were never verified, so TLS was only hiding public flight data from
+// eavesdroppers, never authenticating the source. No credentials are sent. adsb.lol serves
+// this endpoint over HTTP; airplanes.live answers 403 to it, so that one stays on HTTPS as
+// a fallback for if the memory picture ever changes.
+#define ADSB_PRIMARY_HOST   "api.adsb.lol"          // GET /v2/point/{lat}/{lon}/{radius_nm}
+#define ADSB_PRIMARY_TLS    0
+#define ADSB_FALLBACK_HOST  "api.airplanes.live"    // same readsb format
+#define ADSB_FALLBACK_TLS   1
 #define ADSB_USER_AGENT     "CapsuleRadar/1.0 (ESP32-S3 hobby; +https://github.com/socquique/capsule-radar)"
 #define ADSB_HTTPS_INSECURE 1               // 1 = setInsecure() (hobby). 0 = use pinned root CA.
 #define ADSB_MAX_AIRCRAFT   60              // hard cap parsed per poll (protect RAM in busy areas)

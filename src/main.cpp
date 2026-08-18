@@ -856,10 +856,11 @@ int host_geocode(const char *query, char names[][40], double *lats, double *lons
     if (WiFi.status() != WL_CONNECTED || !query || strlen(query) < 2) return 0;
     String q;
     for (const char *p = query; *p; ++p) q += (*p == ' ') ? String("%20") : String(*p);
-    String url = "https://geocoding-api.open-meteo.com/v1/search?name=" + q +
+    // Plain HTTP for the same memory reason as the ADS-B and weather feeds; see the
+    // ADSB_PRIMARY_TLS notes in config.h. This is a place-name lookup with no credentials.
+    String url = "http://geocoding-api.open-meteo.com/v1/search?name=" + q +
                  "&count=" + String(maxN) + "&language=en&format=json";
-    WiFiClientSecure client;
-    client.setInsecure();
+    WiFiClient client;
     HTTPClient http;
     http.setConnectTimeout(4000);
     http.setTimeout(6000);

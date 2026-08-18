@@ -26,7 +26,17 @@
 // 64 KB pool always lived; only big ones (a parsed font is ~44 KB, the old pool's whole
 // size) go to PSRAM. Each side falls back to the other, so an allocation can degrade to
 // the slow pool or the scarce one, but never to the unchecked null that caused the loop.
+//
+// The threshold is a build flag because it is a genuine tradeoff with no obvious right
+// answer, and the two ends fail in different ways. Too high and LVGL's many medium
+// allocations live in internal RAM and chop it into pieces too small for a TLS handshake,
+// which needs two ~16 KB contiguous buffers: that is what left the radar and weather feeds
+// dead with 70 KB free but a 17 KB largest block. Too low and LVGL's per-draw scratch sits
+// behind the slower external bus. Measure before moving it; see the boot log's
+// heap/largest numbers on any [adsb] or [weather] line.
+#ifndef ORB_LV_BIG_ALLOC
 #define ORB_LV_BIG_ALLOC (16 * 1024)
+#endif
 static inline void *orb_lv_malloc(size_t size) {
     if (size >= ORB_LV_BIG_ALLOC) {
         void *p = heap_caps_malloc(size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);

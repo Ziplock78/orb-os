@@ -55,36 +55,47 @@ bool AdsbClient::poll(std::vector<Aircraft>& out) {
     if (WiFi.status() != WL_CONNECTED) return false;
     // Try each independent provider once. Retrying the primary immediately can violate its
     // one-request-per-second limit and adds another full timeout to an already slow failure.
-    if (fetchFrom(ADSB_PRIMARY_HOST, out)) return true;
-    return fetchFrom(ADSB_FALLBACK_HOST, out);
+    if (fetchFrom(ADSB_PRIMARY_HOST, ADSB_PRIMARY_TLS, out)) return true;
+    return fetchFrom(ADSB_FALLBACK_HOST, ADSB_FALLBACK_TLS, out);
 }
 
-bool AdsbClient::fetchFrom(const char* host, std::vector<Aircraft>& out) {
+bool AdsbClient::fetchFrom(const char* host, bool tls, std::vector<Aircraft>& out) {
     const double nm = _rangeKm * 0.539957;            // km -> nautical miles (API radius unit)
     char url[160];
-    snprintf(url, sizeof(url), "https://%s/v2/point/%.4f/%.4f/%.0f", host, _lat, _lon, nm);
+    snprintf(url, sizeof(url), "%s://%s/v2/point/%.4f/%.4f/%.0f",
+             tls ? "https" : "http", host, _lat, _lon, nm);
 
-    WiFiClientSecure client;
+    // Both live on the stack so the chosen one outlives the request either way. Building the
+    // secure client is cheap; it is the handshake that wants memory this board does not
+    // have, and that only happens if it is the one handed to begin().
+    WiFiClient       plain;
+    WiFiClientSecure secure;
+    WiFiClient      *client = &plain;
+    if (tls) {
 #if ADSB_HTTPS_INSECURE
-    client.setInsecure();                              // hobby: skip cert validation
+        secure.setInsecure();                          // hobby: skip cert validation
 #else
-    // client.setCACert(ROOT_CA_PEM);                  // production: pin the root CA
+        // secure.setCACert(ROOT_CA_PEM);              // production: pin the root CA
 #endif
+        client = &secure;
+    }
 
     HTTPClient http;
     http.setReuse(false);
     http.setConnectTimeout(6000);    // fail reasonably fast: a slow host must not block the
     http.setTimeout(8000);           // task (and the user's route/photo lookups) for too long
-    if (!http.begin(client, url)) { Serial.printf("[adsb] begin failed (%s)\n", host); return false; }
+    if (!http.begin(*client, url)) { Serial.printf("[adsb] begin failed (%s)\n", host); return false; }
     http.addHeader("User-Agent", ADSB_USER_AGENT);
     http.addHeader("Accept", "application/json");
 
     const int code = http.GET();
     if (code != 200) {
-        char tls[128] = "";
-        const int tlsCode = client.lastError(tls, sizeof(tls));
+        // Only the secure client can explain itself; over plain HTTP there is no TLS state
+        // to report, and asking for it would mean calling through the base pointer.
+        char tlsMsg[128] = "";
+        const int tlsCode = tls ? secure.lastError(tlsMsg, sizeof(tlsMsg)) : 0;
         Serial.printf("[adsb] HTTP %d (%s) tls=%d '%s' heap=%u largest=%u psram=%u\n",
-                      code, host, tlsCode, tls,
+                      code, host, tlsCode, tlsMsg,
                       (unsigned)ESP.getFreeHeap(),
                       (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL),
                       (unsigned)ESP.getFreePsram());

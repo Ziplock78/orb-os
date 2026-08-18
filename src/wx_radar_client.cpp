@@ -248,7 +248,7 @@ static bool https_get_string(const char *url, std::string &body, int timeoutMs) 
 // (0 on failure).
 static int load_frame_list(void) {
     std::string meta;
-    if (!https_get_string("https://api.rainviewer.com/public/weather-maps.json", meta, 6500)) {
+    if (!https_get_string("http://api.rainviewer.com/public/weather-maps.json", meta, 6500)) {
         Serial.println("[wxradar] metadata fetch failed"); return 0;
     }
     JsonDocument doc;

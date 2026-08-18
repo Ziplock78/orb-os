@@ -21,7 +21,9 @@ public:
     uint32_t lastOkMs() const { return _lastOkMs; }
 
 private:
-    bool fetchFrom(const char* host, std::vector<Aircraft>& out);   // one host, one attempt
+    // tls picks the transport per host: see the ADSB_*_TLS notes in config.h for why the
+    // primary deliberately runs over plain HTTP on this board.
+    bool fetchFrom(const char* host, bool tls, std::vector<Aircraft>& out);   // one host, one attempt
 
     double _lat = 0, _lon = 0;
     float  _rangeKm = 15.0f;
