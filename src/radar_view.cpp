@@ -1548,7 +1548,35 @@ static void take_map_snapshot() {
     lv_obj_update_layout(s_gridLayer);
     if (s_mapSnap) { lv_snapshot_free(s_mapSnap); s_mapSnap = nullptr; }
     s_mapSnap = lv_snapshot_take(s_gridLayer, LV_IMG_CF_TRUE_COLOR_ALPHA);
-    if (!s_mapSnap) Serial.println("[radar] map snapshot failed; live layer stays");
+    if (!s_mapSnap) { Serial.println("[radar] map snapshot failed; live layer stays"); return; }
+
+    // Punch the exclusion zones out of the etched map.
+    //
+    // Roads, coastline and airports come from three separate modules that know nothing
+    // about zones, and teaching each of them to clip would mean threading zone state
+    // through all three. But they have already been flattened into one RGBA image by the
+    // line above — so the whole job is a single pass over that image, zeroing alpha
+    // inside the zones. Every map layer gets masked at once, and the background art shows
+    // through cleanly where a theme asked it to.
+    //
+    // Runs only when the projection changes (home moved, range zoomed), not per frame.
+    if (customStyled() && theme_style::radar().zoneCount > 0) {
+        // LV_IMG_CF_TRUE_COLOR_ALPHA at LV_COLOR_DEPTH 16 is 3 bytes per pixel: two of
+        // colour, then the alpha byte this clears.
+        const int bpp = LV_IMG_PX_SIZE_ALPHA_BYTE;
+        uint8_t *px = (uint8_t *)s_mapSnap->data;
+        const int w = s_mapSnap->header.w, h = s_mapSnap->header.h;
+        int cleared = 0;
+        for (int y = 0; y < h; ++y) {
+            for (int x = 0; x < w; ++x) {
+                if (!in_excluded_zone((lv_coord_t)x, (lv_coord_t)y)) continue;
+                px[(y * w + x) * bpp + (bpp - 1)] = 0x00;
+                ++cleared;
+            }
+        }
+        Serial.printf("[radar] map: %d px cleared by %d exclusion zone(s)\n",
+                      cleared, theme_style::radar().zoneCount);
+    }
 }
 
 // The live map layer earns its keep only while there is no baked copy. Called after any
