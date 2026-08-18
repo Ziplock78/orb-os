@@ -420,15 +420,36 @@ void load() {
             if (doc["minAltFt"].is<int>())       s_radar.minAltFt       = doc["minAltFt"].as<int>();
             if (doc["hideGround"].is<bool>())    s_radar.hideGround     = doc["hideGround"].as<bool>() ? 1 : 0;
             s_radar.zoneCount = 0;
+            bool s_radarHasInvertZone = false;
             if (doc["zones"].is<JsonArrayConst>()) {
                 for (JsonVariantConst z : doc["zones"].as<JsonArrayConst>()) {
                     if (s_radar.zoneCount >= theme_style::Radar::MAX_ZONES) break;
-                    const int r = z["r"] | 0;
-                    if (r <= 0) continue;           // a zero-radius zone masks nothing; skip it
+                    const bool rect = z["rect"] | false;
+                    const int  r = z["r"] | 0;
+                    const int  w = z["w"] | 0;
+                    const int  h = z["h"] | 0;
+                    // A zone with no extent masks nothing, so it is dropped rather than
+                    // shipped as a shape that silently does nothing.
+                    if (rect ? (w <= 0 || h <= 0) : (r <= 0)) continue;
+                    const bool invert = z["invert"] | false;
+                    // At most ONE inverted zone. Inverted means "hide outside me", so two of
+                    // them intersect: an aircraft must be inside both to show, and two that
+                    // do not overlap hide everything, leaving a scope that looks broken
+                    // rather than configured. The editors prevent it; this is the backstop
+                    // for a hand-written theme, and it says so rather than failing quietly.
+                    if (invert && s_radarHasInvertZone) {
+                        Serial.println("[theme] ignoring extra inverted zone: only one is allowed");
+                        continue;
+                    }
+                    if (invert) s_radarHasInvertZone = true;
                     theme_style::Radar::Zone &out = s_radar.zones[s_radar.zoneCount++];
-                    out.x = z["x"] | 233;
-                    out.y = z["y"] | 233;
-                    out.r = r;
+                    out.x      = z["x"] | 233;
+                    out.y      = z["y"] | 233;
+                    out.r      = r;
+                    out.w      = w;
+                    out.h      = h;
+                    out.rect   = rect;
+                    out.invert = invert;
                 }
             }
         }

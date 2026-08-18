@@ -216,8 +216,19 @@ struct Radar {
     // Aircraft inside a zone vanish and reappear on the far side. They are hidden, not
     // dropped: a tracked contact keeps its slot while masked, or the scope would discard
     // it on entering and adopt a replacement, which is the churn sticky tracking removes.
+    //
+    // A zone is a circle or an axis-aligned rectangle, and it can be inverted. Inverted
+    // means "hide OUTSIDE this shape", which turns one zone into a containment ring: put
+    // a big inverted circle just inside the dial's border and aircraft can never encroach
+    // on it, replacing a border overlay — another layer above the movers, another 24%.
     static constexpr int MAX_ZONES = 6;
-    struct Zone { int x = 233, y = 233, r = 0; };   // r <= 0 means the slot is unused
+    struct Zone {
+        int  x = 233, y = 233;
+        int  r = 0;                 // circle radius, when rect is false
+        int  w = 0, h = 0;          // full width/height centred on x,y, when rect is true
+        bool rect   = false;
+        bool invert = false;        // true = hide outside the shape instead of inside it
+    };
     Zone     zones[MAX_ZONES];
     int      zoneCount       = 0;
 };

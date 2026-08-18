@@ -692,10 +692,18 @@ static inline bool in_excluded_zone(lv_coord_t x, lv_coord_t y) {
     if (!customStyled()) return false;
     const theme_style::Radar &rs = theme_style::radar();
     for (int i = 0; i < rs.zoneCount; ++i) {
-        const long dx = (long)x - rs.zones[i].x;
-        const long dy = (long)y - rs.zones[i].y;
-        const long r  = rs.zones[i].r;
-        if (dx * dx + dy * dy <= r * r) return true;
+        const theme_style::Radar::Zone &z = rs.zones[i];
+        bool inside;
+        if (z.rect) {
+            const long dx = (long)x - z.x, dy = (long)y - z.y;
+            inside = (dx >= -(z.w / 2) && dx <= z.w / 2 && dy >= -(z.h / 2) && dy <= z.h / 2);
+        } else {
+            const long dx = (long)x - z.x, dy = (long)y - z.y;
+            inside = (dx * dx + dy * dy <= (long)z.r * z.r);
+        }
+        // Inverted zones hide everything OUTSIDE the shape, which is how one big circle
+        // becomes a containment ring keeping aircraft off the dial's border.
+        if (inside != z.invert) return true;
     }
     return false;
 }
