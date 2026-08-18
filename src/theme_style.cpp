@@ -416,6 +416,9 @@ void load() {
             if (doc["overlayEnabled"].is<bool>()) s_radar.overlayEnabled = doc["overlayEnabled"].as<bool>();
             if (doc["overlayColor"].is<uint32_t>()) s_radar.overlayColor = doc["overlayColor"].as<uint32_t>();
             if (doc["overlayOpacity"].is<int>()) s_radar.overlayOpacity = doc["overlayOpacity"].as<int>();
+            if (doc["maxAircraft"].is<int>())    s_radar.maxAircraft    = doc["maxAircraft"].as<int>();
+            if (doc["minAltFt"].is<int>())       s_radar.minAltFt       = doc["minAltFt"].as<int>();
+            if (doc["hideGround"].is<bool>())    s_radar.hideGround     = doc["hideGround"].as<bool>() ? 1 : 0;
         }
     }
     {

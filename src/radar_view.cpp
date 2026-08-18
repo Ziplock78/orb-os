@@ -138,6 +138,13 @@ static void      (*s_themeCb)(int) = nullptr;
 // scope "chrome" palette (rings/sweep/crosshair/labels) — retinted per theme
 static lv_color_t s_cRing = COL_GREEN, s_cLead = COL_LEAD, s_cInk = COL_INK, s_cSoft = COL_SOFT;
 static const char *THEME_NAMES[THEME_COUNT] = { "ORB", "MILITARY", "AVIATOR" };
+// First-entry loading notice. Opening the Flight Tracker from cold does real work
+// before there is anything to show: the coastline, airports and roads are all projected
+// for this location, the map is etched, and the first aircraft snapshot has to arrive.
+// The sweep starts turning and then visibly stops for a few seconds, which reads as a
+// crash rather than as loading. So say what is happening.
+static lv_obj_t   *s_loading         = nullptr;
+static bool        s_loadingPending  = false;   // shown, waiting for the first update()
 static lv_obj_t   *s_themeLabel      = nullptr;   // "AVIATOR" etc. banner, shown briefly on a theme change
 static lv_timer_t *s_themeLabelTimer = nullptr;   // one-shot: hides the banner after ~2s
 static lv_obj_t  *s_parent   = nullptr;
@@ -161,6 +168,11 @@ static int        s_flowMax         = FLOW_MAX;    // persistent flow-layer segm
 static int        s_flowGenMax      = 14;          // ...and an age cap in polls (~2 s each) so tracks fade out
 static lv_timer_t *s_timer    = nullptr;
 static float       s_sweepDeg = 0.0f;
+// Sweep pacing state, at file scope so the loading gate can reset it. A multi-second
+// stall during first-entry projection would otherwise poison the smoothed frame time and
+// make the sweep lurch on its first few steps after the wait.
+static uint32_t    s_lastSweepMs = 0;
+static float       s_emaDtMs     = 0.0f;
 static float       s_prevSweepDeg = 0.0f;
 static float       s_wavePhase = 0.0f;
 static uint32_t    s_lastUpdateMs = 0;       // smooth-motion: cadence + animation clock
@@ -209,6 +221,9 @@ struct AcDraw {
     std::vector<lv_point_t> trail;
 };
 static std::vector<AcDraw> s_acs;
+// Hexes the scope is currently following. See the sticky-selection block in update() for
+// why the set persists between polls instead of being recomputed from distance each time.
+static std::set<std::string> s_tracked;
 static std::map<std::string, std::vector<lv_point_t>> s_trails;
 
 static const float GX[4] = { 0.0f,  7.0f, 0.0f, -7.0f };
@@ -407,7 +422,10 @@ static void grid_draw_cb(lv_event_t *e) {
     // not something a design push carries.
     if (customStyled()) {
         roads_sd::draw(d, road_color(), 150, 1);
-        coastline_draw(d, coast_color(), 165, 2);
+        // Coastline/waterways deliberately not drawn under a custom design. Inland it is
+        // canals and washes rather than a recognisable shoreline, and on a 466 px dial it
+        // read as clutter competing with the roads. The data still ships and the stock
+        // scopes below still draw it; only the themed path opts out.
         if (s_airportsEnabled) airports_draw(d, airport_color(), 150);
         return;
     }
@@ -482,6 +500,7 @@ static inline float sweepLenPx()    { return customStyled() ? (float)theme_style
 static inline float sweepTrailDeg() { return customStyled() ? (float)theme_style::radar().sweepTrailDeg : SWEEP_TRAIL_DEG; }
 
 static void sweep_draw_cb(lv_event_t *e) {
+    if (s_loadingPending) return;   // no hand until there is something to sweep over
     if (!customStyled() && orb()) return;
     if (customStyled() && !theme_style::radar().sweepEnabled) return;
     // Image-type sweep is a separate rotating lv_img object (s_sweepImg, see
@@ -618,6 +637,10 @@ static void sweep_timer_cb(lv_timer_t *t) {
     // switch could leave the sweep animating at a stale/wrong-theme speed even
     // though sweep_draw_cb's own coloring/trail already followed theme_style)
     if (!s_sweepEnabled || (customStyled() && !theme_style::radar().sweepEnabled)) return;
+    // Held still until the scope has data. Re-seeding the pacing state here means the
+    // first step after the wait is measured from the first real frame, not from the
+    // seconds-long projection stall that preceded it.
+    if (s_loadingPending) { s_lastSweepMs = 0; s_emaDtMs = 0.0f; return; }
     s_prevSweepDeg = s_sweepDeg;
     const float speedDps = customStyled() ? (float)theme_style::radar().sweepSpeed : (360.0f * 1000.0f / (float)SWEEP_PERIOD_MS);
     // Advance by REAL elapsed time, not by an assumed SWEEP_FRAME_MS per tick. LVGL
@@ -628,7 +651,6 @@ static void sweep_timer_cb(lv_timer_t *t) {
     // Zion spotted. Elapsed-time stepping makes the rotation correct at any frame rate
     // (it just gets chunkier as frames drop, which is honest rather than wrong).
     const uint32_t nowMs = lv_tick_get();
-    static uint32_t s_lastSweepMs = 0;
     uint32_t dtMs = s_lastSweepMs ? (uint32_t)(nowMs - s_lastSweepMs) : (uint32_t)SWEEP_FRAME_MS;
     s_lastSweepMs = nowMs;
     if (dtMs > 500) dtMs = SWEEP_FRAME_MS;   // returning from a stall shouldn't teleport the sweep
@@ -638,7 +660,6 @@ static void sweep_timer_cb(lv_timer_t *t) {
     // stutter the eye picks up. Zion's stated priority is explicit: perfectly even
     // motion beats exactly correct speed. An EMA drifts the speed by a few percent
     // while it adapts, which nobody can see; uneven steps are what everybody sees.
-    static float s_emaDtMs = 0.0f;
     if (s_emaDtMs <= 0.0f) s_emaDtMs = (float)dtMs;
     s_emaDtMs += 0.08f * ((float)dtMs - s_emaDtMs);
     if (s_emaDtMs < 20.0f) s_emaDtMs = 20.0f;
@@ -1335,6 +1356,19 @@ void init(void *lv_parent) {
     // theme-name banner: flashed briefly on a theme change or a screen tap (see
     // show_theme_label), sits below the HUD status row (y ~50-70) so it never overlaps
     // it. A solid black plaque behind white text keeps it readable over any theme/scene.
+    // Deliberately plain and unthemeable, same reasoning as the update overlay: it is a
+    // system message about the device's state, and a theme that styled it into
+    // invisibility would defeat the one job it has.
+    s_loading = make_label(parent, "Loading aircraft\nand location data", &lv_font_montserrat_20,
+                           lv_color_white(), LV_ALIGN_CENTER, 0, 0);
+    lv_obj_set_style_bg_color(s_loading, lv_color_black(), 0);
+    lv_obj_set_style_bg_opa(s_loading, LV_OPA_80, 0);
+    lv_obj_set_style_radius(s_loading, 12, 0);
+    lv_obj_set_style_pad_all(s_loading, 18, 0);
+    lv_obj_set_style_text_align(s_loading, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_style_text_line_space(s_loading, 6, 0);
+    show(s_loading, false);
+
     s_themeLabel = make_label(parent, "", &lv_font_montserrat_20, lv_color_white(), LV_ALIGN_TOP_MID, 0, 92);
     lv_obj_set_style_bg_color(s_themeLabel, lv_color_black(), 0);
     lv_obj_set_style_bg_opa(s_themeLabel, LV_OPA_90, 0);
@@ -1816,10 +1850,44 @@ void update(const std::vector<Aircraft> &aircraft, const RadarSettings &s) {
         }
     }
 
-    // nearest first (the blips + the list); cap to keep work bounded (web-configurable)
+    // Which aircraft the scope follows, and it is deliberately STICKY.
+    //
+    // This used to be "sort by distance, keep the nearest N", recomputed every poll. With
+    // a cap of five over a busy city that set churns constantly: two aircraft trade places
+    // by a kilometre and the scope drops one and adopts another on the far side of the
+    // dial. It reads as the instrument losing its mind rather than tracking anything.
+    //
+    // So a contact keeps its slot for as long as it stays trackable, and a slot only opens
+    // when the aircraft in it leaves the ring or lands. Free slots are then filled by the
+    // nearest untracked contact. The instrument follows aircraft instead of re-deciding
+    // what is interesting twice a second.
     std::sort(out.begin(), out.end(),
               [](const AcDraw &a, const AcDraw &b) { return a.distKm < b.distKm; });
-    if ((int)out.size() > s_maxOnScreen) out.resize(s_maxOnScreen);
+    if ((int)out.size() > s_maxOnScreen) {
+        // Trackable means on the scope and flying. Ground traffic is never worth a slot,
+        // and the feed already drops it when hide-ground or a minimum altitude is set —
+        // this is the backstop for when neither is.
+        auto trackable = [](const AcDraw &a) { return a.inRange && !a.onGround; };
+
+        std::vector<AcDraw> kept;
+        kept.reserve(s_maxOnScreen);
+        for (const AcDraw &a : out) {                       // incumbents first, nearest first
+            if ((int)kept.size() >= s_maxOnScreen) break;
+            if (!trackable(a)) continue;
+            if (s_tracked.find(std::string(a.hex)) != s_tracked.end()) kept.push_back(a);
+        }
+        for (const AcDraw &a : out) {                       // then backfill any free slots
+            if ((int)kept.size() >= s_maxOnScreen) break;
+            if (!trackable(a)) continue;
+            if (s_tracked.find(std::string(a.hex)) == s_tracked.end()) kept.push_back(a);
+        }
+        // Only if nothing qualified: better to show distant or grounded contacts than an
+        // empty scope, which would look broken rather than quiet.
+        if (kept.empty()) { out.resize(s_maxOnScreen); }
+        else              { out.swap(kept); }
+    }
+    s_tracked.clear();
+    for (const AcDraw &a : out) s_tracked.insert(std::string(a.hex));
 
     if (++s_flowRedrawCtr >= FLOW_REDRAW_EVERY) {
         s_flowRedrawCtr = 0;
@@ -1840,6 +1908,18 @@ void update(const std::vector<Aircraft> &aircraft, const RadarSettings &s) {
     s_animStartMs  = now;
 
     s_acs = std::move(out);
+    // The scope has real content now: the projection and etch above are done and this
+    // snapshot is live. Dismissing here rather than on a timer means the notice lasts
+    // exactly as long as the wait actually lasts.
+    if (s_loadingPending) {
+        s_loadingPending = false;
+        if (s_loading) show(s_loading, false);
+        // Mirrors refreshCustomStyle's condition for the image sweep: it is visible only
+        // when a custom design asks for the image type AND actually ships the sprite.
+        if (s_sweepImg && customStyled() && theme_style::radar().sweepTypeImage && radar_custom_sweep())
+            show(s_sweepImg, true);
+        if (s_sweep) lv_obj_invalidate(s_sweep);
+    }
     if (s_acLayer) lv_obj_invalidate(s_acLayer);
     refresh_custom_text();   // live values (alt/spd/dist/...) for the current selection, if any, just changed
 }
@@ -2174,6 +2254,15 @@ void knobEnter() {
     s_selectMode = false;
     select(-1);
     app_shell::setCaptured(false);
+    // Only when there is actually nothing on the scope. Coming back to a Flight Tracker
+    // that still holds its last snapshot has nothing to wait for, and flashing a loading
+    // notice over a working display would be its own kind of lie.
+    if (s_acs.empty()) {
+        s_loadingPending = true;
+        if (s_loading) { show(s_loading, true); lv_obj_move_foreground(s_loading); }
+        if (s_sweepImg) show(s_sweepImg, false);
+        if (s_sweep)    lv_obj_invalidate(s_sweep);   // clear the vector wedge's last frame
+    }
 }
 
 // Push: toggle selection. From the default view it grabs the knob and selects the
@@ -2205,6 +2294,8 @@ void knobTurn(int dir) {
 void knobExit() {
     radar_sprite_release();
     s_selectMode = false;
+    s_loadingPending = false;
+    if (s_loading) show(s_loading, false);   // never leave it stranded over another app
 }
 
 bool selected(AcInfo &out) {

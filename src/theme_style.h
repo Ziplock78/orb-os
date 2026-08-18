@@ -196,6 +196,14 @@ struct Radar {
     bool     overlayEnabled  = false;  // new with this field — see RadarStatic above for why there's no compiled-macro fallback
     uint32_t overlayColor    = 0x000000;
     int      overlayOpacity  = 0;      // 0..255, same convention as RadarStatic::opacity
+    // Scope behaviour, not appearance — but theme data all the same, because these were
+    // compile-time macros (CUSTOM_RADAR_MAXAC / MINALT / HIDEGROUND) baked in by a Launch
+    // Kit firmware push. A theme installed as data alone, which is what Orb Studio makes,
+    // had no way to express them. -1 means "not specified": keep whatever the welded
+    // default or the user's saved setting already chose.
+    int      maxAircraft     = -1;     // how many contacts the scope follows at once
+    int      minAltFt        = -1;     // ignore anything below this altitude
+    int      hideGround      = -1;     // 1 = never show aircraft on the ground, 0 = show, -1 = unset
 };
 
 struct MenuText {

@@ -389,6 +389,12 @@ static void loadSettings() {
 #if CUSTOM_HAS_RADAR_MAXAC
     g_maxAc = CUSTOM_RADAR_MAXAC;   // a pushed design's own "max aircraft shown" cap, same one-shot-per-boot precedent as range/boot-target
 #endif
+    // Theme data wins over the welded macro when it says anything. A theme installed as
+    // files alone (Orb Studio) can only speak through radar_style.json, and it should not
+    // be outranked by a number baked in by whichever firmware push happened to run last.
+    if (theme_style::radar().maxAircraft > 0) g_maxAc = theme_style::radar().maxAircraft;
+    if (theme_style::radar().minAltFt   >= 0) g_minAltFt = theme_style::radar().minAltFt;
+    if (theme_style::radar().hideGround >= 0) g_hideGround = (theme_style::radar().hideGround != 0);
     g_idleDimMs        = p.getUInt("idledim", IDLE_DIM_MS);
     g_units            = p.getInt("units", 0);
     g_wxUnits          = p.getInt("wxUnits", 0);
