@@ -2196,10 +2196,18 @@ void loop() {
             const uint32_t upd2 = micros();
             checkAudioEvents();                // ping new-in-range / emergency / military
             const uint32_t upd3 = micros();
-            Serial.printf("[perf] snapshot %u ac: update %lu us, ui %lu us, audio %lu us, total %lu us\n",
-                          (unsigned)g_snap.size(),
-                          (unsigned long)(upd1 - upd0), (unsigned long)(upd2 - upd1),
-                          (unsigned long)(upd3 - upd2), (unsigned long)(upd3 - upd0));
+            // Only when it actually costs a frame. This ran on every poll while the
+            // sweep stutter was being hunted, which is the right instrument but the
+            // wrong volume once it is fixed: a healthy snapshot is ~25 ms and saying so
+            // twice a second buries everything else on the console. 40 ms is half a
+            // frame at the radar's ~13 fps, so anything printed here is a real regression.
+            const uint32_t total = upd3 - upd0;
+            if (total > 40000UL) {
+                Serial.printf("[perf] SLOW snapshot %u ac: update %lu us, ui %lu us, audio %lu us, total %lu us\n",
+                              (unsigned)g_snap.size(),
+                              (unsigned long)(upd1 - upd0), (unsigned long)(upd2 - upd1),
+                              (unsigned long)(upd3 - upd2), (unsigned long)total);
+            }
         }
     }
     if (g_weatherDirty) {
