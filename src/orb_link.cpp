@@ -193,6 +193,17 @@ void put_abort() {
     s_putOpen = false;
 }
 
+// Where a put may write. /themes/ is the everyday case (Orb Studio installing a design);
+// /roads/ is the map-tile store, which otherwise had no way onto the card at all except
+// pulling the microSD out of the device. Both are device-owned data directories, and the
+// filename rules below still forbid traversal, so widening to two named roots does not
+// widen what a caller can reach.
+bool root_ok(const char *slug, bool *isRoads) {
+    if (!strcmp(slug, "roads")) { *isRoads = true; return true; }
+    *isRoads = false;
+    return slug_ok(slug);
+}
+
 void cmd_put_begin(char *args) {
     put_abort();   // a new begin implicitly abandons any half-finished transfer
     char *slug = args;
@@ -200,11 +211,14 @@ void cmd_put_begin(char *args) {
     if (file) { *file++ = '\0'; while (*file == ' ') ++file; }
     char *size = file ? strchr(file, ' ') : nullptr;
     if (size) { *size++ = '\0'; while (*size == ' ') ++size; }
-    if (!slug_ok(slug) || !fname_ok(file) || !size) { reply_error("bad put-begin"); return; }
+    bool isRoads = false;
+    if (!slug || !root_ok(slug, &isRoads))          { reply_error("bad put-begin"); return; }
+    if (!fname_ok(file) || !size)                   { reply_error("bad put-begin"); return; }
     if (!sdcard::mounted())                         { reply_error("no SD card");     return; }
 
     char path[96];
-    snprintf(path, sizeof(path), "/themes/%s/%s", slug, file);
+    if (isRoads) snprintf(path, sizeof(path), "/roads/%s", file);
+    else         snprintf(path, sizeof(path), "/themes/%s/%s", slug, file);
     // Create every missing level (same reasoning as the WiFi path: SD.mkdir does not
     // create intermediates, so a virgin card fails at /themes otherwise).
     for (int i = 1; path[i]; ++i) {

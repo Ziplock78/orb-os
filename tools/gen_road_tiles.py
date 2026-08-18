@@ -31,8 +31,10 @@ SCALE is fixed at 180 (matches coastline_data.h / roads_data.h) and is not
 stored in the file — both generator and reader agree on it by convention.
 """
 import json
+import os
 import sys
 import struct
+import time
 import urllib.request
 
 TOLERANCE_DEG = 0.0025   # same as gen_roads.py / gen_coastline.py — ~0.28km
@@ -41,7 +43,14 @@ SCALE = 180
 OVERPASS_URLS = [
     "https://overpass-api.de/api/interpreter",
     "https://overpass.kumi.systems/api/interpreter",   # fallback mirror — the default instance 504s under load
+    "https://overpass.private.coffee/api/interpreter",
+    "https://maps.mail.ru/osm/tools/overpass/api/interpreter",
 ]
+# The public instances 504 under load routinely, and a single pass over the mirror list
+# often finds every one of them busy at the same moment. Sweeping the list a few times
+# with a pause between costs nothing on a tool that runs once per city.
+OVERPASS_ROUNDS = 3
+OVERPASS_PAUSE_S = 20
 
 
 def perp_dist(p, a, b):
@@ -82,13 +91,26 @@ def tile_floor(coord, grid):
     return int(math.floor(coord / grid) * grid)
 
 
+# Road classes to include. Freeways and highways only, deliberately.
+#
+# This used to include "primary", matching gen_roads.py's older "major streets, not
+# too granular" set. On a 466 px dial over a gridded city that is far too granular:
+# in Phoenix, primary is every big surface arterial, so the scope filled with a
+# street grid that buried the aircraft it exists to show. motorway+trunk leaves the
+# interstates, the loops and the state highways — the shapes a person actually
+# recognises their city by from the air.
+#
+# Override with ROAD_CLASSES=motorway,trunk,primary to regenerate the old density.
+ROAD_CLASSES = tuple(
+    c.strip() for c in os.environ.get("ROAD_CLASSES", "motorway,trunk").split(",") if c.strip()
+)
+
+
 def fetch_overpass(south, west, north, east):
-    # motorway+trunk+primary, same classification set gen_roads.py's narrow
-    # extract uses — "major streets, not too granular". One combined regex
-    # query 504s on the public instance at this box size per gen_roads.py's
-    # notes, so issue one query per class and merge, same workaround.
+    # One combined regex query 504s on the public instance at this box size per
+    # gen_roads.py's notes, so issue one query per class and merge, same workaround.
     elements = []
-    for hwy in ("motorway", "trunk", "primary"):
+    for hwy in ROAD_CLASSES:
         q = (
             '[out:json][timeout:90];'
             f'(way["highway"="{hwy}"]({south},{west},{north},{east}););'
@@ -96,19 +118,25 @@ def fetch_overpass(south, west, north, east):
         )
         data = None
         last_err = None
-        for url in OVERPASS_URLS:
-            req = urllib.request.Request(
-                url, data=q.encode("utf-8"),
-                headers={"User-Agent": "capsule-radar-tile-gen/1.0 (github.com/zionbrock)"},
-            )
-            print(f"  querying {hwy} via {url}...", file=sys.stderr)
-            try:
-                with urllib.request.urlopen(req, timeout=120) as r:
-                    data = json.load(r)
+        for attempt in range(OVERPASS_ROUNDS):
+            if attempt:
+                print(f"  all mirrors busy, waiting {OVERPASS_PAUSE_S}s before round {attempt + 1}...", file=sys.stderr)
+                time.sleep(OVERPASS_PAUSE_S)
+            for url in OVERPASS_URLS:
+                req = urllib.request.Request(
+                    url, data=q.encode("utf-8"),
+                    headers={"User-Agent": "capsule-radar-tile-gen/1.0 (github.com/zionbrock)"},
+                )
+                print(f"  querying {hwy} via {url}...", file=sys.stderr)
+                try:
+                    with urllib.request.urlopen(req, timeout=180) as r:
+                        data = json.load(r)
+                    break
+                except Exception as e:
+                    last_err = e
+                    print(f"    failed ({e}), trying next mirror", file=sys.stderr)
+            if data is not None:
                 break
-            except Exception as e:
-                last_err = e
-                print(f"    failed ({e}), trying next mirror", file=sys.stderr)
         if data is None:
             raise last_err
         els = data.get("elements", [])
