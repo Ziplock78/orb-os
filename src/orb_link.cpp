@@ -291,6 +291,8 @@ void setThemeRequestHook(bool (*hook)(const char *)) { s_themeHook = hook; }
 
 void begin() { s_len = 0; s_overflow = false; }
 
+bool transferActive() { return s_putOpen; }
+
 void poll() {
     // Bounded per call. A host that floods the port cannot hold loop() hostage and stall
     // the knob; leftovers are simply read on the next pass a few milliseconds later.

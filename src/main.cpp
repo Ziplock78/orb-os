@@ -2148,6 +2148,16 @@ void loop() {
     g_wm.process();                 // service the WiFi config portal (non-blocking)
     g_web.handleClient();           // serve the configuration web page
     orb_link::poll();               // answer Orb Studio over the USB cable (bounded, non-blocking)
+    // Mid-install, lean into the port instead of the screen. Every chunk needs a round
+    // trip through this loop, so at the radar's ~77 ms frame the transfer crawled at one
+    // chunk per frame: 5 KB/s, against 18 KB/s with the loop free. The display is showing
+    // the update overlay throughout, so the frames being skipped here are frames of a
+    // screen nobody is looking at. Bounded so the knob and the watchdog still get their
+    // turn even if the host stalls mid-file.
+    if (orb_link::transferActive()) {
+        const uint32_t until = millis() + 40;
+        while (orb_link::transferActive() && (int32_t)(millis() - until) < 0) orb_link::poll();
+    }
     if (g_useGps) gps_poll();       // pull NMEA from the LC76G (only when GPS auto-location is on)
 
     // scheduled reboot after a fresh WiFi config (see setSaveConfigCallback)

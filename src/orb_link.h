@@ -49,6 +49,12 @@ void setThemeRequestHook(bool (*hook)(const char *slug));
 
 void begin();
 
+// True while a file transfer is mid-flight. loop() uses this to spend more of each pass
+// draining the port: during an install the screen is showing the update overlay anyway,
+// so rendering behind it is work nobody can see, and it was costing most of the transfer
+// rate (measured 18 KB/s idle vs 5 KB/s while the radar rendered).
+bool transferActive();
+
 // Drain and dispatch whatever the host has sent. Cheap when idle: one availableForRead
 // check. Safe to call every loop.
 void poll();
