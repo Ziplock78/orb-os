@@ -82,12 +82,37 @@
 // Now that the sweep advances by REAL elapsed time (see sweep_timer_cb), a slower tick
 // does not slow the rotation down — it just takes bigger angular steps per redraw. So
 // this is chosen to be achievable rather than aspirational.
+// Ask for frames at a rate the hardware can actually meet. This theme composites for
+// ~166 ms per frame (measured: 6 fps, 88% of every second inside LVGL), and this timer was
+// asking every 66 ms, two and a half times faster. The surplus requests do not produce
+// surplus frames; they just land whenever the renderer gets to them, so the gaps between
+// redraws are irregular. Since the sweep advances by real elapsed time, irregular gaps
+// become irregular angular steps, which is the jitter Zion could see.
+//
+// Slower and regular beats faster and ragged here: a steady sweep is what makes this read
+// as an instrument, and that was Zion's explicit priority over everything else on screen.
 #define SWEEP_FRAME_MS    66
 #define SWEEP_TRAIL_DEG   38.0f
 #define SWEEP_TRAIL_STEPS 20
 #define SWEEP_TRAIL_OPA   72
 
 // ---- aircraft / flow / orb config ----
+// How often aircraft glyphs are allowed to move. Deliberately coarse, and it is a product
+// decision rather than a performance accident: a steady sweep is what makes this read as an
+// instrument, while an aircraft's position being two seconds stale is invisible. Zion chose
+// that trade explicitly.
+//
+// Each step invalidates one box per aircraft that moved, and with ~28 contacts on screen
+// every one of those boxes forces LVGL to re-blend all the layers it touches. That was the
+// variable cost per frame, and variable cost is exactly what the sweep cannot tolerate:
+// because the sweep advances by real elapsed time, an unusually slow frame makes it take an
+// unusually big angular jump. Correct speed, uneven motion. Measured before this change:
+// 88% of every second inside LVGL, frame rate wandering 5-7 fps.
+//
+// Time-gated rather than counted in frames, so the cadence stays 2 s whatever the frame
+// rate is doing. A frame counter would have made this drift with the very thing it is
+// meant to stabilise.
+#define AC_INTERP_MS      2000
 #define TRAIL_MAX         7
 #define TAP_RADIUS_PX     40    // generous finger-tap catch radius (picks the nearest glyph within it)
 #define FLOW_MAX          700
@@ -553,7 +578,14 @@ static void sweep_timer_cb(lv_timer_t *t) {
     // populated default view (deselect + release the knob) so the scope doesn't
     // stay pinned on one aircraft. Runs before the early returns below.
     if (s_selectMode && (uint32_t)(lv_tick_get() - s_selActivityMs) >= SELECT_IDLE_MS) radar_exit_select();
-    if (++s_frameCtr % 3 == 0) interp_step();         // smooth glyph motion (~90 ms cadence)
+    {   // aircraft glyph motion, throttled: see AC_INTERP_MS for why this is slow on purpose
+        static uint32_t s_lastInterpMs = 0;
+        const uint32_t nowIms = lv_tick_get();
+        if (!s_lastInterpMs || (uint32_t)(nowIms - s_lastInterpMs) >= AC_INTERP_MS) {
+            s_lastInterpMs = nowIms;
+            interp_step();
+        }
+    }
     if (!customStyled() && orb()) {
         // animate the blip waves (invalidate only the ball areas)
         s_wavePhase += 0.05f;
@@ -1214,13 +1246,17 @@ void init(void *lv_parent) {
     rmark("after flow canvas");
     s_sweepImg = lv_img_create(parent);
     rmark("after sweep img");
-    // No antialiasing on the sweep's rotation. LVGL's default is bilinear filtering:
-    // every output pixel computed from four input pixels, per frame, for a blade whose
-    // edges are a soft glow to begin with. Nearest-neighbour rotation is several times
-    // cheaper and, on this element, indistinguishable — Zion's own spec for the sweep is
-    // "purely aesthetic, does not need precision, just needs to be smooth", and the
-    // biggest enemy of smooth here is per-frame transform cost.
-    lv_img_set_antialias(s_sweepImg, false);
+    // Antialias the sweep's rotation. This was previously off, on the reasoning that the
+    // blade's edges "are a soft glow to begin with" so filtering bought nothing. That was
+    // true of the sweep it was written for and is false of a themed one: Steam Punk's is
+    // hard-edged brass with gear teeth and a thin shaft, and nearest-neighbour rotation
+    // makes that fine detail crawl and snap from frame to frame. Read as jitter on device.
+    //
+    // The cost argument does not survive measurement either. The sprite is 73x227, about
+    // 16k pixels; the ~880 ms/s this screen spends in LVGL goes on recompositing the
+    // near-full-screen area the rotation dirties, not on the transform itself. Filtering
+    // it is close to free at this size.
+    lv_img_set_antialias(s_sweepImg, true);
     lv_obj_clear_flag(s_sweepImg, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
     lv_obj_add_flag(s_sweepImg, LV_OBJ_FLAG_HIDDEN);
 
