@@ -420,6 +420,12 @@ void load() {
             if (doc["minAltFt"].is<int>())       s_radar.minAltFt       = doc["minAltFt"].as<int>();
             if (doc["hideGround"].is<bool>())    s_radar.hideGround     = doc["hideGround"].as<bool>() ? 1 : 0;
             if (doc["simulate"].is<bool>())      s_radar.simulate       = doc["simulate"].as<bool>();
+            if (doc["sweepPivotX"].is<int>())    s_radar.sweepPivotX    = doc["sweepPivotX"].as<int>();
+            if (doc["sweepPivotY"].is<int>())    s_radar.sweepPivotY    = doc["sweepPivotY"].as<int>();
+            if (doc["sweepCenterX"].is<int>())   s_radar.sweepCenterX   = doc["sweepCenterX"].as<int>();
+            if (doc["sweepCenterY"].is<int>())   s_radar.sweepCenterY   = doc["sweepCenterY"].as<int>();
+            if (doc["blipPivotX"].is<int>())     s_radar.blipPivotX     = doc["blipPivotX"].as<int>();
+            if (doc["blipPivotY"].is<int>())     s_radar.blipPivotY     = doc["blipPivotY"].as<int>();
             s_radar.zoneCount = 0;
             bool s_radarHasInvertZone = false;
             if (doc["zones"].is<JsonArrayConst>()) {

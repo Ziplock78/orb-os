@@ -209,6 +209,21 @@ struct Radar {
     // that is predictable rather than whatever the sky is doing.
     bool     simulate        = false;
 
+    // Rotation pivots for image-type sweeps and blips, in their own image's pixels.
+    //
+    // These were CUSTOM_SWEEP_IMAGE_PIVOT_* / CUSTOM_RADAR_BLIP_PIVOT_*, compiled in by
+    // whichever Launch Kit firmware push ran last. A theme installed as files alone could
+    // therefore ship a sweep sprite and have it spun around a point measured for somebody
+    // else's artwork — which is not a subtle fault: a hand pivoting 40 px off its hub
+    // wobbles instead of turning. -1 keeps the welded value, so an older theme is
+    // unaffected.
+    int      sweepPivotX     = -1;
+    int      sweepPivotY     = -1;
+    int      sweepCenterX    = -1;   // where on the dial that pivot sits
+    int      sweepCenterY    = -1;
+    int      blipPivotX      = -1;
+    int      blipPivotY      = -1;
+
     // Exclusion zones: circles on the 466x466 dial where aircraft are not drawn.
     //
     // These exist so decorative artwork can live in the BAKED BACKGROUND instead of in a

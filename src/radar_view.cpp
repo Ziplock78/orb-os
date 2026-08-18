@@ -923,8 +923,12 @@ static void draw_custom_ac(lv_draw_ctx_t *d) {
                 lv_draw_img_dsc_t idsc;
                 lv_draw_img_dsc_init(&idsc);
                 idsc.angle = (int16_t)lroundf((headingDeg + CUSTOM_BLIP_IMAGE_BASELINE_DEG) * 10.0f);
-                idsc.pivot.x = CUSTOM_RADAR_BLIP_PIVOT_X;
-                idsc.pivot.y = CUSTOM_RADAR_BLIP_PIVOT_Y;
+                // Theme data first, welded macro as the fallback. A theme that ships its
+                // own blip sprite has to be able to say where that sprite turns.
+                const int bpx = rs.blipPivotX >= 0 ? rs.blipPivotX : CUSTOM_RADAR_BLIP_PIVOT_X;
+                const int bpy = rs.blipPivotY >= 0 ? rs.blipPivotY : CUSTOM_RADAR_BLIP_PIVOT_Y;
+                idsc.pivot.x = bpx;
+                idsc.pivot.y = bpy;
                 idsc.opa = LV_OPA_COVER;
                 idsc.antialias = 1;
                 // Selection style 2 (Recolor) forces the tint on for this one
@@ -935,8 +939,8 @@ static void draw_custom_ac(lv_draw_ctx_t *d) {
                     idsc.recolor = blipColor;
                     idsc.recolor_opa = LV_OPA_COVER;
                 }
-                const lv_coord_t x0 = (lv_coord_t)(ac.pos.x - CUSTOM_RADAR_BLIP_PIVOT_X);
-                const lv_coord_t y0 = (lv_coord_t)(ac.pos.y - CUSTOM_RADAR_BLIP_PIVOT_Y);
+                const lv_coord_t x0 = (lv_coord_t)(ac.pos.x - bpx);
+                const lv_coord_t y0 = (lv_coord_t)(ac.pos.y - bpy);
                 lv_area_t r = { x0, y0, (lv_coord_t)(x0 + icon->header.w - 1), (lv_coord_t)(y0 + icon->header.h - 1) };
                 lv_draw_img(d, &idsc, &r, icon);
             } else {
@@ -1739,8 +1743,14 @@ void refreshCustomStyle() {
         const lv_img_dsc_t *sweepSrc = useImage ? radar_custom_sweep() : nullptr;
         if (sweepSrc) {
             lv_img_set_src(s_sweepImg, sweepSrc);
-            lv_img_set_pivot(s_sweepImg, CUSTOM_SWEEP_IMAGE_PIVOT_X, CUSTOM_SWEEP_IMAGE_PIVOT_Y);
-            lv_obj_set_pos(s_sweepImg, CUSTOM_SWEEP_IMAGE_CENTER_X - CUSTOM_SWEEP_IMAGE_PIVOT_X, CUSTOM_SWEEP_IMAGE_CENTER_Y - CUSTOM_SWEEP_IMAGE_PIVOT_Y);
+            // Theme data first, welded macros as the fallback (see theme_style::Radar).
+            const theme_style::Radar &rsw = theme_style::radar();
+            const int spx = rsw.sweepPivotX  >= 0 ? rsw.sweepPivotX  : CUSTOM_SWEEP_IMAGE_PIVOT_X;
+            const int spy = rsw.sweepPivotY  >= 0 ? rsw.sweepPivotY  : CUSTOM_SWEEP_IMAGE_PIVOT_Y;
+            const int scx = rsw.sweepCenterX >= 0 ? rsw.sweepCenterX : CUSTOM_SWEEP_IMAGE_CENTER_X;
+            const int scy = rsw.sweepCenterY >= 0 ? rsw.sweepCenterY : CUSTOM_SWEEP_IMAGE_CENTER_Y;
+            lv_img_set_pivot(s_sweepImg, spx, spy);
+            lv_obj_set_pos(s_sweepImg, scx - spx, scy - spy);
             lv_img_set_angle(s_sweepImg, (int16_t)lroundf(s_sweepDeg * 10.0f));
             show(s_sweepImg, true);
         } else {
