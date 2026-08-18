@@ -709,6 +709,15 @@ static inline bool in_excluded_zone(lv_coord_t x, lv_coord_t y) {
 }
 static inline bool ac_masked(const AcDraw &ac) { return in_excluded_zone(ac.pos.x, ac.pos.y); }
 
+// The SWEEP IS NEVER MASKED, by decision (Zion, 2026-08-18), and this is not an oversight
+// to be tidied up later. It is the one moving part of the instrument, and a hand that
+// blinks out over a piece of artwork reads as a fault rather than as a design. Where a
+// sweep needs to stop short of a border, sweepLength already does that honestly, by making
+// the hand shorter rather than by hiding part of it.
+//
+// Masked, by contrast: aircraft and their off-range arrows, their trails and flow tracks,
+// the rings and crosshair (baked into the plate by the editors), and the etched map.
+
 static void draw_trail(lv_draw_ctx_t *d, const AcDraw &ac, lv_color_t col) {
     const int n = (int)ac.trail.size();
     if (n < 2) return;
