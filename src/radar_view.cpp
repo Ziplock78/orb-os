@@ -30,6 +30,16 @@
 #include <stdlib.h>
 #if defined(ESP_PLATFORM)
 #include <esp_heap_caps.h>
+#else
+// Desktop simulator: no ESP heap caps and no Serial. The flatten/etch code below is
+// shared (the sim benefits from the same architecture), so shim the two device-isms
+// rather than fork the logic. Matches the pattern location_view.cpp already uses.
+#include <cstdarg>
+static void *heap_caps_malloc(size_t sz, int) { return malloc(sz); }
+static void heap_caps_free(void *p) { free(p); }
+#define MALLOC_CAP_SPIRAM 0
+#define MALLOC_CAP_8BIT 0
+static struct { void printf(const char *fmt, ...) const { va_list a; va_start(a, fmt); vprintf(fmt, a); va_end(a); } void println(const char *s) const { puts(s); } } Serial;
 #endif
 
 #ifndef M_PI
@@ -1180,9 +1190,19 @@ void setSweepEnabled(bool on) {
 }
 bool sweepEnabled() { return s_sweepEnabled; }
 
+// Defined with the flatten pass below; setAirportsEnabled sits above it in the file.
+static void take_map_snapshot();
+static void rebuild_flat_background();
+static void apply_grid_visibility();
+
 void setAirportsEnabled(bool on) {
     s_airportsEnabled = on;
     if (s_gridLayer) lv_obj_invalidate(s_gridLayer);   // repaint the chrome with/without markers
+    if (customStyled()) {          // the etched copy includes the markers; re-etch without them
+        take_map_snapshot();
+        rebuild_flat_background();
+        apply_grid_visibility();
+    }
 }
 bool airportsEnabled() { return s_airportsEnabled; }
 
@@ -1423,6 +1443,33 @@ static lv_obj_t    *s_flatCanvas = nullptr;    // offscreen only; never parented
 static bool         s_flatOn     = false;
 static bool         s_flatTook[3] = { false, false, false };   // static1, static2, wash
 
+// The map (roads + coastline + airports), etched. s_gridLayer re-vectors all of it on
+// every frame through its draw callback — 513 polylines at Zion's location, measured at
+// roughly a quarter of the radar's whole frame budget. The vectors only actually change
+// when the projection does (home moved, range zoomed, airports toggled), so the layer is
+// rendered ONCE into this snapshot on those events, the snapshot is baked into the
+// flattened background, and the live layer is hidden. Zion's three-section architecture
+// assumes the map is "etched in"; this makes that assumption true.
+static lv_img_dsc_t *s_mapSnap  = nullptr;
+static bool          s_mapBaked = false;
+
+static void take_map_snapshot() {
+    if (!s_gridLayer || !customStyled()) return;
+    // The layer must be visible while it renders: snapshot drives the object's own draw
+    // events, and a hidden object draws nothing, which would etch an empty map.
+    show(s_gridLayer, true);
+    lv_obj_update_layout(s_gridLayer);
+    if (s_mapSnap) { lv_snapshot_free(s_mapSnap); s_mapSnap = nullptr; }
+    s_mapSnap = lv_snapshot_take(s_gridLayer, LV_IMG_CF_TRUE_COLOR_ALPHA);
+    if (!s_mapSnap) Serial.println("[radar] map snapshot failed; live layer stays");
+}
+
+// The live map layer earns its keep only while there is no baked copy. Called after any
+// rebuild attempt, so a failed bake degrades to the old per-frame path, never to no map.
+static void apply_grid_visibility() {
+    if (s_gridLayer) show(s_gridLayer, !(customStyled() && s_mapBaked));
+}
+
 static void release_flat_background() {
     if (s_flatCanvas) { lv_obj_del(s_flatCanvas); s_flatCanvas = nullptr; }
     if (s_flatBuf)    { heap_caps_free(s_flatBuf); s_flatBuf = nullptr; }
@@ -1432,6 +1479,7 @@ static void release_flat_background() {
 
 static void rebuild_flat_background() {
     s_flatOn = false;
+    s_mapBaked = false;
     s_flatTook[0] = s_flatTook[1] = s_flatTook[2] = false;
     if (!customStyled() || !s_plateImg) return;
 
@@ -1449,13 +1497,13 @@ static void rebuild_flat_background() {
         else if (k == 4) { take[1] = true; ++taken; }
         else if (k == 5) { take[2] = true; ++taken; }
     }
-    if (!taken) return;   // nothing to merge; not worth 434 KB to copy the plate alone
+    if (!taken && !s_mapSnap) return;   // nothing to merge; not worth 434 KB to copy the plate alone
 
     const theme_style::Radar &rs = theme_style::radar();
     const theme_style::RadarStatic *st[2] = { &rs.static1, &rs.static2 };
     // Recheck that the layers we picked are actually contributing; a theme can
     // list a layer in its order and then switch it off.
-    bool any = false;
+    bool any = (s_mapSnap != nullptr);
     for (int i = 0; i < 2; ++i) if (take[i] && st[i]->show && radar_custom_static(i)) any = true;
     if (take[2] && rs.overlayEnabled && rs.overlayOpacity > 0) any = true;
     if (!any) return;
@@ -1478,6 +1526,13 @@ static void rebuild_flat_background() {
     {
         lv_draw_img_dsc_t d; lv_draw_img_dsc_init(&d);
         lv_canvas_draw_img(s_flatCanvas, 0, 0, plate, &d);
+    }
+    // 1b. the etched map, directly on the plate — the same slot the live s_gridLayer
+    //     occupies in the stack today (below the decorations and the wash).
+    if (s_mapSnap) {
+        lv_draw_img_dsc_t d; lv_draw_img_dsc_init(&d);
+        lv_canvas_draw_img(s_flatCanvas, 0, 0, s_mapSnap, &d);
+        s_mapBaked = true;
     }
     // 2. the decorative statics we are allowed to absorb, same transform as the
     //    live path above (zoom about the image's own centre, positioned by
@@ -1512,8 +1567,8 @@ static void rebuild_flat_background() {
     for (int i = 0; i < 2; ++i) if (s_flatTook[i] && s_staticImg[i]) show(s_staticImg[i], false);
     if (s_flatTook[2] && s_dimLayer) show(s_dimLayer, false);
     s_flatOn = true;
-    Serial.printf("[radar] flattened into the plate: static1=%d static2=%d wash=%d\n",
-                  (int)s_flatTook[0], (int)s_flatTook[1], (int)s_flatTook[2]);
+    Serial.printf("[radar] flattened into the plate: map=%d static1=%d static2=%d wash=%d\n",
+                  (int)s_mapBaked, (int)s_flatTook[0], (int)s_flatTook[1], (int)s_flatTook[2]);
 }
 
 // Call once at init(), and again from Flight Tracker's onEnter after an
@@ -1585,6 +1640,7 @@ void refreshCustomStyle() {
     // what it has actually absorbed, so a failure here degrades to the live stack
     // rather than to a missing layer.
     rebuild_flat_background();
+    apply_grid_visibility();
     applyRadarLayerOrder();
 }
 
@@ -1606,6 +1662,15 @@ void update(const std::vector<Aircraft> &aircraft, const RadarSettings &s) {
         airports_project(s.homeLat, s.homeLon, s.rangeKm, s_cx, s_cy, R);
         roads_sd::project(s.homeLat, s.homeLon, s.rangeKm, s_cx, s_cy, R);
         if (s_gridLayer) lv_obj_invalidate(s_gridLayer);
+        // The projection is new, so the etched copy is stale: render it once at the new
+        // geometry and fold it back into the flattened background. Costs one frame's
+        // worth of work on an event a person triggers rarely (move home, zoom range),
+        // and buys back the per-frame re-vectoring the rest of the time.
+        if (customStyled()) {
+            take_map_snapshot();
+            rebuild_flat_background();
+            apply_grid_visibility();
+        }
         if (!firstFix) {
             // Scope scale/center changed: old trails were plotted at the previous
             // projection and would be wrong now — drop them and clear the flow layer.

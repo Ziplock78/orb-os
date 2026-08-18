@@ -5,10 +5,15 @@
 #include <stdio.h>
 #include <string.h>
 
+#include <SD.h>
+#include "mbedtls/base64.h"
+
 #include "config.h"          // FW_VERSION
 #include "custom_weld.h"     // CUSTOM_WELD_HASH
+#include "sdcard.h"
 #include "theme_select.h"
 #include "theme_style.h"
+#include "update_ui.h"
 
 namespace orb_link {
 namespace {
@@ -16,7 +21,9 @@ namespace {
 // One command line. 96 is comfortably past the longest real request ("theme " + a 32-char
 // slug); anything longer is noise or a paste accident, and is dropped rather than wrapped,
 // so a runaway line can never be split into two half-commands that both look valid.
-constexpr size_t CMD_LINE_MAX = 96;
+// Sized for put-data lines: 384 base64 chars carry 288 raw bytes per line, and the
+// header plus margin fits comfortably. Everything else on this port is far shorter.
+constexpr size_t CMD_LINE_MAX = 512;
 char   s_line[CMD_LINE_MAX];
 size_t s_len      = 0;
 bool   s_overflow = false;
@@ -149,6 +156,105 @@ void cmd_theme(const char *slug) {
     Serial.flush();   // the reboot is ~400 ms out; do not race it
 }
 
+// ---------------- file transfer (put-begin / put-data / put-end) ----------------
+//
+// Why this exists: Orb Studio is a public HTTPS page, and a secure page is forbidden by
+// the browser from calling the Orb's plain-HTTP /sdput endpoint on the LAN (mixed
+// content), never mind that it cannot resolve the address from outside. The cable is
+// already the site's transport for everything else, so files ride it too.
+//
+// The shape mirrors the WiFi path deliberately: same /themes/-only path jail, same
+// create-every-directory-level behaviour (SD.mkdir does not create intermediates), same
+// on-screen update_ui narration so an install is never silent on the device. Content
+// travels as base64 lines, each acknowledged before the next is sent — self-throttling,
+// and on files this size (style JSON, a few KB) throughput is irrelevant.
+File     s_putFile;
+bool     s_putOpen     = false;
+uint32_t s_putExpected = 0;
+uint32_t s_putWritten  = 0;
+char     s_putName[48] = "";
+int      s_putCount    = 0;      // files received this session, for the on-screen counter
+
+bool slug_ok(const char *t) {
+    if (!t || !*t || strlen(t) >= theme_select::MAX_SLUG_LEN) return false;
+    for (const char *p = t; *p; ++p)
+        if (!islower((unsigned char)*p) && !isdigit((unsigned char)*p) && *p != '-') return false;
+    return true;
+}
+bool fname_ok(const char *t) {
+    if (!t || !*t || *t == '.' || strlen(t) >= sizeof(s_putName)) return false;
+    for (const char *p = t; *p; ++p)
+        if (!isalnum((unsigned char)*p) && *p != '.' && *p != '_' && *p != '-') return false;
+    return strstr(t, "..") == nullptr;
+}
+
+void put_abort() {
+    if (s_putOpen) s_putFile.close();
+    s_putOpen = false;
+}
+
+void cmd_put_begin(char *args) {
+    put_abort();   // a new begin implicitly abandons any half-finished transfer
+    char *slug = args;
+    char *file = args ? strchr(args, ' ') : nullptr;
+    if (file) { *file++ = '\0'; while (*file == ' ') ++file; }
+    char *size = file ? strchr(file, ' ') : nullptr;
+    if (size) { *size++ = '\0'; while (*size == ' ') ++size; }
+    if (!slug_ok(slug) || !fname_ok(file) || !size) { reply_error("bad put-begin"); return; }
+    if (!sdcard::mounted())                         { reply_error("no SD card");     return; }
+
+    char path[96];
+    snprintf(path, sizeof(path), "/themes/%s/%s", slug, file);
+    // Create every missing level (same reasoning as the WiFi path: SD.mkdir does not
+    // create intermediates, so a virgin card fails at /themes otherwise).
+    for (int i = 1; path[i]; ++i) {
+        if (path[i] != '/') continue;
+        path[i] = '\0';
+        if (!SD.exists(path) && !SD.mkdir(path)) { path[i] = '/'; reply_error("mkdir failed"); return; }
+        path[i] = '/';
+    }
+    s_putFile = SD.open(path, FILE_WRITE);   // truncates any existing file
+    if (!s_putFile) { reply_error("open failed"); return; }
+    s_putOpen     = true;
+    s_putExpected = (uint32_t)strtoul(size, nullptr, 10);
+    s_putWritten  = 0;
+    strlcpy(s_putName, file, sizeof(s_putName));
+    Serial.printf("[orb_link] put %s (%lu bytes)\n", path, (unsigned long)s_putExpected);
+    out_reset(); out_str("{\"ok\":true}"); out_send();
+}
+
+void cmd_put_data(const char *b64) {
+    if (!s_putOpen)       { reply_error("no transfer open"); return; }
+    if (!b64 || !*b64)    { reply_error("empty chunk");      return; }
+    unsigned char raw[400];
+    size_t rawLen = 0;
+    if (mbedtls_base64_decode(raw, sizeof(raw), &rawLen,
+                              (const unsigned char *)b64, strlen(b64)) != 0) {
+        put_abort(); reply_error("bad base64"); return;
+    }
+    if (s_putFile.write(raw, rawLen) != rawLen) {
+        put_abort(); reply_error("short write (card full or removed?)"); return;
+    }
+    s_putWritten += rawLen;
+    out_reset(); out_fmt("{\"ok\":true,\"n\":%lu}", (unsigned long)s_putWritten); out_send();
+}
+
+void cmd_put_end() {
+    if (!s_putOpen) { reply_error("no transfer open"); return; }
+    s_putFile.close();
+    s_putOpen = false;
+    if (s_putWritten != s_putExpected) {
+        reply_error("size mismatch");
+        return;
+    }
+    // Same narration as a WiFi push: the Orb's own screen says the install is happening,
+    // so the person standing at the device is never guessing (Zion's standing mandate).
+    update_ui::file_received(s_putName, ++s_putCount);
+    out_reset();
+    out_fmt("{\"ok\":true,\"file\":\"%s\",\"bytes\":%lu}", s_putName, (unsigned long)s_putWritten);
+    out_send();
+}
+
 void dispatch(char *line) {
     // Split the verb from the rest. Only one argument is ever needed, so the remainder is
     // taken whole rather than tokenised further: a slug never contains a space, and if one
@@ -156,10 +262,13 @@ void dispatch(char *line) {
     char *arg = strchr(line, ' ');
     if (arg) { *arg++ = '\0'; while (*arg == ' ') ++arg; }
 
-    if      (!strcmp(line, "hello"))  cmd_hello();
-    else if (!strcmp(line, "themes")) cmd_themes();
-    else if (!strcmp(line, "theme"))  cmd_theme(arg);
-    else                              reply_error("unknown command");
+    if      (!strcmp(line, "hello"))     cmd_hello();
+    else if (!strcmp(line, "themes"))    cmd_themes();
+    else if (!strcmp(line, "theme"))     cmd_theme(arg);
+    else if (!strcmp(line, "put-begin")) cmd_put_begin(arg);
+    else if (!strcmp(line, "put-data"))  cmd_put_data(arg);
+    else if (!strcmp(line, "put-end"))   cmd_put_end();
+    else                                 reply_error("unknown command");
 }
 
 }   // namespace
@@ -171,7 +280,7 @@ void begin() { s_len = 0; s_overflow = false; }
 void poll() {
     // Bounded per call. A host that floods the port cannot hold loop() hostage and stall
     // the knob; leftovers are simply read on the next pass a few milliseconds later.
-    int budget = 256;
+    int budget = 640;   // a full put-data line per pass; still bounded, still knob-safe
     while (Serial.available() > 0 && budget-- > 0) {
         const char c = (char)Serial.read();
         if (c == '\r') continue;

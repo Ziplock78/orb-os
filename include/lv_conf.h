@@ -32,6 +32,11 @@
 // old pool could not serve — LVGL does not check the failed allocation and panics on the
 // null pointer. See include/lv_psram_alloc.h for the full reasoning.
 #define LV_MEM_CUSTOM 1
+
+/* Render one object into an image buffer. Used by the radar to etch the map
+ * (roads/coastline/airports) ONCE per location instead of re-vectoring 513
+ * polylines on every frame — measured at ~25% of the radar's frame budget. */
+#define LV_USE_SNAPSHOT 1
 #define LV_MEM_CUSTOM_INCLUDE "lv_psram_alloc.h"
 #define LV_MEM_CUSTOM_ALLOC   orb_lv_malloc
 #define LV_MEM_CUSTOM_FREE    orb_lv_free
