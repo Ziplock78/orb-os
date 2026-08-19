@@ -1,6 +1,7 @@
 #include "theme_select.h"
 #include "theme_style.h"
 #include <string.h>
+#include <ctype.h>
 #ifdef ARDUINO
 #include <Arduino.h>
 #include <Preferences.h>
@@ -139,25 +140,32 @@ bool removeInstalled(const char *slug) {
     // leaves a device wearing a theme that no longer exists. Switch first.
     if (!strcmp(slug, s_slug)) return false;
 
-    // It also has to be a theme we actually listed, which rules out a slug with a slash or
-    // a "\.\." in it reaching the filesystem. The list is built from real directories that
-    // carry the sentinel, so membership is the check.
-    static char slugs[MAX_THEMES][MAX_SLUG_LEN];
-    const int n = listInstalled(slugs);
-    bool known = false;
-    for (int i = 0; i < n; ++i) if (!strcmp(slugs[i], slug)) { known = true; break; }
-    if (!known) return false;
+    // Safe characters only, which is what keeps this away from the rest of the card: no
+    // slash, no dot, so no path can be built that climbs out of /themes.
+    //
+    // Deliberately NOT "must appear in listInstalled". That list only counts folders
+    // carrying the _installed sentinel, and an install that dies halfway leaves a folder
+    // without one on purpose, so it cannot masquerade as a working theme. Requiring
+    // membership here made those folders invisible AND permanently undeletable, which is a
+    // worse place to leave someone than the problem the sentinel was solving.
+    for (const char *p = slug; *p; ++p)
+        if (!islower((unsigned char)*p) && !isdigit((unsigned char)*p) && *p != '-') return false;
+    if (strlen(slug) >= MAX_SLUG_LEN) return false;
 
 #ifdef ARDUINO
     if (!sdcard::mounted()) return false;
+    char dirPath[80];
+    snprintf(dirPath, sizeof(dirPath), "/themes/%s", slug);
+    // Still say no to a folder that was never there, so "no such theme" keeps meaning what
+    // it says rather than becoming the answer to every delete.
+    if (!SD.exists(dirPath)) return false;
+
     char path[96];
     // The sentinel first: from this moment the folder is no longer a theme, whatever else
     // happens below.
     snprintf(path, sizeof(path), "/themes/%s/_installed", slug);
     SD.remove(path);
 
-    char dirPath[80];
-    snprintf(dirPath, sizeof(dirPath), "/themes/%s", slug);
     File dir = SD.open(dirPath);
     if (dir && dir.isDirectory()) {
         // Collect then delete. Removing entries while walking the same open directory
@@ -191,6 +199,7 @@ bool removeInstalled(const char *slug) {
     return true;
 #else
     const std::string dirPath = std::string(SIM_SD_ROOT) + "/themes/" + slug;
+    if (DIR *probe = opendir(dirPath.c_str())) { closedir(probe); } else { return false; }
     ::remove((dirPath + "/_installed").c_str());
     if (DIR *d = opendir(dirPath.c_str())) {
         struct dirent *e;
