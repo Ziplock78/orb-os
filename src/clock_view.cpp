@@ -542,12 +542,41 @@ static void draw_office(const struct tm *ti) {
 // align: 0 left (bx is the start — a digit changing width only shifts the tail,
 // so a live value never wobbles), 1 center (bx is the middle), 2 right (bx is
 // the end). Mirrors the editor's alignedStartX().
+// Why a banner drew nothing, said once.
+//
+// Both banner painters bail on a null font or a format strftime will not take, and both
+// used to do it in silence. A theme asking for "%a %b %-d" — the GNU no-padding flag, which
+// this newlib does not have — therefore lost its whole date line with no symptom anywhere:
+// not on the screen, not on the wire, not in this log. Finding that cost an afternoon.
+//
+// Rate-limited to one line per distinct reason, because this runs inside a once-a-second
+// redraw and a fault that repeats 3600 times an hour is noise, not a diagnosis.
+static void banner_silent(const char *which, const char *why, const char *fmt) {
+#ifdef ARDUINO
+    static char s_said[2][40] = { "", "" };
+    const int slot = (which[5] == '2') ? 1 : 0;
+    char now[40];
+    snprintf(now, sizeof(now), "%s:%s", why, fmt ? fmt : "");
+    if (!strcmp(s_said[slot], now)) return;
+    snprintf(s_said[slot], sizeof(s_said[slot]), "%s", now);
+    Serial.printf("[clock] %s drew nothing: %s (fmt \"%s\")\n", which, why, fmt ? fmt : "");
+#else
+    (void)which; (void)why; (void)fmt;
+#endif
+}
+
 static void draw_baked_text(const lv_font_t *font, const char *fmt, int bx, int by,
                             uint32_t color, int glow, uint32_t glowColor, int align,
-                            const struct tm *ti) {
-    if (!font || !fmt || !fmt[0]) return;
+                            const struct tm *ti, const char *which) {
+    if (!font)          { banner_silent(which, "no font loaded for this slot", fmt); return; }
+    if (!fmt || !fmt[0]) { banner_silent(which, "empty format", fmt); return; }
     char buf[48];
-    if (strftime(buf, sizeof(buf), fmt, ti) == 0) return;
+    // 0 means strftime refused the format outright — almost always a flag or a conversion
+    // this libc does not implement, since 48 bytes is ample for anything a banner shows.
+    if (strftime(buf, sizeof(buf), fmt, ti) == 0) {
+        banner_silent(which, "strftime rejected the format, or it produced nothing", fmt);
+        return;
+    }
     const int n = (int)strlen(buf);
     float w[48], total = 0.0f;
     for (int i = 0; i < n && i < 48; ++i) {
@@ -631,10 +660,15 @@ static void blit_glyph_rot(const uint8_t *bmp, int bw, int bh, float destCx, flo
 // drawCurvedText (textAlign centre, textBaseline middle). Glow isn't applied on
 // the curve.
 static void draw_baked_arc_text(const lv_font_t *font, const char *fmt, float R, float arcDeg,
-                                uint32_t color, const struct tm *ti) {
-    if (!font || !fmt || !fmt[0] || R < 1.0f) return;
+                                uint32_t color, const struct tm *ti, const char *which) {
+    if (!font)           { banner_silent(which, "no font loaded for this slot", fmt); return; }
+    if (!fmt || !fmt[0])  { banner_silent(which, "empty format", fmt); return; }
+    if (R < 1.0f)        { banner_silent(which, "curved, but sitting on the dial centre", fmt); return; }
     char buf[48];
-    if (strftime(buf, sizeof(buf), fmt, ti) == 0) return;
+    if (strftime(buf, sizeof(buf), fmt, ti) == 0) {
+        banner_silent(which, "strftime rejected the format, or it produced nothing", fmt);
+        return;
+    }
     const int n = (int)strlen(buf);
     float w[48]; float total = 0.0f;
     for (int i = 0; i < n && i < 48; ++i) {
@@ -810,15 +844,15 @@ static void draw_custom(const struct tm *ti) {
     {
         const theme_style::ClockText &t = theme_style::clock().text1;
         if (t.show) {
-            if (t.curved) draw_baked_arc_text(theme_font::clock_text1(), t.fmt, (float)t.curveR, t.arcDeg, t.color, ti);
-            else draw_baked_text(theme_font::clock_text1(), t.fmt, t.x, t.y, t.color, t.glow, t.glowColor, t.align, ti);
+            if (t.curved) draw_baked_arc_text(theme_font::clock_text1(), t.fmt, (float)t.curveR, t.arcDeg, t.color, ti, "text1");
+            else draw_baked_text(theme_font::clock_text1(), t.fmt, t.x, t.y, t.color, t.glow, t.glowColor, t.align, ti, "text1");
         }
     }
     {
         const theme_style::ClockText &t = theme_style::clock().text2;
         if (t.show) {
-            if (t.curved) draw_baked_arc_text(theme_font::clock_text2(), t.fmt, (float)t.curveR, t.arcDeg, t.color, ti);
-            else draw_baked_text(theme_font::clock_text2(), t.fmt, t.x, t.y, t.color, t.glow, t.glowColor, t.align, ti);
+            if (t.curved) draw_baked_arc_text(theme_font::clock_text2(), t.fmt, (float)t.curveR, t.arcDeg, t.color, ti, "text2");
+            else draw_baked_text(theme_font::clock_text2(), t.fmt, t.x, t.y, t.color, t.glow, t.glowColor, t.align, ti, "text2");
         }
     }
 
