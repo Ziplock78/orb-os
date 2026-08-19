@@ -800,23 +800,27 @@ static void draw_custom(const struct tm *ti) {
 
     // Live text banners in the design's real baked font (+ firmware glow). A
     // curved banner arcs along the rim instead of sitting on a straight baseline.
-    // CUSTOM_HAS_TEXT{1,2} (whether this banner exists at all) and the FONT itself
-    // stay compile-time (see theme_style.h); everything else — including whether
-    // THIS banner is curved — now follows the active SD theme.
-#if CUSTOM_HAS_TEXT1
+    //
+    // Used to stay behind CUSTOM_HAS_TEXT{1,2}, a compile-time gate baked in by whichever
+    // Launch Kit push happened to run last — the same shape of bug as the menu's hint
+    // slots and the sweep's layer order, both fixed this week. A theme installed as files
+    // alone (Orb Studio) could ship text1/text2 and the Orb would never draw it unless
+    // some earlier firmware push happened to have compiled a theme that used one. `show`
+    // is the runtime gate now, same as every other layer here.
     {
         const theme_style::ClockText &t = theme_style::clock().text1;
-        if (t.curved) draw_baked_arc_text(theme_font::clock_text1(), t.fmt, (float)t.curveR, t.arcDeg, t.color, ti);
-        else draw_baked_text(theme_font::clock_text1(), t.fmt, t.x, t.y, t.color, t.glow, t.glowColor, t.align, ti);
+        if (t.show) {
+            if (t.curved) draw_baked_arc_text(theme_font::clock_text1(), t.fmt, (float)t.curveR, t.arcDeg, t.color, ti);
+            else draw_baked_text(theme_font::clock_text1(), t.fmt, t.x, t.y, t.color, t.glow, t.glowColor, t.align, ti);
+        }
     }
-#endif
-#if CUSTOM_HAS_TEXT2
     {
         const theme_style::ClockText &t = theme_style::clock().text2;
-        if (t.curved) draw_baked_arc_text(theme_font::clock_text2(), t.fmt, (float)t.curveR, t.arcDeg, t.color, ti);
-        else draw_baked_text(theme_font::clock_text2(), t.fmt, t.x, t.y, t.color, t.glow, t.glowColor, t.align, ti);
+        if (t.show) {
+            if (t.curved) draw_baked_arc_text(theme_font::clock_text2(), t.fmt, (float)t.curveR, t.arcDeg, t.color, ti);
+            else draw_baked_text(theme_font::clock_text2(), t.fmt, t.x, t.y, t.color, t.glow, t.glowColor, t.align, ti);
+        }
     }
-#endif
 
     // kind 3/4 = the two static image layers — same pivot/center/blend metadata as
     // a hand, just always angle 0 (they never rotate, see custom_sprite.cpp).

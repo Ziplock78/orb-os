@@ -60,7 +60,10 @@ namespace theme_style {
 //      rotation pivots as theme data
 //   2  the menu's per-slot show flag: a design can drop the previous/next hints and keep
 //      only the centred app name
-constexpr int THEME_CAPS = 2;
+//   3  the clock's two live text banners (text1/text2), drawn from the theme's own show
+//      flag instead of whichever CUSTOM_HAS_TEXT{1,2} a past firmware push happened to
+//      compile in
+constexpr int THEME_CAPS = 3;
 
 struct ClockText {
     bool     show   = false;
