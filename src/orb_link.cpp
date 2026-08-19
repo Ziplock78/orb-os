@@ -179,6 +179,11 @@ uint32_t s_putWritten  = 0;
 char     s_putName[48] = "";
 int      s_putCount    = 0;      // files received this session, for the on-screen counter
 
+// Reading back out. Its own handle, so a read can never disturb an install in flight.
+File     s_getFile;
+bool     s_getOpen     = false;
+uint32_t s_getLeft     = 0;
+
 bool slug_ok(const char *t) {
     if (!t || !*t || strlen(t) >= theme_select::MAX_SLUG_LEN) return false;
     for (const char *p = t; *p; ++p)
@@ -195,6 +200,12 @@ bool fname_ok(const char *t) {
 void put_abort() {
     if (s_putOpen) s_putFile.close();
     s_putOpen = false;
+}
+
+void get_abort() {
+    if (s_getOpen) s_getFile.close();
+    s_getOpen = false;
+    s_getLeft = 0;
 }
 
 // Where a put may write. /themes/ is the everyday case (Orb Studio installing a design);
@@ -229,6 +240,58 @@ void cmd_delete(const char *slug) {
     // wiping and re-baking when it runs low. Rewriting its index here would be a flash
     // write with real failure modes, in exchange for space nothing is waiting on.
     out_reset(); out_str("{\"ok\":true}"); out_send();
+}
+
+// Reading a file back off the card, which the protocol could never do: it could write a
+// theme to an Orb and switch between themes, but everything it sent was one-way. A design
+// installed from another browser, or from a machine since wiped, was on the device and
+// nowhere else, and the editor had no way to ask for it.
+//
+// Host-driven, one reply per request, same as everything else here. The device never speaks
+// unless spoken to, so the browser's "send a line, wait for a line" loop needs nothing new
+// to understand a transfer that arrives in pieces.
+void cmd_get_begin(char *args) {
+    get_abort();
+    char *slug = args;
+    char *file = args ? strchr(args, ' ') : nullptr;
+    if (file) { *file++ = '\0'; while (*file == ' ') ++file; }
+    bool isRoads = false;
+    if (!slug || !root_ok(slug, &isRoads)) { reply_error("bad get-begin"); return; }
+    if (!fname_ok(file))                   { reply_error("bad get-begin"); return; }
+    if (!sdcard::mounted())                { reply_error("no SD card");    return; }
+
+    char path[96];
+    if (isRoads) snprintf(path, sizeof(path), "/roads/%s", file);
+    else         snprintf(path, sizeof(path), "/themes/%s/%s", slug, file);
+    s_getFile = SD.open(path, FILE_READ);
+    if (!s_getFile) { reply_error("no such file"); return; }
+    s_getOpen = true;
+    s_getLeft = (uint32_t)s_getFile.size();
+    out_reset(); out_fmt("{\"ok\":true,\"size\":%lu}", (unsigned long)s_getLeft); out_send();
+}
+
+void cmd_get_data() {
+    if (!s_getOpen) { reply_error("no transfer open"); return; }
+    // 1536 raw bytes encodes to 2048 base64 characters, which fits the 2560-byte reply
+    // buffer with room for the JSON around it. Bigger than a put chunk on purpose: writes
+    // are acknowledged one at a time for flow control, reads are simply pulled.
+    uint8_t raw[1536];
+    const int n = s_getFile.read(raw, sizeof(raw));
+    if (n <= 0) {
+        get_abort();
+        out_reset(); out_str("{\"ok\":true,\"done\":true}"); out_send();
+        return;
+    }
+    unsigned char b64[2100];
+    size_t b64Len = 0;
+    if (mbedtls_base64_encode(b64, sizeof(b64), &b64Len, raw, (size_t)n) != 0) {
+        get_abort(); reply_error("encode failed"); return;
+    }
+    b64[b64Len] = '\0';
+    s_getLeft = s_getLeft > (uint32_t)n ? s_getLeft - (uint32_t)n : 0;
+    out_reset();
+    out_fmt("{\"ok\":true,\"b64\":\"%s\",\"left\":%lu}", (const char *)b64, (unsigned long)s_getLeft);
+    out_send();
 }
 
 void cmd_put_begin(char *args) {
@@ -307,6 +370,8 @@ void dispatch(char *line) {
     else if (!strcmp(line, "themes"))    cmd_themes();
     else if (!strcmp(line, "theme"))     cmd_theme(arg);
     else if (!strcmp(line, "delete"))    cmd_delete(arg);
+    else if (!strcmp(line, "get-begin")) cmd_get_begin(arg);
+    else if (!strcmp(line, "get-data"))  cmd_get_data();
     else if (!strcmp(line, "put-begin")) cmd_put_begin(arg);
     else if (!strcmp(line, "put-data"))  cmd_put_data(arg);
     else if (!strcmp(line, "put-end"))   cmd_put_end();
