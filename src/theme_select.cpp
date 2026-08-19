@@ -10,6 +10,7 @@
 #include <cstdio>
 #include <string>
 #include <dirent.h>
+#include <unistd.h>   // rmdir, for the simulator's delete path
 #endif
 
 namespace {
@@ -129,6 +130,80 @@ int listInstalled(char out[][MAX_SLUG_LEN]) {
     closedir(d);
 #endif
     return n;
+}
+
+bool removeInstalled(const char *slug) {
+    if (!slug || !slug[0]) return false;
+    // Never the one being worn. Every screen is drawing from that folder's art and reading
+    // its style files, and the flash cache is keyed to it: pulling it out from under them
+    // leaves a device wearing a theme that no longer exists. Switch first.
+    if (!strcmp(slug, s_slug)) return false;
+
+    // It also has to be a theme we actually listed, which rules out a slug with a slash or
+    // a "\.\." in it reaching the filesystem. The list is built from real directories that
+    // carry the sentinel, so membership is the check.
+    static char slugs[MAX_THEMES][MAX_SLUG_LEN];
+    const int n = listInstalled(slugs);
+    bool known = false;
+    for (int i = 0; i < n; ++i) if (!strcmp(slugs[i], slug)) { known = true; break; }
+    if (!known) return false;
+
+#ifdef ARDUINO
+    if (!sdcard::mounted()) return false;
+    char path[96];
+    // The sentinel first: from this moment the folder is no longer a theme, whatever else
+    // happens below.
+    snprintf(path, sizeof(path), "/themes/%s/_installed", slug);
+    SD.remove(path);
+
+    char dirPath[80];
+    snprintf(dirPath, sizeof(dirPath), "/themes/%s", slug);
+    File dir = SD.open(dirPath);
+    if (dir && dir.isDirectory()) {
+        // Collect then delete. Removing entries while walking the same open directory
+        // handle is where SD libraries differ from each other, and a half-walked delete is
+        // exactly the state worth not inventing.
+        static char names[64][MAX_SLUG_LEN + 24];
+        int count = 0;
+        File f = dir.openNextFile();
+        while (f && count < (int)(sizeof(names) / sizeof(names[0]))) {
+            if (!f.isDirectory()) {
+                const char *nm = f.name();
+                const char *leaf = strrchr(nm, '/');
+                leaf = leaf ? leaf + 1 : nm;
+                strncpy(names[count], leaf, sizeof(names[0]) - 1);
+                names[count][sizeof(names[0]) - 1] = 0;
+                ++count;
+            }
+            f.close();
+            f = dir.openNextFile();
+        }
+        dir.close();
+        for (int i = 0; i < count; ++i) {
+            snprintf(path, sizeof(path), "/themes/%s/%s", slug, names[i]);
+            SD.remove(path);
+        }
+    } else if (dir) {
+        dir.close();
+    }
+    SD.rmdir(dirPath);
+    Serial.printf("[theme_select] deleted '%s' from the card\n", slug);
+    return true;
+#else
+    const std::string dirPath = std::string(SIM_SD_ROOT) + "/themes/" + slug;
+    ::remove((dirPath + "/_installed").c_str());
+    if (DIR *d = opendir(dirPath.c_str())) {
+        struct dirent *e;
+        while ((e = readdir(d)) != nullptr) {
+            if (e->d_name[0] == '.') continue;
+            ::remove((dirPath + "/" + e->d_name).c_str());
+        }
+        closedir(d);
+    }
+    ::rmdir(dirPath.c_str());
+    printf("[theme_select] deleted '%s' from the card\n", slug);
+    return true;
+#endif
 }
 
 } // namespace theme_select

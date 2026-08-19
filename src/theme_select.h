@@ -18,6 +18,15 @@ void init();                 // load the saved slug from NVS; call once at boot 
 const char *activeSlug();    // "" if none saved, or nothing installed — callers fall through to flash/stock
 void set(const char *slug);  // persists, then reboots/re-execs — see app_theme::set()
 
+// Delete an installed theme's folder from the card. Returns false if the slug is not
+// installed, or if it is the one currently being worn: a theme cannot be pulled out from
+// under the screens drawing it, and the caller is expected to switch first and say so.
+//
+// The _installed sentinel goes FIRST, mirroring the install contract that writes it last.
+// A delete interrupted halfway then leaves a folder that no longer counts as a theme
+// rather than a half-empty one still offering itself in the list.
+bool removeInstalled(const char *slug);
+
 // Native only: sim_main.cpp registers its own re-exec here, same reasoning as
 // app_theme::setRestartHook — a fresh process needs this file's static state
 // reloaded from the persisted slug, not defaulted, right after re-exec.

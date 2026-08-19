@@ -208,6 +208,29 @@ bool root_ok(const char *slug, bool *isRoads) {
     return slug_ok(slug);
 }
 
+// Remove an installed theme from the card.
+//
+// The only destructive command in the protocol, so it says no in three places rather than
+// trusting the caller: an unknown slug, the theme currently being worn, and a transfer in
+// flight all refuse. The reasons are returned as text because the browser shows them to a
+// person, and "cannot delete the theme you are wearing" is an instruction, while a bare
+// failure is a puzzle.
+void cmd_delete(const char *slug) {
+    if (!slug || !*slug)             { reply_error("missing slug");    return; }
+    if (!sdcard::mounted())          { reply_error("no SD card");      return; }
+    if (s_putOpen)                   { reply_error("install in progress"); return; }
+    if (!strcmp(slug, theme_select::activeSlug())) {
+        reply_error("that is the theme this Orb is wearing — switch to another one first");
+        return;
+    }
+    if (!theme_select::removeInstalled(slug)) { reply_error("no such theme"); return; }
+    // The baked copy in flash is deliberately left alone. It is only ever consulted for the
+    // ACTIVE slug, so an orphan is invisible; the art partition already reclaims space by
+    // wiping and re-baking when it runs low. Rewriting its index here would be a flash
+    // write with real failure modes, in exchange for space nothing is waiting on.
+    out_reset(); out_str("{\"ok\":true}"); out_send();
+}
+
 void cmd_put_begin(char *args) {
     put_abort();   // a new begin implicitly abandons any half-finished transfer
     char *slug = args;
@@ -283,6 +306,7 @@ void dispatch(char *line) {
     if      (!strcmp(line, "hello"))     cmd_hello();
     else if (!strcmp(line, "themes"))    cmd_themes();
     else if (!strcmp(line, "theme"))     cmd_theme(arg);
+    else if (!strcmp(line, "delete"))    cmd_delete(arg);
     else if (!strcmp(line, "put-begin")) cmd_put_begin(arg);
     else if (!strcmp(line, "put-data"))  cmd_put_data(arg);
     else if (!strcmp(line, "put-end"))   cmd_put_end();
