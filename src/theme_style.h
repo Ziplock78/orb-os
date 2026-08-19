@@ -40,6 +40,26 @@
 
 namespace theme_style {
 
+// What this firmware understands of a theme, as one number a designer's tool can ask for.
+//
+// The version string is no use for this. FW_VERSION tracks releases and sat at 1.3.24
+// across several new theme settings, so a design tool comparing versions would have said
+// "up to date" about an Orb that silently dropped half of what it was sent. That is not a
+// hypothetical: it cost an afternoon chasing a sweep hand that would not move behind the
+// aircraft, on an Orb whose firmware simply had no idea the setting existed.
+//
+// So: bump this by one whenever the firmware learns to read a NEW theme setting, and add a
+// line to the ledger. Never renumber, never reuse. Orb Studio keeps the matching table of
+// which setting needs which level, and refuses to install a design the Orb would not
+// honour rather than letting it look installed.
+//
+// Firmware older than this constant reports no caps field at all, which a tool should read
+// as level 0: assume nothing, verify nothing.
+//
+//   1  radar layer order, keep-out areas, synthesised test traffic, and sweep/aircraft
+//      rotation pivots as theme data
+constexpr int THEME_CAPS = 1;
+
 struct ClockText {
     bool     show   = false;
     int      x      = 233;

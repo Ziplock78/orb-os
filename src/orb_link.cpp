@@ -104,7 +104,11 @@ void cmd_hello() {
     out_reset();
     out_str("{\"ok\":true,\"product\":");
     out_json_string(PRODUCT_NAME);
-    out_fmt(",\"proto\":%d,\"fw\":\"%s\"", PROTOCOL_VERSION, FW_VERSION);
+    // caps: what this firmware understands of a theme (theme_style::THEME_CAPS). proto is
+    // the wire format and moves only when the conversation itself changes; caps moves every
+    // time a new theme setting is readable. A tool needs the second one to know whether a
+    // design will actually be honoured.
+    out_fmt(",\"proto\":%d,\"caps\":%d,\"fw\":\"%s\"", PROTOCOL_VERSION, theme_style::THEME_CAPS, FW_VERSION);
     out_str(",\"slug\":");
     out_json_string(theme_select::activeSlug());
     out_str(",\"theme\":");
