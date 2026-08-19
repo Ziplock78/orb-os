@@ -58,7 +58,9 @@ namespace theme_style {
 //
 //   1  radar layer order, keep-out areas, synthesised test traffic, and sweep/aircraft
 //      rotation pivots as theme data
-constexpr int THEME_CAPS = 1;
+//   2  the menu's per-slot show flag: a design can drop the previous/next hints and keep
+//      only the centred app name
+constexpr int THEME_CAPS = 2;
 
 struct ClockText {
     bool     show   = false;

@@ -448,8 +448,15 @@ void refresh(const char *prevName, const char *curName, const char *nextName) {
     // CUSTOM_HAS_MENU_* (whether this slot exists at all) and each FONT stay
     // compile-time (see theme_style.h); position/color/glow/format/align now
     // follow the active SD theme.
+    //
+    // The per-slot `show` is honoured here as well, which it was not before. A theme that
+    // wanted only the centred name still got all three drawn, and a theme that said
+    // show:false and therefore shipped no position for the slot got the struct default,
+    // which is dead centre in white: the two hints landed on top of the very name they
+    // were hinting at. Whether the slot is COMPILED IN is still the macro's business;
+    // whether this design uses it is the theme's.
 #if CUSTOM_HAS_MENU_PREV
-    if (prevName && prevName[0]) {
+    if (prevName && prevName[0] && theme_style::menu().prev.show) {
         const theme_style::MenuText &t = theme_style::menu().prev;
         format_name(t.fmt, prevName, out, sizeof(out));
         draw_straight(theme_font::menu_prev(), out, (float)t.x, (float)t.y,
@@ -457,7 +464,7 @@ void refresh(const char *prevName, const char *curName, const char *nextName) {
     }
 #endif
 #if CUSTOM_HAS_MENU_NEXT
-    if (nextName && nextName[0]) {
+    if (nextName && nextName[0] && theme_style::menu().next.show) {
         const theme_style::MenuText &t = theme_style::menu().next;
         format_name(t.fmt, nextName, out, sizeof(out));
         draw_straight(theme_font::menu_next(), out, (float)t.x, (float)t.y,
@@ -465,7 +472,7 @@ void refresh(const char *prevName, const char *curName, const char *nextName) {
     }
 #endif
 #if CUSTOM_HAS_MENU_CURRENT
-    if (curName && curName[0]) {
+    if (curName && curName[0] && theme_style::menu().current.show) {
         const theme_style::MenuText &t = theme_style::menu().current;
         format_name(t.fmt, curName, out, sizeof(out));
         draw_wrapped(theme_font::menu_current(), out, (float)t.x, (float)t.y,
