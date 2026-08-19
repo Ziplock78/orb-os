@@ -558,6 +558,27 @@ static void wedge_bbox(float deg, lv_area_t *out) {
     out->x2 = maxx + pad; out->y2 = maxy + pad;
 }
 
+// How far one aircraft's mark can reach from its own position, in px.
+//
+// blipSize describes the VECTOR shapes only. An image blip is drawn at the sprite's own
+// pixel size, about its pivot, so its reach is the distance from that pivot to the far
+// corner: a 100 px icon padded as if it were a 10 px dot leaves the invalidation area
+// short, and the glide smears the parts that fall outside it. Rotation is why the corner
+// matters rather than the edge, and an off-centre pivot is why both sides are measured.
+static inline int blip_reach(const theme_style::Radar &rs) {
+    if (rs.blipTypeImage) {
+        if (const lv_img_dsc_t *icon = radar_custom_blip_icon()) {
+            const int w = icon->header.w, h = icon->header.h;
+            const int bpx = rs.blipPivotX >= 0 ? rs.blipPivotX : CUSTOM_RADAR_BLIP_PIVOT_X;
+            const int bpy = rs.blipPivotY >= 0 ? rs.blipPivotY : CUSTOM_RADAR_BLIP_PIVOT_Y;
+            const float dx = (float)LV_MAX(bpx, w - bpx);
+            const float dy = (float)LV_MAX(bpy, h - bpy);
+            return (int)lroundf(sqrtf(dx * dx + dy * dy));
+        }
+    }
+    return rs.blipSize;
+}
+
 // glyph + label bounding box (for partial invalidation during the glide).
 // Must cover the label areas drawn in the aircraft layer (they grew for large-text mode).
 static inline lv_area_t glyph_bbox(lv_point_t p) {
@@ -567,7 +588,7 @@ static inline lv_area_t glyph_bbox(lv_point_t p) {
         // selection-banner system) — just cover the blip + its glow + the
         // selection ring + its glow, generously, so the glide never trails ghosts.
         const theme_style::Radar &rs = theme_style::radar();
-        const int pad = 16 + rs.blipSize + rs.blipGlow + rs.selDiameter / 2 + rs.selGlow;
+        const int pad = 16 + blip_reach(rs) + rs.blipGlow + rs.selDiameter / 2 + rs.selGlow;
         a.x1 = p.x - pad; a.y1 = p.y - pad; a.x2 = p.x + pad; a.y2 = p.y + pad;
     } else if (orb()) { a.x1 = p.x - 30; a.y1 = p.y - 30; a.x2 = p.x + 30;  a.y2 = p.y + 30; }
     else          { a.x1 = p.x - 22; a.y1 = p.y - 22; a.x2 = p.x + 174; a.y2 = p.y + 32; }

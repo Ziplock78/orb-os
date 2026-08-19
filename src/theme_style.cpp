@@ -4,6 +4,12 @@
 #include <ArduinoJson.h>
 #include <string.h>
 #include <stdio.h>
+#if !defined(ESP_PLATFORM)
+// Desktop simulator: no Serial. This file logs exactly one line (a hand-written theme with
+// a second inverted zone), and that line is worth keeping in the sim too, so shim it the
+// same way radar_view.cpp and location_view.cpp already do.
+static struct { void println(const char *s) const { puts(s); } } Serial;
+#endif
 
 // Compile-time fallback defaults (and, for a stock/no-design build, the only values
 // that ever apply) — same headers each screen's own view already includes.
