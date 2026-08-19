@@ -63,7 +63,11 @@ namespace theme_style {
 //   3  the clock's two live text banners (text1/text2), drawn from the theme's own show
 //      flag instead of whichever CUSTOM_HAS_TEXT{1,2} a past firmware push happened to
 //      compile in
-constexpr int THEME_CAPS = 3;
+//   4  hand shadows cast by a FIXED light: a separate pre-blurred silhouette sprite per
+//      hand, drawn at the same angle as the hand but offset in SCREEN space, so the shadow
+//      falls the same way whatever hour it is. A theme baking its shadow into the hand
+//      sprite instead needs nothing from the firmware and still works below this.
+constexpr int THEME_CAPS = 4;
 
 struct ClockText {
     bool     show   = false;
@@ -106,6 +110,19 @@ struct Clock {
     Hand      hand[5];                        // 0=hour 1=minute 2=second 3=static1 4=static2
     int       order[5] = { 3, 4, 0, 1, 2 };   // back-to-front draw order, kind indices
     int       orderN   = 5;
+    // Shadows cast by ONE light that does not move with the hands.
+    //
+    // The hand's own sprite cannot carry this: a shadow painted into it turns with the
+    // hand, which reads as a lamp orbiting the dial. So each hand gets a second sprite,
+    // clock_shadow_{hour,minute,second}.png, holding its silhouette already blurred and
+    // already in the shadow's colour and opacity. That art is drawn at the hand's angle
+    // about the hand's own pivot, but centred dx/dy away in SCREEN space, which is what
+    // keeps the shadow pointing the same way all the way round the dial.
+    //
+    // Only the offset lives here. Softness, colour and strength are baked, so they cost
+    // the device nothing at all and the runtime work is one ordinary rotate-and-blend.
+    bool      shadowOn = false;
+    int       shadowDX = 0, shadowDY = 0;     // px, screen space, applied to every hand
 };
 
 // Which apps this theme puts in the knob menu. Was custom_apps.h, compiled in, so it was

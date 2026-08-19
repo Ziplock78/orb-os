@@ -831,6 +831,27 @@ static void draw_custom(const struct tm *ti) {
     // compile-time CUSTOM_* macros, so hands travel with the theme like every other
     // layer. The macros are still the seed defaults inside theme_style::load().
     const theme_style::Clock &cs = theme_style::clock();
+    // Every shadow first, then every hand.
+    //
+    // Interleaving them would let the minute hand's shadow fall across the hour hand drawn
+    // below it, which is what really happens but reads as a smudge on a 466 px dial. Laying
+    // all the shadows on the face and then standing the hands on top is the same choice a
+    // watch photographer makes with a diffuser, and it costs a second short loop.
+    if (cs.shadowOn) {
+        for (int i = 0; i < cs.orderN; ++i) {
+            const int k = cs.order[i];
+            if (k < 0 || k > 2) continue;              // statics do not cast; they are the face
+            const theme_style::Hand &hd = cs.hand[k];
+            if (!hd.show) continue;
+            CustomSprite sh = custom_shadow(k);
+            // Same art, same angle, same pivot as the hand — only the centre moves, and it
+            // moves in SCREEN space, which is the whole reason the light appears to stay put
+            // while the hand goes round.
+            if (sh.data) blend_custom_hand(sh.data, sh.w, sh.h, hd.pivotX, hd.pivotY,
+                                           (float)(hd.centerX + cs.shadowDX),
+                                           (float)(hd.centerY + cs.shadowDY), ang[k], 0);
+        }
+    }
     for (int i = 0; i < cs.orderN; ++i) {
         const int k = cs.order[i];
         if (k < 0 || k > 4) continue;

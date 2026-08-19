@@ -362,6 +362,14 @@ void load() {
                     }
                     if (n > 0) s_clock.orderN = n;
                 }
+                // One light for the whole dial. Absent means off, which is what every
+                // theme made before this existed intends.
+                JsonVariantConst sh = hands["shadow"];
+                if (!sh.isNull()) {
+                    s_clock.shadowOn = sh["on"] | false;
+                    s_clock.shadowDX = sh["dx"] | 0;
+                    s_clock.shadowDY = sh["dy"] | 0;
+                }
             }
         }
     }

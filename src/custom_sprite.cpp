@@ -125,9 +125,14 @@ uint16_t *s_plate = nullptr;   bool s_plateTried = false;
 uint8_t  *s_overlay = nullptr; bool s_overlayTried = false;
 // 0=hour,1=minute,2=second,3=static1,4=static2 — the two statics share this exact
 // same slot/decode machinery, just always drawn at angle 0 (see clock_view.cpp).
-uint8_t  *s_hand[5] = { nullptr, nullptr, nullptr, nullptr, nullptr };
-int       s_handW[5] = { 0, 0, 0, 0, 0 }, s_handH[5] = { 0, 0, 0, 0, 0 };
-bool      s_handTried[5] = { false, false, false, false, false };
+// Slots 0-4 are the hand and static layers the draw order names. Slots 5-7 are the three
+// hands' SHADOW silhouettes, which share every bit of this decode/flash-resident machinery
+// but are deliberately not addressable from the order list: a shadow is not a layer anyone
+// arranges, it is drawn with the hand it belongs to.
+constexpr int SLOTS = 8;
+uint8_t  *s_hand[SLOTS] = { nullptr };
+int       s_handW[SLOTS] = { 0 }, s_handH[SLOTS] = { 0 };
+bool      s_handTried[SLOTS] = { false };
 
 } // namespace
 
@@ -172,7 +177,7 @@ const uint8_t *custom_overlay() {
 }
 
 CustomSprite custom_hand(int kind) {
-    if (kind < 0 || kind > 4) return { nullptr, 0, 0 };
+    if (kind < 0 || kind >= SLOTS) return { nullptr, 0, 0 };
     if (!s_handTried[kind]) {
         s_handTried[kind] = true;
         const uint8_t *png = nullptr; uint32_t len = 0;
@@ -194,9 +199,13 @@ CustomSprite custom_hand(int kind) {
         // SD first, flash as fallback, same contract as plate/overlay. Hands were the
         // last visual element that could not travel per theme, which is why a theme
         // switch used to leave the previous theme's hands on the new clock face.
-        static const char *sdName[5] = {
-            "clock_hand_hour.png", "clock_hand_minute.png", "clock_hand_second.png",
-            "clock_static1.png",   "clock_static2.png",
+        static const char *sdName[SLOTS] = {
+            "clock_hand_hour.png",   "clock_hand_minute.png", "clock_hand_second.png",
+            "clock_static1.png",     "clock_static2.png",
+            // Theme-only: there is no compiled-in fallback for a shadow, and there should
+            // not be. A firmware that shipped its own would put a shadow under a theme
+            // that never asked for one.
+            "clock_shadow_hour.png", "clock_shadow_minute.png", "clock_shadow_second.png",
         };
         int w = 0, h = 0;
         if (const uint8_t *p = theme_art::find_active(sdName[kind], theme_art::FMT_RGB565_ALPHA, w, h)) {
@@ -212,6 +221,11 @@ CustomSprite custom_hand(int kind) {
 }
 
 // Drop every decoded PSRAM buffer and reset the "tried" flags so the next call to
+CustomSprite custom_shadow(int hand) {
+    if (hand < 0 || hand > 2) return { nullptr, 0, 0 };
+    return custom_hand(hand + 5);
+}
+
 // custom_plate()/custom_overlay()/custom_hand() re-decodes from the flash-resident
 // PNG bytes (which are never freed — they're .rodata, not a runtime allocation).
 // Called when the custom clock face is no longer the app on screen, so a design's
@@ -223,7 +237,7 @@ void custom_sprite_release() {
     // allocated, so the reference is dropped rather than freed.
     if (s_plate)   { if (!theme_art::owns(s_plate))   { freed += (size_t)SCREEN_W * SCREEN_H * 2; heap_caps_free(s_plate); }   s_plate = nullptr; }
     if (s_overlay) { if (!theme_art::owns(s_overlay)) { freed += (size_t)SCREEN_W * SCREEN_H * 3; heap_caps_free(s_overlay); } s_overlay = nullptr; }
-    for (int i = 0; i < 5; ++i) if (s_hand[i]) {
+    for (int i = 0; i < SLOTS; ++i) if (s_hand[i]) {
         if (!theme_art::owns(s_hand[i])) {
             freed += (size_t)s_handW[i] * s_handH[i] * 3;
             heap_caps_free(s_hand[i]);
