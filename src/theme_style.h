@@ -18,15 +18,13 @@
 //     making these travel per-theme needs LVGL's binary font/lv_fs runtime-loading
 //     path, a separate, much larger undertaking. Whichever theme's screen was pushed
 //     last still wins the font family/size/weight.
-//   - Radar blip icon pivot and radar layer order — plain numbers, but tightly coupled
-//     to whichever blip PNG is actually decoded (a pivot only makes sense against its
-//     own image's pixel dimensions).
 //
 // FIXED since this comment was written (these now DO travel per theme):
 //   - Clock hand art, pivot, center, blend, draw order, and the per-hand show/hide
 //     gates. Art comes from /themes/<slug>/clock_hand_{hour,minute,second}.png and
 //     clock_static{1,2}.png; geometry from the "hands" block in clock_style.json.
 //   - Which apps appear in the knob menu, from /themes/<slug>/theme.json.
+//   - Radar sweep/blip rotation pivots, and the radar layer order.
 //   - Radar's operational params (home lat/lon, range, max aircraft, hide-ground,
 //     min-altitude) — device config baked alongside style in the same header, but
 //     already just a one-time boot default the user can (and typically does)
@@ -250,6 +248,19 @@ struct Radar {
     };
     Zone     zones[MAX_ZONES];
     int      zoneCount       = 0;
+
+    // Back-to-front draw order for the movable layers, same six kinds and the same
+    // convention as CUSTOM_RADAR_LAYER_ORDER: 0=sweep, 1=aircraft, 2=text, 3=static1,
+    // 4=static2, 5=colour wash.
+    //
+    // This was the last item still listed as compile-time only at the top of this file.
+    // It mattered once a theme could be installed as files alone: a Studio theme that
+    // wants its sweep hand passing OVER the aircraft rather than under them had no way
+    // to say so, and inherited whatever order the last firmware push happened to weld
+    // in. orderN == 0 means "not specified", which keeps exactly that welded order, so
+    // every theme made before this field is unaffected.
+    int      order[6]        = { 0, 1, 2, 3, 4, 5 };
+    int      orderN          = 0;
 };
 
 struct MenuText {

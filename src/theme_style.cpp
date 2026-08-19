@@ -426,6 +426,22 @@ void load() {
             if (doc["sweepCenterY"].is<int>())   s_radar.sweepCenterY   = doc["sweepCenterY"].as<int>();
             if (doc["blipPivotX"].is<int>())     s_radar.blipPivotX     = doc["blipPivotX"].as<int>();
             if (doc["blipPivotY"].is<int>())     s_radar.blipPivotY     = doc["blipPivotY"].as<int>();
+            // "order": [3,4,5,0,1,2] — back-to-front, same kind indices as
+            // CUSTOM_RADAR_LAYER_ORDER. Junk indices are ignored rather than trusted;
+            // an empty or entirely junk list leaves orderN at 0, which means the welded
+            // order stands.
+            {
+                JsonArrayConst ord = doc["order"].as<JsonArrayConst>();
+                if (!ord.isNull() && ord.size() > 0) {
+                    int n = 0;
+                    for (JsonVariantConst v : ord) {
+                        if (n >= 6) break;
+                        const int k = v.as<int>();
+                        if (k >= 0 && k < 6) s_radar.order[n++] = k;
+                    }
+                    if (n > 0) s_radar.orderN = n;
+                }
+            }
             s_radar.zoneCount = 0;
             bool s_radarHasInvertZone = false;
             if (doc["zones"].is<JsonArrayConst>()) {

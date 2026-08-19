@@ -1149,22 +1149,37 @@ static void radar_exit_select() {
 // selection-banner text canvas, the two plain static image overlays, and the
 // plain color-wash overlay — e.g. so the sweep sits above the text instead
 // of below it, or so the color wash covers everything but the topmost
-// static. CUSTOM_RADAR_LAYER_ORDER lists them back-to-front (0=sweep,
-// 1=aircraft, 2=text, 3=static1, 4=static2, 5=overlay), the same convention
-// as the clock's CUSTOM_HAND_ORDER. Unlike the hands (sprites redrawn in
-// order inside one callback), these are separate LVGL objects, so
-// re-stacking means actually moving them; s_overlayImg (CRT+glass, NOT the
-// same thing as the color-wash s_dimLayer above) is reasserted last so it
-// always stays the true top layer regardless of where the other six land.
+// static. The order lists them back-to-front (0=sweep, 1=aircraft, 2=text,
+// 3=static1, 4=static2, 5=overlay), the same convention as the clock's
+// CUSTOM_HAND_ORDER. Unlike the hands (sprites redrawn in order inside one
+// callback), these are separate LVGL objects, so re-stacking means actually
+// moving them; s_overlayImg (CRT+glass, NOT the same thing as the color-wash
+// s_dimLayer above) is reasserted last so it always stays the true top layer
+// regardless of where the other six land.
+
+// Where that order comes from. A theme installed as files alone (Orb Studio) states it
+// in radar_style.json; anything older says nothing and keeps whatever
+// CUSTOM_RADAR_LAYER_ORDER the last firmware push welded in.
+static int radarLayerOrder(const int **out) {
+    static const int welded[] = CUSTOM_RADAR_LAYER_ORDER;
+    if (customStyled() && theme_style::radar().orderN > 0) {
+        *out = theme_style::radar().order;
+        return theme_style::radar().orderN;
+    }
+    *out = welded;
+    return CUSTOM_RADAR_LAYER_ORDER_N;
+}
+
 static void applyRadarLayerOrder() {
-    static const int order[] = CUSTOM_RADAR_LAYER_ORDER;
+    const int *order = nullptr;
+    const int orderN = radarLayerOrder(&order);
     // 0=sweep, 1=aircraft, 2=text, 3=static1, 4=static2, 5=overlay (color
     // wash). Whichever sweep object is actually active (vector wedge or
     // rotating image) takes the "sweep" slot — only one of them is ever
     // visible at a time.
     const bool sweepImgActive = customStyled() && theme_style::radar().sweepTypeImage;
     lv_obj_t *byKind[6] = { sweepImgActive ? s_sweepImg : s_sweep, s_acLayer, s_textCanvas, s_staticImg[0], s_staticImg[1], s_dimLayer };
-    for (int i = 0; i < CUSTOM_RADAR_LAYER_ORDER_N; ++i) {
+    for (int i = 0; i < orderN; ++i) {
         const int k = order[i];
         if (k >= 0 && k < 6 && byKind[k]) lv_obj_move_foreground(byKind[k]);
     }
@@ -1615,10 +1630,11 @@ static void rebuild_flat_background() {
     if (!plate) return;   // nothing opaque to build on; leave the live stack alone
 
     // Which layers sit below the first moving one.
-    static const int order[] = CUSTOM_RADAR_LAYER_ORDER;
+    const int *order = nullptr;
+    const int orderN = radarLayerOrder(&order);
     bool take[3] = { false, false, false };
     int  taken = 0;
-    for (int i = 0; i < CUSTOM_RADAR_LAYER_ORDER_N; ++i) {
+    for (int i = 0; i < orderN; ++i) {
         const int k = order[i];
         if (k == 0 || k == 1 || k == 2) break;      // sweep / aircraft / text: stop here
         if (k == 3) { take[0] = true; ++taken; }
