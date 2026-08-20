@@ -1312,7 +1312,7 @@ static void handleSave() {
 static void handleWifi() {
     g_web.send(200, "text/html",
         "<body style='background:#06100a;color:#ffb23c;font-family:sans-serif;padding:24px'>"
-        "WiFi reset. Connect to the <b>CapsuleRadar-Setup</b> network to reconfigure.</body>");
+        "WiFi reset. Connect to the <b>The Orb Setup</b> network to reconfigure.</body>");
     delay(400);                     // let the response reach the browser
     // The driver stores the saved AP in its own NVS namespace ("nvs.net80211"). On Arduino
     // core 3.x both wm.resetSettings() and WiFi.disconnect(true,true) can silently no-op
@@ -2030,16 +2030,16 @@ void setup() {
     // Fresh out of the box, or right after Settings > Reset: skip the clock and walk
     // straight into WiFi setup instead — see host_factory_reset(). Index 5 is still
     // Settings: Clock was inserted at the front, Intel/Surveillance/Settings didn't move.
+    bool wantWifiSetup = false;
     {
         Preferences p;
         p.begin("capsuleradar", true);
-        const bool needsWifiSetup = p.getBool("needsWifiSetup", false);
+        // Set by Settings > Reset. NOT set on a factory-fresh board: an erased NVS reads
+        // the default, false, which is why a brand-new Orb never got this prompt and sat
+        // on a clock instead. The real answer comes from autoConnect below, which is the
+        // only thing that actually knows whether there is a network to join.
+        wantWifiSetup = p.getBool("needsWifiSetup", false);
         p.end();
-        if (needsWifiSetup) {
-            app_shell::selectApp(5);
-            app_shell::setCaptured(true);   // Settings normally captures the knob on entry; match that here
-            settingsview::openWifiSetupPrompt();
-        }
 #if CUSTOM_BOOT_TARGET == 1
         // Set only by the splash push (the clock push clears it, even if a custom
         // splash is still baked in) — so this is genuinely "you just pushed the
@@ -2102,7 +2102,7 @@ void setup() {
     }
 
     // --- WiFi (captive portal, non-blocking) ------------------------------
-    // First boot opens the "CapsuleRadar-Setup" AP to enter WiFi creds. Non-blocking
+    // First boot opens the "The Orb Setup" AP to enter WiFi creds. Non-blocking
     // so the radar keeps animating while you configure WiFi from your phone.
     g_wm.setConfigPortalBlocking(false);
     g_wm.setTitle("Capsule Radar");
@@ -2135,10 +2135,20 @@ void setup() {
     // after WiFi.mode(WIFI_STA) or via WiFiManager's own getWiFiSSID(), and (b) never call
     // WiFi.begin() with fallback credentials before autoConnect() has had its turn.
     psram_mark("before wifi connect");
-    if (g_wm.autoConnect("CapsuleRadar-Setup"))
-        Serial.println("[wifi] connected");
-    else
-        Serial.println("[wifi] config portal open - join 'CapsuleRadar-Setup' to set WiFi; UI stays live");
+    const bool wifiUp = g_wm.autoConnect("The Orb Setup");
+    if (wifiUp) Serial.println("[wifi] connected");
+    else        Serial.println("[wifi] config portal open - join 'The Orb Setup' to set WiFi; UI stays live");
+
+    // No network means the first thing anyone should see is how to give it one, not a
+    // clock that cannot tell the time. Both routes are open from here: the knob walks
+    // through scan/pick/password on the screen itself, and the same moment the portal is
+    // up on "The Orb Setup" for anyone who would rather type on a phone.
+    if (!wifiUp) wantWifiSetup = true;
+    if (wantWifiSetup) {
+        app_shell::selectApp(5);        // Settings
+        app_shell::setCaptured(true);   // Settings captures the knob on entry; match that
+        settingsview::openWifiSetupPrompt();
+    }
 
     // --- OTA ---------------------------------------------------------------
     // ArduinoOTA is started from loop() once WiFi connects (see otaUp there).
@@ -2483,7 +2493,7 @@ void loop() {
             snprintf(net, sizeof(net), "Configure at\ncapsuleradar.local\n%s  |  %.5f, %.5f",
                      WiFi.localIP().toString().c_str(), g_settings.homeLat, g_settings.homeLon);
         else
-            snprintf(net, sizeof(net), "WiFi setup:\njoin CapsuleRadar-Setup");
+            snprintf(net, sizeof(net), "WiFi setup:\njoin \"The Orb Setup\"");
         settingsview::setNetInfo(net);   // shown on Settings > About (was the Stats screen)
         const bool bpresent = battery_present();
         ui_set_battery(battery_percent(), battery_charging(), bpresent);
