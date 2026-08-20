@@ -1626,22 +1626,65 @@ static bool sd_put_path_ok(const String &p) {
 // streams to the card. So a device with 320 KB of RAM never parses an archive, never holds a
 // theme in memory, and this whole feature costs one static page and no new upload code.
 static const char INSTALL_PAGE[] PROGMEM = R"HTML(<!doctype html><meta name=viewport content="width=device-width,initial-scale=1">
-<title>Install a theme</title><style>
-body{font:16px system-ui;margin:0;padding:24px;background:#101418;color:#e8edf2}
-h1{font-size:20px;margin:0 0 4px}p{color:#98a2ad;margin:4px 0 18px;line-height:1.5}
-label{display:inline-block;padding:12px 18px;border:1px solid #3a444f;border-radius:12px;cursor:pointer}
-label:hover{border-color:#e05a3a}input{display:none}
-#log{margin-top:18px;font:13px ui-monospace,monospace;white-space:pre-wrap;color:#98a2ad}
+<title>My Orb</title><style>
+*{box-sizing:border-box}
+body{font:16px system-ui;margin:0;padding:22px 18px 60px;background:#101418;color:#e8edf2}
+h1{font-size:20px;margin:0 0 2px}h2{font-size:12px;letter-spacing:.14em;text-transform:uppercase;color:#6a7480;margin:26px 0 10px}
+p{color:#98a2ad;margin:4px 0 16px;line-height:1.5}
+.row{display:flex;align-items:center;gap:10px;padding:12px 14px;border:1px solid #29323b;border-radius:12px;margin-bottom:8px;background:#161c22}
+.row.on{border-color:#3c6338;background:#16211a}
+.nm{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tag{font-size:11px;padding:2px 8px;border-radius:999px;background:#22303a;color:#8fb98a;white-space:nowrap}
+button,label.btn{font:14px system-ui;padding:7px 12px;border:1px solid #3a444f;border-radius:9px;background:none;color:#c7ced6;cursor:pointer}
+button:hover,label.btn:hover{border-color:#e05a3a;color:#fff}
+button:disabled{opacity:.4;cursor:default}
+label.btn{display:inline-block}input[type=file]{display:none}
+#log{margin-top:14px;font:13px ui-monospace,monospace;white-space:pre-wrap;color:#98a2ad}
 .ok{color:#7ddb8a}.bad{color:#ff8a6a}
 </style>
-<h1>Install a theme</h1>
-<p>Download a theme from Orb Studio, then choose the file here. Nothing else on your Orb is touched.</p>
-<label>Choose a .orb file<input type=file accept=".orb" id=f></label>
+<h1>My Orb</h1>
+<p id=sub>Loading…</p>
+
+<h2>Install a theme</h2>
+<p>Download a theme from Orb Studio, then choose the file here.</p>
+<label class=btn>Choose a .orb file<input type=file accept=".orb" id=f></label>
 <div id=log></div>
+
+<h2>On this Orb</h2>
+<div id=list></div>
+
 <script>
-const log=document.getElementById('log');
+const $=s=>document.querySelector(s), log=$('#log');
 const say=(m,c)=>{const d=document.createElement('div');if(c)d.className=c;d.textContent=m;log.appendChild(d)};
-document.getElementById('f').onchange=async e=>{
+
+async function refresh(){
+ const r=await fetch('/themes.json',{cache:'no-store'}); const d=await r.json();
+ const box=$('#list'); box.textContent='';
+ for(const t of d.themes){
+  const worn = t.slug===d.active;
+  const row=document.createElement('div'); row.className='row'+(worn?' on':'');
+  const nm=document.createElement('span'); nm.className='nm'; nm.textContent=t.name; row.appendChild(nm);
+  if(worn){ const g=document.createElement('span'); g.className='tag'; g.textContent='Wearing this'; row.appendChild(g); }
+  else{
+   const w=document.createElement('button'); w.textContent='Wear'; w.onclick=async()=>{
+    w.disabled=true; await fetch('/theme?slug='+encodeURIComponent(t.slug));
+    // The Orb reboots into the theme, so there is nothing useful to wait for here.
+    nm.textContent=t.name+' — switching, the Orb is restarting';
+   }; row.appendChild(w);
+   const x=document.createElement('button'); x.textContent='Delete'; x.onclick=async()=>{
+    if(x.textContent==='Delete'){ x.textContent='Really delete?'; return; }
+    x.disabled=true;
+    const rr=await fetch('/themedel?slug='+encodeURIComponent(t.slug),{method:'POST'});
+    if(rr.ok) refresh(); else { x.textContent=await rr.text(); }
+   }; row.appendChild(x);
+  }
+  box.appendChild(row);
+ }
+ $('#sub').textContent=d.themes.length+(d.themes.length===1?' theme':' themes')+' on the card. It cannot delete the one it is wearing — switch first.';
+}
+refresh();
+
+$('#f').onchange=async e=>{
  const file=e.target.files[0]; if(!file) return; log.textContent='';
  try{
   const buf=new Uint8Array(await file.arrayBuffer());
@@ -1658,10 +1701,10 @@ document.getElementById('f').onchange=async e=>{
    const dl=v.getUint32(at,true);at+=4;
    items.push({name,data:buf.subarray(at,at+dl)});at+=dl;
   }
-  say('Installing '+slug+' ('+items.length+' files)');
   // _installed LAST, always. The Orb only counts a folder that has it, so a transfer that
   // dies halfway leaves an invisible folder rather than a half-broken theme in the picker.
   items.sort((a,b)=>(a.name==='_installed')-(b.name==='_installed'));
+  say('Installing '+items.length+' files');
   for(let i=0;i<items.length;i++){
    const it=items[i];
    const fd=new FormData();
@@ -1670,7 +1713,7 @@ document.getElementById('f').onchange=async e=>{
    if(!r.ok) throw new Error(it.name+' failed to write ('+r.status+')');
    say((i+1)+'/'+items.length+'  '+it.name);
   }
-  say('Done. Choose it under Settings, Design.','ok');
+  say('Done.','ok'); refresh();
  }catch(err){ say(String(err.message||err),'bad'); }
 };
 </script>)HTML";
@@ -2204,6 +2247,41 @@ void setup() {
     // The page that drives /sdput from a browser, so a theme can arrive over WiFi from any
     // device on the network rather than only down a USB cable from a Chromium desktop.
     g_web.on("/install", []{ g_web.send_P(200, "text/html", INSTALL_PAGE); });
+    // What is on the card, for the page above. The same answer the serial link gives, which
+    // matters now that a cable is optional: Studio is served over HTTPS and can never call
+    // this, so the device's own page is the only place the card's contents can be seen.
+    g_web.on("/themes.json", []{
+        static char slugs[theme_select::MAX_THEMES][theme_select::MAX_SLUG_LEN];
+        const int n = theme_select::listInstalled(slugs);
+        String out = "{\"active\":\"";
+        out += theme_select::activeSlug();
+        out += "\",\"themes\":[";
+        for (int i = 0; i < n; ++i) {
+            char label[64];
+            theme_style::labelFor(slugs[i], label, sizeof(label));
+            // Quotes are the only character that can appear in a theme name and break this;
+            // a name is 40 characters of the user's own typing, not arbitrary bytes.
+            String name(label);
+            name.replace("\"", "'");
+            if (i) out += ',';
+            out += "{\"slug\":\""; out += slugs[i];
+            out += "\",\"name\":\""; out += name; out += "\"}";
+        }
+        out += "]}";
+        g_web.send(200, "application/json", out);
+    });
+    g_web.on("/themedel", HTTP_POST, []{
+        const String slug = g_web.arg("slug");
+        if (!slug.length()) { g_web.send(400, "text/plain", "missing slug"); return; }
+        // removeInstalled refuses the theme being worn: every screen is drawing from that
+        // folder right now. Switch first, then delete.
+        if (!theme_select::removeInstalled(slug.c_str())) {
+            g_web.send(409, "text/plain", "cannot delete the theme the Orb is wearing");
+            return;
+        }
+        Serial.printf("[theme] deleted '%s' by request\n", slug.c_str());
+        g_web.send(200, "text/plain", "ok");
+    });
     g_web.on("/", handleRoot);
     g_web.on("/save", HTTP_POST, handleSave);
     g_web.on("/wifi", HTTP_POST, handleWifi);
