@@ -1613,6 +1613,68 @@ static bool sd_put_path_ok(const String &p) {
     return p.startsWith("/themes/") && p.indexOf("..") < 0 && p.length() > 8 && p.length() < 96;
 }
 
+// The Orb's own install page: pick a .orb file, watch it land on the card.
+//
+// This exists because Studio CANNOT push over the network. Studio is served over HTTPS, the
+// Orb can only ever speak HTTP (there is not enough contiguous memory here for TLS), and a
+// browser refuses to let a secure page call an insecure address. Turning the direction round
+// solves it completely: an HTTP page on the Orb, talking to the Orb, upsets nobody. It also
+// means an iPad or a phone can install a theme, which the USB cable can never do.
+//
+// The unpacking happens HERE, in the browser, not in C++. The file is a trivial container
+// (see orb-bundle.ts) and the page POSTs its contents one at a time to /sdput, which already
+// streams to the card. So a device with 320 KB of RAM never parses an archive, never holds a
+// theme in memory, and this whole feature costs one static page and no new upload code.
+static const char INSTALL_PAGE[] PROGMEM = R"HTML(<!doctype html><meta name=viewport content="width=device-width,initial-scale=1">
+<title>Install a theme</title><style>
+body{font:16px system-ui;margin:0;padding:24px;background:#101418;color:#e8edf2}
+h1{font-size:20px;margin:0 0 4px}p{color:#98a2ad;margin:4px 0 18px;line-height:1.5}
+label{display:inline-block;padding:12px 18px;border:1px solid #3a444f;border-radius:12px;cursor:pointer}
+label:hover{border-color:#e05a3a}input{display:none}
+#log{margin-top:18px;font:13px ui-monospace,monospace;white-space:pre-wrap;color:#98a2ad}
+.ok{color:#7ddb8a}.bad{color:#ff8a6a}
+</style>
+<h1>Install a theme</h1>
+<p>Download a theme from Orb Studio, then choose the file here. Nothing else on your Orb is touched.</p>
+<label>Choose a .orb file<input type=file accept=".orb" id=f></label>
+<div id=log></div>
+<script>
+const log=document.getElementById('log');
+const say=(m,c)=>{const d=document.createElement('div');if(c)d.className=c;d.textContent=m;log.appendChild(d)};
+document.getElementById('f').onchange=async e=>{
+ const file=e.target.files[0]; if(!file) return; log.textContent='';
+ try{
+  const buf=new Uint8Array(await file.arrayBuffer());
+  const v=new DataView(buf.buffer),dec=new TextDecoder();
+  if(dec.decode(buf.subarray(0,8))!=='ORBTHM01') throw new Error('That is not an Orb theme file.');
+  let at=8;
+  const sl=v.getUint16(at,true);at+=2;
+  const slug=dec.decode(buf.subarray(at,at+sl));at+=sl;
+  const n=v.getUint16(at,true);at+=2;
+  const items=[];
+  for(let i=0;i<n;i++){
+   const nl=v.getUint16(at,true);at+=2;
+   const name=dec.decode(buf.subarray(at,at+nl));at+=nl;
+   const dl=v.getUint32(at,true);at+=4;
+   items.push({name,data:buf.subarray(at,at+dl)});at+=dl;
+  }
+  say('Installing '+slug+' ('+items.length+' files)');
+  // _installed LAST, always. The Orb only counts a folder that has it, so a transfer that
+  // dies halfway leaves an invisible folder rather than a half-broken theme in the picker.
+  items.sort((a,b)=>(a.name==='_installed')-(b.name==='_installed'));
+  for(let i=0;i<items.length;i++){
+   const it=items[i];
+   const fd=new FormData();
+   fd.append('f',new Blob([it.data]),it.name);
+   const r=await fetch('/sdput?path=/themes/'+encodeURIComponent(slug)+'/'+encodeURIComponent(it.name),{method:'POST',body:fd});
+   if(!r.ok) throw new Error(it.name+' failed to write ('+r.status+')');
+   say((i+1)+'/'+items.length+'  '+it.name);
+  }
+  say('Done. Choose it under Settings, Design.','ok');
+ }catch(err){ say(String(err.message||err),'bad'); }
+};
+</script>)HTML";
+
 static void handleSdPutUpload() {
     HTTPUpload &up = g_web.upload();
     if (up.status == UPLOAD_FILE_START) {
@@ -2139,6 +2201,9 @@ void setup() {
         g_web.send(200, "application/json", b);
     });
     g_web.on("/sdput", HTTP_POST, handleSdPutDone, handleSdPutUpload);   // Launch Kit pushes theme files here
+    // The page that drives /sdput from a browser, so a theme can arrive over WiFi from any
+    // device on the network rather than only down a USB cable from a Chromium desktop.
+    g_web.on("/install", []{ g_web.send_P(200, "text/html", INSTALL_PAGE); });
     g_web.on("/", handleRoot);
     g_web.on("/save", HTTP_POST, handleSave);
     g_web.on("/wifi", HTTP_POST, handleWifi);
