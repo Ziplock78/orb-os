@@ -703,6 +703,44 @@ static void draw_baked_arc_text(const lv_font_t *font, const char *fmt, float R,
     }
 }
 
+// A shadow is one flat colour behind a shape, so it needs none of the colour machinery a
+// hand needs. blend_custom_hand reconstructs each pixel from four RGB565 neighbours: four
+// unpacks and nine multiplies per pixel, over a box as wide as the sprite's reach. For
+// Aviator's 429x429 minute hand that is the whole 466x466 screen, and running it a SECOND
+// time for the shadow doubled the most expensive loop on the clock.
+//
+// That is what turned the dial black. Not the art — the shadow sprites are clean
+// silhouettes covering 3% of their box — but a frame that no longer finished inside its own
+// tick, so the canvas was never completely composited before it was flushed.
+//
+// This samples alpha only, nearest-neighbour, and mixes one constant colour. A blurred
+// silhouette has no detail for bilinear to preserve, so nothing is lost, and it costs
+// roughly a third of the full path.
+static void blend_shadow(const uint8_t *src, int sw, int sh, int pivotX, int pivotY,
+                         float cx, float cy, float angleDeg) {
+    if (!src || !s_buf) return;
+    const float th = angleDeg * DEG2RAD, ct = cosf(th), st = sinf(th);
+    const float reach = sqrtf(fmaxf((float)pivotX, (float)(sw - pivotX)) * fmaxf((float)pivotX, (float)(sw - pivotX))
+                            + fmaxf((float)pivotY, (float)(sh - pivotY)) * fmaxf((float)pivotY, (float)(sh - pivotY)));
+    const int x0 = (int)fmaxf(0.0f, cx - reach), x1 = (int)fminf((float)SCREEN_W - 1, cx + reach);
+    const int y0 = (int)fmaxf(0.0f, cy - reach), y1 = (int)fminf((float)SCREEN_H - 1, cy + reach);
+    for (int dy = y0; dy <= y1; ++dy) {
+        const float oy = dy - cy;
+        for (int dx = x0; dx <= x1; ++dx) {
+            const float ox = dx - cx;
+            const int sx = (int)(ox * ct + oy * st + pivotX);
+            const int sy = (int)(-ox * st + oy * ct + pivotY);
+            if (sx < 0 || sy < 0 || sx >= sw || sy >= sh) continue;
+            const uint8_t *p = src + ((size_t)sy * sw + sx) * 3;
+            const uint8_t a = p[2];
+            if (a < 8) continue;                       // same floor the hand blit uses
+            lv_color_t sc; sc.full = (uint16_t)(p[0] | (p[1] << 8));
+            lv_color_t *dst = &s_buf[dy * SCREEN_W + dx];
+            *dst = lv_color_mix(sc, *dst, a);
+        }
+    }
+}
+
 // Rotate a hand sprite (RGB565+alpha, 3 B/px) around the dial centre by angleDeg
 // and composite it into the canvas with the given blend (0 normal, 1 multiply,
 // 2 screen) — the same rotation math as blend_office_sprite, generalised to raw
@@ -881,9 +919,9 @@ static void draw_custom(const struct tm *ti) {
             // Same art, same angle, same pivot as the hand — only the centre moves, and it
             // moves in SCREEN space, which is the whole reason the light appears to stay put
             // while the hand goes round.
-            if (sh.data) blend_custom_hand(sh.data, sh.w, sh.h, hd.pivotX, hd.pivotY,
-                                           (float)(hd.centerX + cs.shadowDX),
-                                           (float)(hd.centerY + cs.shadowDY), ang[k], 0);
+            if (sh.data) blend_shadow(sh.data, sh.w, sh.h, hd.pivotX, hd.pivotY,
+                                      (float)(hd.centerX + cs.shadowDX),
+                                      (float)(hd.centerY + cs.shadowDY), ang[k]);
         }
     }
     for (int i = 0; i < cs.orderN; ++i) {
