@@ -745,8 +745,48 @@ static void blend_shadow(const uint8_t *src, int sw, int sh, int pivotX, int piv
 // and composite it into the canvas with the given blend (0 normal, 1 multiply,
 // 2 screen) — the same rotation math as blend_office_sprite, generalised to raw
 // sprite data + a blend mode so a pushed hand lands exactly where the editor drew it.
+// A layer that never turns is a straight copy: one source pixel onto one screen pixel.
+//
+// Worth its own path because the layers that use it are FULL SCREEN. Sending 217k pixels
+// through the rotating blit below costs four texel fetches and a dozen floats each, which
+// is the same full-screen bilinear pass that once left the Aviator dial black. This is the
+// overlay loop's cost instead, and the frame budget already carries one of those.
+static void blit_upright(const uint8_t *src, int sw, int sh, int pivotX, int pivotY,
+                         int cx, int cy, int blend) {
+    const int offX = cx - pivotX, offY = cy - pivotY;
+    const int x0 = offX < 0 ? 0 : offX, y0 = offY < 0 ? 0 : offY;
+    const int x1 = (offX + sw < SCREEN_W ? offX + sw : SCREEN_W);
+    const int y1 = (offY + sh < SCREEN_H ? offY + sh : SCREEN_H);
+    for (int dy = y0; dy < y1; ++dy) {
+        const uint8_t *row = src + ((size_t)(dy - offY) * sw) * 3;
+        lv_color_t *dstRow = &s_buf[dy * SCREEN_W];
+        for (int dx = x0; dx < x1; ++dx) {
+            const uint8_t *p = row + (size_t)(dx - offX) * 3;
+            const uint8_t a = p[2];
+            if (a < 8) continue;                       // same floor the rotating blit uses
+            lv_color_t sc; sc.full = (uint16_t)(p[0] | (p[1] << 8));
+            lv_color_t *dst = &dstRow[dx];
+            if (blend) {
+                uint8_t sr, sg, sb, dr, dg, db;
+                unpack565(sc.full, sr, sg, sb);
+                unpack565(dst->full, dr, dg, db);
+                if (blend == 1) { sr = (uint8_t)(sr * dr / 255); sg = (uint8_t)(sg * dg / 255); sb = (uint8_t)(sb * db / 255); }
+                else if (blend == 2) { sr = (uint8_t)(255 - (255 - sr) * (255 - dr) / 255); sg = (uint8_t)(255 - (255 - sg) * (255 - dg) / 255); sb = (uint8_t)(255 - (255 - sb) * (255 - db) / 255); }
+                sc = LV_COLOR_MAKE(sr, sg, sb);
+            }
+            *dst = lv_color_mix(sc, *dst, a);
+        }
+    }
+}
+
 static void blend_custom_hand(const uint8_t *src, int sw, int sh, int pivotX, int pivotY, float cx, float cy, float angleDeg, int blend) {
     if (!src || !s_buf) return;
+    // The static layers (kinds 3 and 4) are always here, and a hand passing 12 lands here
+    // for one frame, which is free.
+    if (fabsf(angleDeg) < 0.01f && cx == floorf(cx) && cy == floorf(cy)) {
+        blit_upright(src, sw, sh, pivotX, pivotY, (int)cx, (int)cy, blend);
+        return;
+    }
     const float th = angleDeg * DEG2RAD, ct = cosf(th), st = sinf(th);
     const float reach = sqrtf(fmaxf((float)pivotX, (float)(sw - pivotX)) * fmaxf((float)pivotX, (float)(sw - pivotX))
                             + fmaxf((float)pivotY, (float)(sh - pivotY)) * fmaxf((float)pivotY, (float)(sh - pivotY)));
