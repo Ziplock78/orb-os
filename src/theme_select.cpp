@@ -47,6 +47,33 @@ void init() {
         fclose(f);
     }
 #endif
+    // Nothing chosen, but themes on the card: wear the first one.
+    //
+    // A factory-fresh Orb has an erased NVS, so there is no stored slug, and it fell back
+    // to the compiled-in Stock face — a black dial wearing whichever hands the last
+    // firmware push happened to bake in. Someone who has just flashed a board and put a
+    // card in it sees none of the themes actually sitting on that card, and nothing says
+    // why. Picking one is strictly better than pretending there are none.
+    //
+    // Only ever when the slug is empty. Choosing anything, here or in Settings, writes it,
+    // so this cannot override a real choice — including a deliberate return to Stock, which
+    // is reached by deleting the themes rather than by clearing the pointer.
+    if (!s_slug[0]) {
+        static char slugs[MAX_THEMES][MAX_SLUG_LEN];
+        const int n = listInstalled(slugs);
+        if (n > 0) {
+            strncpy(s_slug, slugs[0], sizeof(s_slug) - 1);
+            s_slug[sizeof(s_slug) - 1] = 0;
+#ifdef ARDUINO
+            Preferences w;
+            w.begin("capsuleradar", false);
+            w.putString("themeSlug", s_slug);
+            w.end();
+            Serial.printf("[theme] nothing chosen; wearing '%s' from the card\n", s_slug);
+#endif
+        }
+    }
+
     // Every screen's own style (colors/positions/formats/geometry — see theme_style.h
     // for exactly what's covered) travels on the SD card per theme, same as the art.
     // set() always reboots/re-execs, so re-running this at boot is the only reload
