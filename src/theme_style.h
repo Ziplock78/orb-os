@@ -67,7 +67,19 @@ namespace theme_style {
 //      hand, drawn at the same angle as the hand but offset in SCREEN space, so the shadow
 //      falls the same way whatever hour it is. A theme baking its shadow into the hand
 //      sprite instead needs nothing from the firmware and still works below this.
-constexpr int THEME_CAPS = 4;
+//   5  the flight tracker's own furniture, all of it added in one sitting and all of it
+//      invisible to an Orb below this level:
+//        - the selection card (radar_card.png plus the `card` block) and the readout lines'
+//          runtime show/onCard flags. A line laid out for the card reads its across/down as
+//          offsets from the card's centre, so on older firmware it does not merely lose the
+//          card, it stacks near the middle of the dial with nothing behind it.
+//        - the sweep's own trail geometry: sweepTrailWidth / sweepLeadWidth /
+//          sweepTrailSteps, which were 5 / 2 / 20 welded into sweep_draw_cb.
+//        - the map's colours: mapRoadsOn / mapRoadColor / mapRoadOpacity / mapAirportsOn /
+//          mapAirportColor, previously a fixed grey drawn whether or not it was wanted.
+//        - rangeKm: how far the rim is. Launch Kit could set this only by recompiling
+//          (CUSTOM_RADAR_RANGE_KM), so a files-only theme had no way to state it at all.
+constexpr int THEME_CAPS = 5;
 
 struct ClockText {
     bool     show   = false;
@@ -278,6 +290,10 @@ struct Radar {
     // default or the user's saved setting already chose.
     int      maxAircraft     = -1;     // how many contacts the scope follows at once
     int      minAltFt        = -1;     // ignore anything below this altitude
+    // How far the rim is, in km. -1 means the theme has no opinion and the Orb keeps its
+    // own zoom, the same sentinel minAltFt above uses. Launch Kit could set this only by
+    // recompiling (CUSTOM_RADAR_RANGE_KM), so a files-only theme had no way to say it.
+    float    rangeKm         = -1.0f;
     int      hideGround      = -1;     // 1 = never show aircraft on the ground, 0 = show, -1 = unset
     // Synthesised traffic instead of the live feed. For judging a design without waiting
     // on whatever happens to be overhead, and for watching masking behave against motion

@@ -433,6 +433,10 @@ static void loadSettings() {
     // fresh push, same one-shot-per-boot precedent as CUSTOM_BOOT_TARGET.
     g_settings.rangeKm = CUSTOM_RADAR_RANGE_KM;
 #endif
+    // The active theme's own range, if it states one, wins over both the stored zoom and
+    // the welded macro above. Same shape as minAltFt below: -1 means "no opinion", so a
+    // theme that never mentions range leaves the Orb's own setting alone.
+    if (theme_style::radar().rangeKm > 0.0f) g_settings.rangeKm = theme_style::radar().rangeKm;
     g_brightnessDay    = p.getInt("bright", BRIGHTNESS_DEFAULT);
     g_volume           = p.getInt("vol", 60);
     g_muted            = p.getBool("mute", false);

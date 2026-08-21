@@ -456,6 +456,12 @@ void load() {
             if (doc["overlayOpacity"].is<int>()) s_radar.overlayOpacity = doc["overlayOpacity"].as<int>();
             if (doc["maxAircraft"].is<int>())    s_radar.maxAircraft    = doc["maxAircraft"].as<int>();
             if (doc["minAltFt"].is<int>())       s_radar.minAltFt       = doc["minAltFt"].as<int>();
+            // Clamped on the way in: the range divides in geo::projectToScreen, so a zero
+            // or a negative from a hand-written theme is a divide rather than a wrong dial.
+            if (doc["rangeKm"].is<float>()) {
+                const float km = doc["rangeKm"].as<float>();
+                if (km > 0.0f) s_radar.rangeKm = km < 1.0f ? 1.0f : (km > 500.0f ? 500.0f : km);
+            }
             if (doc["hideGround"].is<bool>())    s_radar.hideGround     = doc["hideGround"].as<bool>() ? 1 : 0;
             if (doc["simulate"].is<bool>())      s_radar.simulate       = doc["simulate"].as<bool>();
             if (doc["sweepPivotX"].is<int>())    s_radar.sweepPivotX    = doc["sweepPivotX"].as<int>();
