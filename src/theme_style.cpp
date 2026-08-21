@@ -446,6 +446,7 @@ void load() {
             merge_radar_card(doc["card"], s_radar.card);
             if (doc["mapRoadsOn"].is<bool>()) s_radar.mapRoadsOn = doc["mapRoadsOn"].as<bool>();
             if (doc["ringsPlate"].is<bool>()) s_radar.ringsPlate = doc["ringsPlate"].as<bool>();
+            if (doc["mapRoadWidth"].is<int>()) s_radar.mapRoadWidth = doc["mapRoadWidth"].as<int>();
             if (doc["mapRoadColor"].is<uint32_t>()) s_radar.mapRoadColor = doc["mapRoadColor"].as<uint32_t>();
             if (doc["mapRoadOpacity"].is<int>()) s_radar.mapRoadOpacity = doc["mapRoadOpacity"].as<int>();
             if (doc["mapAirportsOn"].is<bool>()) s_radar.mapAirportsOn = doc["mapAirportsOn"].as<bool>();

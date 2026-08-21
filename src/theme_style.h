@@ -84,7 +84,10 @@ namespace theme_style {
 //      stay readable over busy roads while it lived under them. An Orb below this level
 //      finds no such asset and draws a background with no rings on it at all, which is
 //      why `ringsPlate` below exists to be refused rather than silently dropped.
-constexpr int THEME_CAPS = 6;
+//   7  mapRoadWidth: how heavy the roads are drawn. roads_sd::draw has always taken a
+//      width and every call site passed a literal 1, so a theme could pick the roads'
+//      colour and opacity but never their weight. An Orb below this draws hairlines.
+constexpr int THEME_CAPS = 7;
 
 struct ClockText {
     bool     show   = false;
@@ -365,6 +368,9 @@ struct Radar {
     // firmware draws whatever asset it finds either way, but an Orb that cannot draw it
     // must refuse the theme rather than show a dial with no grid on it.
     bool     ringsPlate      = false;
+
+    // How heavy the roads are, in pixels. Welded at 1 until THEME_CAPS 7.
+    int      mapRoadWidth    = 1;
 };
 
 struct MenuText {

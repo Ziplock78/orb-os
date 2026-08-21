@@ -435,7 +435,12 @@ static void grid_draw_cb(lv_event_t *e) {
         // theme; the defaults in theme_style.h are the exact constants used before, so a
         // theme that says nothing about the map is unchanged.
         const theme_style::Radar &rs = theme_style::radar();
-        if (rs.mapRoadsOn) roads_sd::draw(d, lv_color_hex(rs.mapRoadColor), (lv_opa_t)rs.mapRoadOpacity, 1);
+        // Clamped rather than trusted: this is a stroke width handed straight to LVGL, and a
+        // zero draws nothing while a large one is mostly a way to fill the dial with roads.
+        if (rs.mapRoadsOn) {
+            const lv_coord_t rw = (lv_coord_t)(rs.mapRoadWidth < 1 ? 1 : (rs.mapRoadWidth > 8 ? 8 : rs.mapRoadWidth));
+            roads_sd::draw(d, lv_color_hex(rs.mapRoadColor), (lv_opa_t)rs.mapRoadOpacity, rw);
+        }
         // Coastline/waterways deliberately not drawn under a custom design. Inland it is
         // canals and washes rather than a recognisable shoreline, and on a 466 px dial it
         // read as clutter competing with the roads. The data still ships and the stock
