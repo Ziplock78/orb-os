@@ -258,6 +258,14 @@ struct Radar {
 
     RadarText rtext[4];
     RadarCard card;
+    // The map the Orb carries: real OSM roads around wherever it is, drawn under the
+    // scope's chrome. Always on and always the same grey until now, which a dark themed
+    // dial had no way to argue with. Defaults are the colours it has always used.
+    bool     mapRoadsOn      = true;
+    uint32_t mapRoadColor    = 0x707868;
+    int      mapRoadOpacity  = 150;   // 0..255
+    bool     mapAirportsOn   = true;
+    uint32_t mapAirportColor = 0x8A93A6;
     RadarStatic static1, static2;
 
     bool     overlayEnabled  = false;  // new with this field — see RadarStatic above for why there's no compiled-macro fallback

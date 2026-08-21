@@ -444,6 +444,11 @@ void load() {
                 }
             }
             merge_radar_card(doc["card"], s_radar.card);
+            if (doc["mapRoadsOn"].is<bool>()) s_radar.mapRoadsOn = doc["mapRoadsOn"].as<bool>();
+            if (doc["mapRoadColor"].is<uint32_t>()) s_radar.mapRoadColor = doc["mapRoadColor"].as<uint32_t>();
+            if (doc["mapRoadOpacity"].is<int>()) s_radar.mapRoadOpacity = doc["mapRoadOpacity"].as<int>();
+            if (doc["mapAirportsOn"].is<bool>()) s_radar.mapAirportsOn = doc["mapAirportsOn"].as<bool>();
+            if (doc["mapAirportColor"].is<uint32_t>()) s_radar.mapAirportColor = doc["mapAirportColor"].as<uint32_t>();
             merge_radar_static(doc["static1"], s_radar.static1);
             merge_radar_static(doc["static2"], s_radar.static2);
             if (doc["overlayEnabled"].is<bool>()) s_radar.overlayEnabled = doc["overlayEnabled"].as<bool>();

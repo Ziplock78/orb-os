@@ -428,12 +428,21 @@ static void grid_draw_cb(lv_event_t *e) {
     // coastline/airport markers, which are the device's own native OSM data,
     // not something a design push carries.
     if (customStyled()) {
-        roads_sd::draw(d, road_color(), 150, 1);
+        // The theme's map, not the firmware's. Roads used to be drawn here in one fixed
+        // grey whatever the design was doing, which a dark or a sepia dial had no way to
+        // argue with. Colour, strength and whether they draw at all now travel with the
+        // theme; the defaults in theme_style.h are the exact constants used before, so a
+        // theme that says nothing about the map is unchanged.
+        const theme_style::Radar &rs = theme_style::radar();
+        if (rs.mapRoadsOn) roads_sd::draw(d, lv_color_hex(rs.mapRoadColor), (lv_opa_t)rs.mapRoadOpacity, 1);
         // Coastline/waterways deliberately not drawn under a custom design. Inland it is
         // canals and washes rather than a recognisable shoreline, and on a 466 px dial it
         // read as clutter competing with the roads. The data still ships and the stock
         // scopes below still draw it; only the themed path opts out.
-        if (s_airportsEnabled) airports_draw(d, airport_color(), 150);
+        //
+        // Airports still answer to the device's own setting as well: it is a preference
+        // about what the owner wants to see, not only about how a theme looks.
+        if (s_airportsEnabled && rs.mapAirportsOn) airports_draw(d, lv_color_hex(rs.mapAirportColor), 150);
         return;
     }
 
