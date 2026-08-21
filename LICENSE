@@ -1,6 +1,12 @@
 MIT License
 
 Copyright (c) 2026 Quique Tortosa (socquique)
+Copyright (c) 2026 Zion Brock (Ziplock78)
+
+This project began as a fork of Quique Tortosa's Capsule Radar. The original
+copyright above is retained, as MIT requires. Substantial later work is Zion
+Brock's: the clock, menu, settings and startup screens, the SD-card theme
+engine, the Orb Studio serial and WiFi protocols, and the flash art pipeline.
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
