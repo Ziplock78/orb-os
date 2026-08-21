@@ -447,6 +447,11 @@ void load() {
             if (doc["mapRoadsOn"].is<bool>()) s_radar.mapRoadsOn = doc["mapRoadsOn"].as<bool>();
             if (doc["ringsPlate"].is<bool>()) s_radar.ringsPlate = doc["ringsPlate"].as<bool>();
             if (doc["mapRoadWidth"].is<int>()) s_radar.mapRoadWidth = doc["mapRoadWidth"].as<int>();
+            if (doc["sweepHubOn"].is<bool>()) s_radar.sweepHubOn = doc["sweepHubOn"].as<bool>();
+            if (doc["sweepHubColor"].is<uint32_t>()) s_radar.sweepHubColor = doc["sweepHubColor"].as<uint32_t>();
+            if (doc["sweepHubRadius"].is<int>()) s_radar.sweepHubRadius = doc["sweepHubRadius"].as<int>();
+            if (doc["sweepHubGlow"].is<int>()) s_radar.sweepHubGlow = doc["sweepHubGlow"].as<int>();
+            if (doc["sweepHubGlowColor"].is<uint32_t>()) s_radar.sweepHubGlowColor = doc["sweepHubGlowColor"].as<uint32_t>();
             if (doc["mapRoadColor"].is<uint32_t>()) s_radar.mapRoadColor = doc["mapRoadColor"].as<uint32_t>();
             if (doc["mapRoadOpacity"].is<int>()) s_radar.mapRoadOpacity = doc["mapRoadOpacity"].as<int>();
             if (doc["mapAirportsOn"].is<bool>()) s_radar.mapAirportsOn = doc["mapAirportsOn"].as<bool>();

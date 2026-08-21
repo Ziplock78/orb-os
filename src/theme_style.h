@@ -87,7 +87,11 @@ namespace theme_style {
 //   7  mapRoadWidth: how heavy the roads are drawn. roads_sd::draw has always taken a
 //      width and every call site passed a literal 1, so a theme could pick the roads'
 //      colour and opacity but never their weight. An Orb below this draws hairlines.
-constexpr int THEME_CAPS = 7;
+//   8  the sweep's own hub: a disc at the pivot the hand turns about, with its own colour,
+//      size and glow. The sweep drew lines out of a bare centre and the only thing ever at
+//      the middle of the dial was the aircraft layer's centre mark, which belongs to the
+//      aircraft and travels with them through the stack.
+constexpr int THEME_CAPS = 8;
 
 struct ClockText {
     bool     show   = false;
@@ -371,6 +375,15 @@ struct Radar {
 
     // How heavy the roads are, in pixels. Welded at 1 until THEME_CAPS 7.
     int      mapRoadWidth    = 1;
+
+    // The sweep's hub: the disc at the point the hand turns about. Drawn as part of the
+    // sweep layer, so it travels with the hand through the stack rather than sitting at a
+    // fixed depth. Off by default, which is what every theme made before this looked like.
+    bool     sweepHubOn      = false;
+    uint32_t sweepHubColor   = 0x39FF8A;
+    int      sweepHubRadius  = 6;
+    int      sweepHubGlow    = 0;      // px of halo beyond the disc, 0 = none
+    uint32_t sweepHubGlowColor = 0x39FF8A;
 };
 
 struct MenuText {

@@ -521,6 +521,10 @@ static void grid_draw_cb(lv_event_t *e) {
 static inline float sweepLenPx()    { return customStyled() ? (float)theme_style::radar().sweepLength  : (float)RADAR_R_OUTER_PX; }
 static inline float sweepTrailDeg() { return customStyled() ? (float)theme_style::radar().sweepTrailDeg : SWEEP_TRAIL_DEG; }
 
+// Defined with the aircraft drawing below, used by the sweep's hub above it. Same
+// forward-declaration pattern apply_grid_visibility() already uses in this file.
+static void draw_glow(lv_draw_ctx_t *d, lv_point_t pos, float baseR, float glowPx, lv_color_t color);
+
 static void sweep_draw_cb(lv_event_t *e) {
     if (s_loadingPending) return;   // no hand until there is something to sweep over
     if (!customStyled() && orb()) return;
@@ -565,6 +569,26 @@ static void sweep_draw_cb(lv_event_t *e) {
     le.round_end = 1;
     lv_point_t lead = rim_point(s_sweepDeg, R);
     lv_draw_line(dctx, &le, &center, &lead);
+
+    // The hub, last so it caps the lines rather than being crossed by them. Part of THIS
+    // layer on purpose: it is the point the hand turns about, so it belongs to the hand and
+    // moves with it through the stack. The aircraft layer's centre mark is a different
+    // thing that happens to sit in the same place.
+    if (customStyled()) {
+        const theme_style::Radar &rs = theme_style::radar();
+        if (rs.sweepHubOn && rs.sweepHubRadius > 0) {
+            const float hr = (float)rs.sweepHubRadius;
+            draw_glow(dctx, center, hr, (float)rs.sweepHubGlow, lv_color_hex(rs.sweepHubGlowColor));
+            lv_draw_rect_dsc_t hd;
+            lv_draw_rect_dsc_init(&hd);
+            hd.bg_color = lv_color_hex(rs.sweepHubColor);
+            hd.bg_opa = LV_OPA_COVER;
+            hd.radius = LV_RADIUS_CIRCLE;
+            lv_area_t ha = { (lv_coord_t)lroundf(center.x - hr), (lv_coord_t)lroundf(center.y - hr),
+                             (lv_coord_t)lroundf(center.x + hr), (lv_coord_t)lroundf(center.y + hr) };
+            lv_draw_rect(dctx, &hd, &ha);
+        }
+    }
 }
 
 static void wedge_bbox(float deg, lv_area_t *out) {
