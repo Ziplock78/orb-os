@@ -47,7 +47,7 @@ void ensure() {
     lv_obj_align(s_sub, LV_ALIGN_CENTER, 0, 6);
 
     s_hint = lv_label_create(s_panel);
-    lv_label_set_text(s_hint, "Keep power connected");
+    lv_label_set_text(s_hint, "Keep power connected. Do not unplug.");
     lv_obj_set_style_text_color(s_hint, lv_color_hex(0x5a636e), 0);
     lv_obj_set_style_text_font(s_hint, &lv_font_montserrat_14, 0);
     lv_obj_align(s_hint, LV_ALIGN_CENTER, 0, 60);
@@ -68,7 +68,7 @@ void watchdog_cb(lv_timer_t *) {
     if (!s_interrupted && idle > 12000) {
         s_interrupted = true;
         lv_label_set_text(s_title, "Update interrupted");
-        lv_label_set_text(s_sub, "The transfer stopped partway.\nPush again from Launch Kit to retry.");
+        lv_label_set_text(s_sub, "The transfer stopped partway.\nNothing was changed. Install again from Orb Studio.");
 #ifdef ARDUINO
         Serial.println("[update_ui] transfer went quiet for 12s — showing 'interrupted', will clear");
 #endif
@@ -90,7 +90,9 @@ void file_received(const char *name, int count) {
         lv_label_set_text(s_title, "Updating");
     }
     char b[96];
-    snprintf(b, sizeof(b), "Receiving theme files... %d\n%.40s", count, name ? name : "");
+    // Numbered, because the thing a person cannot tell from the desk is whether the device
+    // is finished or merely between steps. Saying which step it is on says both.
+    snprintf(b, sizeof(b), "Step 1 of 3 - receiving files (%d)\n%.40s", count, name ? name : "");
     lv_label_set_text(s_sub, b);
     if (!s_timer) s_timer = lv_timer_create(watchdog_cb, 1000, nullptr);
 #ifdef ARDUINO
@@ -104,7 +106,7 @@ void rebooting() {
     if (!s_panel) return;
     s_rebootPending = true;
     lv_label_set_text(s_title, "Restarting");
-    lv_label_set_text(s_sub, "Restarting to finish the update.\nThe screen will go dark for a few seconds.");
+    lv_label_set_text(s_sub, "Step 2 of 3 - restarting.\nThe screen goes dark for a few seconds,\nthen it prepares the artwork. Not finished yet.");
 #ifdef ARDUINO
     Serial.println("[update_ui] reboot incoming — told the user to expect the restart");
 #endif
@@ -115,7 +117,7 @@ void bake_begin(int totalAssets) {
     s_lastActivity = millis();
     lv_label_set_text(s_title, "Installing update");
     char b[64];
-    snprintf(b, sizeof(b), "Preparing artwork... 0 of %d", totalAssets);
+    snprintf(b, sizeof(b), "Step 3 of 3 - preparing artwork\n0 of %d", totalAssets);
     lv_label_set_text(s_sub, b);
     // Blocking work follows (the bake), so paint now rather than waiting for a timer
     // tick that will not come.
@@ -129,7 +131,7 @@ void bake_progress(const char *assetName, int done, int totalAssets) {
     if (!s_panel) return;
     s_lastActivity = millis();
     char b[96];
-    snprintf(b, sizeof(b), "Preparing artwork... %d of %d\n%.40s", done, totalAssets, assetName ? assetName : "");
+    snprintf(b, sizeof(b), "Step 3 of 3 - preparing artwork\n%d of %d  %.32s", done, totalAssets, assetName ? assetName : "");
     lv_label_set_text(s_sub, b);
     lv_refr_now(NULL);
 }

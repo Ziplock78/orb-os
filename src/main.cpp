@@ -2380,6 +2380,13 @@ void loop() {
     // deferred theme switch from /theme (set() persists to NVS and reboots by itself)
     if (g_applySlugAtMs && (int32_t)(millis() - g_applySlugAtMs) >= 0) {
         g_applySlugAtMs = 0;
+        // Say so BEFORE going down. theme_select::set() holds a 700 ms delay for exactly
+        // this notice ("hold the 'restarting...' notice on screen long enough to actually
+        // read"), but nothing on this path ever put one up: an install over the cable
+        // showed "receiving files", then the screen died mid-count with no explanation,
+        // which reads as a crash rather than as the middle of an update. Both the cable
+        // and the WiFi push land here, so one call covers both.
+        update_ui::rebooting();
         theme_select::set(g_pendingSlug.c_str());
     }
 
