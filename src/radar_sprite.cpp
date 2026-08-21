@@ -119,6 +119,7 @@ uint8_t     *s_plateBuf = nullptr;   lv_img_dsc_t s_plateDsc;   bool s_plateTrie
 uint8_t     *s_overlayBuf = nullptr; lv_img_dsc_t s_overlayDsc; bool s_overlayTried = false;
 uint8_t     *s_blipBuf = nullptr;    lv_img_dsc_t s_blipDsc;    bool s_blipTried = false;
 uint8_t     *s_staticBuf[2] = { nullptr, nullptr }; lv_img_dsc_t s_staticDsc[2]; bool s_staticTried[2] = { false, false };
+uint8_t     *s_cardBuf = nullptr; lv_img_dsc_t s_cardDsc; bool s_cardTried = false;
 uint8_t     *s_sweepBuf = nullptr; lv_img_dsc_t s_sweepDsc; bool s_sweepTried = false;
 
 } // namespace
@@ -198,6 +199,25 @@ const lv_img_dsc_t *radar_custom_blip_icon() {
 // image — same decode shape as the overlay (RGB565+alpha), SD-first with a
 // flash-baked fallback (custom_radar_static.h), position/opacity applied by
 // radar_view.cpp from theme_style::radar().static1/static2, not baked here.
+// The selection card's own art, when the design uses an image rather than the drawn
+// plate. No compiled-macro fallback: the card is new with this field, so there is no
+// welded push that could ever have carried one.
+const lv_img_dsc_t *radar_custom_card() {
+    if (!s_cardTried) {
+        s_cardTried = true;
+        int w = 0, h = 0;
+        if (load_asset("radar_card.png", nullptr, 0, true, s_cardBuf, w, h, "card")) {
+            s_cardDsc.header.always_zero = 0;
+            s_cardDsc.header.w = w;
+            s_cardDsc.header.h = h;
+            s_cardDsc.header.cf = LV_IMG_CF_TRUE_COLOR_ALPHA;
+            s_cardDsc.data_size = (uint32_t)w * h * 3;
+            s_cardDsc.data = s_cardBuf;
+        }
+    }
+    return s_cardBuf ? &s_cardDsc : nullptr;
+}
+
 const lv_img_dsc_t *radar_custom_static(int idx) {
     if (idx < 0 || idx > 1) return nullptr;
     if (!s_staticTried[idx]) {
@@ -271,7 +291,9 @@ void radar_sprite_release() {
         s_staticBuf[i] = nullptr;
     }
     if (s_sweepBuf) { if (!theme_art::owns(s_sweepBuf)) heap_caps_free(s_sweepBuf); s_sweepBuf = nullptr; }
+    if (s_cardBuf) { if (!theme_art::owns(s_cardBuf)) heap_caps_free(s_cardBuf); s_cardBuf = nullptr; }
     s_plateTried = s_overlayTried = s_blipTried = false;
     s_staticTried[0] = s_staticTried[1] = false;
     s_sweepTried = false;
+    s_cardTried = false;
 }

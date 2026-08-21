@@ -170,6 +170,26 @@ struct RadarText {
     int      curveR = 0;
     float    arcDeg = 0.0f;
     int      align  = 0;
+    // Ride the selection card instead of sitting at a fixed spot on the scope. When set,
+    // x/y stop being screen coordinates and become an offset from the card's own centre —
+    // so the line travels with the card as the card chases the far side of the dial.
+    bool     onCard = false;
+};
+
+// The selection card: a little plate that appears when an aircraft is picked, always on
+// the OPPOSITE side of the scope from that aircraft, so the thing you just selected is
+// never sitting under the words describing it. Vector (a rounded rect) or an image.
+struct RadarCard {
+    bool     enabled    = false;
+    bool     typeImage  = false;
+    int      radius     = 120;   // px from the scope's centre to the card's centre
+    int      w          = 150;   // vector card size; an image card uses its own pixels
+    int      h          = 60;
+    int      corner     = 10;    // vector corner rounding
+    uint32_t color      = 0x101418;
+    int      opacity    = 220;   // 0..255
+    uint32_t borderColor = 0x39FF8A;
+    int      borderWidth = 1;
 };
 
 // A plain decorative overlay (Static 1/2, see custom_radar_static.h) — no
@@ -193,6 +213,12 @@ struct Radar {
     int      sweepOpacity    = 60;    // 0..100
     int      sweepLength     = 233;
     int      sweepSpeed      = 45;
+    // The trail's own line work, hard-coded until now (a 5 px trail of 20 steps behind a
+    // 2 px leading edge). Defaults below are exactly those numbers, so a theme that does
+    // not mention them looks the same as it always did.
+    int      sweepTrailWidth = 5;     // px, thickness of each trail line
+    int      sweepLeadWidth  = 2;     // px, thickness of the solid leading edge
+    int      sweepTrailSteps = 20;    // how many lines the fading wedge is made of
 
     bool     blipEnabled     = true;  // new with this field — see RadarStatic above for why there's no compiled-macro fallback
     bool     blipTypeImage   = false;
@@ -231,6 +257,7 @@ struct Radar {
     uint32_t centerInnerColor  = 0x0B1F0F;
 
     RadarText rtext[4];
+    RadarCard card;
     RadarStatic static1, static2;
 
     bool     overlayEnabled  = false;  // new with this field — see RadarStatic above for why there's no compiled-macro fallback

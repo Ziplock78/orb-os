@@ -265,6 +265,20 @@ void merge_text(JsonVariantConst j, ClockText &t) {
     if (j["align"].is<int>()) t.align = j["align"].as<int>();
 }
 
+void merge_radar_card(JsonVariantConst j, RadarCard &c) {
+    if (j.isNull()) return;
+    if (j["enabled"].is<bool>()) c.enabled = j["enabled"].as<bool>();
+    if (j["typeImage"].is<bool>()) c.typeImage = j["typeImage"].as<bool>();
+    if (j["radius"].is<int>()) c.radius = j["radius"].as<int>();
+    if (j["w"].is<int>()) c.w = j["w"].as<int>();
+    if (j["h"].is<int>()) c.h = j["h"].as<int>();
+    if (j["corner"].is<int>()) c.corner = j["corner"].as<int>();
+    if (j["color"].is<uint32_t>()) c.color = j["color"].as<uint32_t>();
+    if (j["opacity"].is<int>()) c.opacity = j["opacity"].as<int>();
+    if (j["borderColor"].is<uint32_t>()) c.borderColor = j["borderColor"].as<uint32_t>();
+    if (j["borderWidth"].is<int>()) c.borderWidth = j["borderWidth"].as<int>();
+}
+
 void merge_rtext(JsonVariantConst j, RadarText &t) {
     if (j.isNull()) return;
     if (j["show"].is<bool>()) t.show = j["show"].as<bool>();
@@ -278,6 +292,7 @@ void merge_rtext(JsonVariantConst j, RadarText &t) {
     if (j["curveR"].is<int>()) t.curveR = j["curveR"].as<int>();
     if (j["arcDeg"].is<float>()) t.arcDeg = j["arcDeg"].as<float>();
     if (j["align"].is<int>()) t.align = j["align"].as<int>();
+    if (j["onCard"].is<bool>()) t.onCard = j["onCard"].as<bool>();
 }
 
 void merge_radar_static(JsonVariantConst j, RadarStatic &s) {
@@ -382,6 +397,9 @@ void load() {
             if (doc["sweepLeadColor"].is<uint32_t>()) s_radar.sweepLeadColor = doc["sweepLeadColor"].as<uint32_t>();
             if (doc["sweepTrailDeg"].is<int>()) s_radar.sweepTrailDeg = doc["sweepTrailDeg"].as<int>();
             if (doc["sweepOpacity"].is<int>()) s_radar.sweepOpacity = doc["sweepOpacity"].as<int>();
+            if (doc["sweepTrailWidth"].is<int>()) s_radar.sweepTrailWidth = doc["sweepTrailWidth"].as<int>();
+            if (doc["sweepLeadWidth"].is<int>()) s_radar.sweepLeadWidth = doc["sweepLeadWidth"].as<int>();
+            if (doc["sweepTrailSteps"].is<int>()) s_radar.sweepTrailSteps = doc["sweepTrailSteps"].as<int>();
             if (doc["sweepLength"].is<int>()) s_radar.sweepLength = doc["sweepLength"].as<int>();
             if (doc["sweepSpeed"].is<int>()) s_radar.sweepSpeed = doc["sweepSpeed"].as<int>();
             if (doc["blipEnabled"].is<bool>()) s_radar.blipEnabled = doc["blipEnabled"].as<bool>();
@@ -425,6 +443,7 @@ void load() {
                     i++;
                 }
             }
+            merge_radar_card(doc["card"], s_radar.card);
             merge_radar_static(doc["static1"], s_radar.static1);
             merge_radar_static(doc["static2"], s_radar.static2);
             if (doc["overlayEnabled"].is<bool>()) s_radar.overlayEnabled = doc["overlayEnabled"].as<bool>();

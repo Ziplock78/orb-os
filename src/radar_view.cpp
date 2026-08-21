@@ -192,6 +192,13 @@ static constexpr uint32_t SELECT_IDLE_MS = 5000;
 static void radar_exit_select();             // -> default view (deselect + release knob); defined below
 static float       s_lastRangeKm = 0.0f;     // current scope range, for the range banner (radar_range_fmt)
 static lv_obj_t   *s_textCanvas = nullptr;   // callsign/stats/route banners (curved+glow capable), a Launch Kit push
+// The selection card: a plate under those banners, parked on the far side of the scope
+// from whatever is selected. Two objects rather than one drawn shape, so LVGL does the
+// rounded corners, the border and the compositing itself — the text canvas above stays
+// purely text, and a glyph's glow lands over the card correctly instead of losing to it
+// under the canvas's own "higher opacity wins" rule.
+static lv_obj_t   *s_cardObj  = nullptr;     // the drawn (vector) card
+static lv_obj_t   *s_cardImg  = nullptr;     // the image card
 static lv_color_t *s_textBuf    = nullptr;
 static lv_obj_t   *s_plateImg   = nullptr;   // baked background+rings+crosshair (bottom layer), a Launch Kit push
 static lv_obj_t   *s_overlayImg = nullptr;   // baked CRT+glass (top layer), a Launch Kit push
@@ -515,15 +522,20 @@ static void sweep_draw_cb(lv_event_t *e) {
     const lv_color_t leadColor  = customStyled() ? lv_color_hex(theme_style::radar().sweepLeadColor) : s_cLead;
     const float trailOpaMax = customStyled() ? ((float)theme_style::radar().sweepOpacity * 2.55f) : (float)SWEEP_TRAIL_OPA;
 
+    // The trail's line work. Clamped rather than trusted: a theme is a file on an SD card
+    // and a zero step count here would divide by zero two lines down.
+    const int steps = customStyled()
+        ? (theme_style::radar().sweepTrailSteps < 1 ? 1 : (theme_style::radar().sweepTrailSteps > 60 ? 60 : theme_style::radar().sweepTrailSteps))
+        : SWEEP_TRAIL_STEPS;
     lv_draw_line_dsc_t ld;
     lv_draw_line_dsc_init(&ld);
     ld.color = trailColor;
-    ld.width = 5;
+    ld.width = customStyled() ? (lv_coord_t)theme_style::radar().sweepTrailWidth : 5;
     ld.round_start = 1;
     ld.round_end = 1;
-    for (int i = SWEEP_TRAIL_STEPS; i >= 1; --i) {
-        const float frac = 1.0f - (float)i / (float)SWEEP_TRAIL_STEPS;
-        const float ang  = s_sweepDeg - (float)i * (trailDeg / (float)SWEEP_TRAIL_STEPS);
+    for (int i = steps; i >= 1; --i) {
+        const float frac = 1.0f - (float)i / (float)steps;
+        const float ang  = s_sweepDeg - (float)i * (trailDeg / (float)steps);
         ld.opa = (lv_opa_t)(frac * frac * trailOpaMax);
         if (ld.opa < 2) continue;
         lv_point_t p2 = rim_point(ang, R);
@@ -532,7 +544,7 @@ static void sweep_draw_cb(lv_event_t *e) {
     lv_draw_line_dsc_t le;
     lv_draw_line_dsc_init(&le);
     le.color = leadColor;
-    le.width = 2;
+    le.width = customStyled() ? (lv_coord_t)theme_style::radar().sweepLeadWidth : 2;
     le.opa = 217;
     le.round_start = 1;
     le.round_end = 1;
@@ -1490,6 +1502,16 @@ void init(void *lv_parent) {
     // an arc and glow, redrawn by refresh_custom_text() whenever the custom
     // design is active and something is selected. Created after the aircraft
     // layer so banners sit above the scope, rings, and blips.
+    // Created BEFORE the text canvas so they sit under it in LVGL's own z-order, which is
+    // creation order among siblings — the card is a backdrop for the words, never over them.
+    s_cardImg = lv_img_create(parent);
+    lv_obj_clear_flag(s_cardImg, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_flag(s_cardImg, LV_OBJ_FLAG_HIDDEN);
+    s_cardObj = lv_obj_create(parent);
+    lv_obj_remove_style_all(s_cardObj);
+    lv_obj_clear_flag(s_cardObj, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_flag(s_cardObj, LV_OBJ_FLAG_HIDDEN);
+
 #if CUSTOM_HAS_RADAR
     {
         // Canvas OBJECT only; the 636 KB buffer is acquired by refresh_custom_text()
@@ -2287,15 +2309,59 @@ static void refresh_custom_text() {
     if (!s_textCanvas) return;
     AcInfo in;
     const bool have = selected(in);
-    // Does anything need drawing at all? Selection banners need a selection; the range
-    // banner (RTEXT4) is scope-wide and needs the canvas whenever it is compiled in.
+    const theme_style::Radar &rs = theme_style::radar();
+    // `show` is the gate now, not CUSTOM_HAS_RTEXT{n}.
+    //
+    // Those macros are baked in by whichever Launch Kit push last compiled the firmware,
+    // so a theme installed as FILES ALONE — which is every theme Orb Studio makes — could
+    // ship a selection line and have the Orb refuse to draw it, for no reason it could see
+    // or state. Exactly the bug the clock's own text1/text2 had (see clock_view.cpp), and
+    // exactly the same fix: the theme decides, at runtime.
     bool need = false;
-#if CUSTOM_HAS_RTEXT1 || CUSTOM_HAS_RTEXT2 || CUSTOM_HAS_RTEXT3
-    if (have) need = true;
-#endif
-#if CUSTOM_HAS_RTEXT4
-    need = true;
-#endif
+    if (have) for (int i = 0; i < 3; ++i) if (rs.rtext[i].show) need = true;
+    if (rs.rtext[3].show) need = true;   // the range banner is scope-wide, selection or not
+    // The card, and where it sits. Placed before the text so the banners riding it have a
+    // centre to be measured from.
+    //
+    // Always 180 degrees from the selected aircraft's own bearing: the thing just picked is
+    // never underneath the words describing it, however the traffic moves. Recomputed on
+    // every refresh, which is also every position update, so the card chases the far side
+    // of the dial live rather than being placed once and left there.
+    float cardCx = (float)s_cx, cardCy = (float)s_cy;
+    const bool cardOn = rs.card.enabled && have;
+    if (cardOn) {
+        const float opp = (in.bearingDeg + 180.0f) * (float)M_PI / 180.0f;
+        cardCx = (float)s_cx + sinf(opp) * (float)rs.card.radius;
+        cardCy = (float)s_cy - cosf(opp) * (float)rs.card.radius;
+    }
+    if (s_cardImg && s_cardObj) {
+        const lv_img_dsc_t *art = (cardOn && rs.card.typeImage) ? radar_custom_card() : nullptr;
+        if (art) {
+            lv_img_set_src(s_cardImg, art);
+            lv_obj_set_pos(s_cardImg, (lv_coord_t)lroundf(cardCx - art->header.w / 2.0f),
+                                      (lv_coord_t)lroundf(cardCy - art->header.h / 2.0f));
+            lv_obj_set_style_img_opa(s_cardImg, (lv_opa_t)rs.card.opacity, 0);
+            show(s_cardImg, true);
+            show(s_cardObj, false);
+        } else if (cardOn) {
+            // Drawn card, or an image card whose art failed to decode: a plate is better
+            // than words floating over the scope with nothing behind them.
+            lv_obj_set_size(s_cardObj, (lv_coord_t)rs.card.w, (lv_coord_t)rs.card.h);
+            lv_obj_set_pos(s_cardObj, (lv_coord_t)lroundf(cardCx - rs.card.w / 2.0f),
+                                      (lv_coord_t)lroundf(cardCy - rs.card.h / 2.0f));
+            lv_obj_set_style_bg_color(s_cardObj, lv_color_hex(rs.card.color), 0);
+            lv_obj_set_style_bg_opa(s_cardObj, (lv_opa_t)rs.card.opacity, 0);
+            lv_obj_set_style_radius(s_cardObj, (lv_coord_t)rs.card.corner, 0);
+            lv_obj_set_style_border_color(s_cardObj, lv_color_hex(rs.card.borderColor), 0);
+            lv_obj_set_style_border_width(s_cardObj, (lv_coord_t)rs.card.borderWidth, 0);
+            lv_obj_set_style_border_opa(s_cardObj, LV_OPA_COVER, 0);
+            show(s_cardObj, true);
+            show(s_cardImg, false);
+        } else {
+            show(s_cardObj, false);
+            show(s_cardImg, false);
+        }
+    }
     if (!need) { canvas_release(s_textCanvas, s_textBuf); return; }
     if (!canvas_acquire(s_textCanvas, s_textBuf, "text")) return;
     lv_canvas_fill_bg(s_textCanvas, lv_color_black(), LV_OPA_TRANSP);
@@ -2303,34 +2369,30 @@ static void refresh_custom_text() {
     // compile-time (see theme_style.h); position/color/glow/format/align/curve now
     // follow the active SD theme.
     if (have) {
-#if CUSTOM_HAS_RTEXT1
-        { const theme_style::RadarText &t = theme_style::radar().rtext[0];
-          char buf[64]; if (radar_fmt(buf, sizeof(buf), t.fmt, in)) {
-          if (t.curved) rtext_draw_curved(theme_font::radar_text(0), buf, (float)t.curveR, t.arcDeg, lv_color_hex(t.color), t.glow, lv_color_hex(t.glowColor));
-          else rtext_draw_straight(theme_font::radar_text(0), buf, (float)t.x, (float)t.y, lv_color_hex(t.color), t.glow, lv_color_hex(t.glowColor), t.align); } }
-#endif
-#if CUSTOM_HAS_RTEXT2
-        { const theme_style::RadarText &t = theme_style::radar().rtext[1];
-          char buf[64]; if (radar_fmt(buf, sizeof(buf), t.fmt, in)) {
-          if (t.curved) rtext_draw_curved(theme_font::radar_text(1), buf, (float)t.curveR, t.arcDeg, lv_color_hex(t.color), t.glow, lv_color_hex(t.glowColor));
-          else rtext_draw_straight(theme_font::radar_text(1), buf, (float)t.x, (float)t.y, lv_color_hex(t.color), t.glow, lv_color_hex(t.glowColor), t.align); } }
-#endif
-#if CUSTOM_HAS_RTEXT3
-        { const theme_style::RadarText &t = theme_style::radar().rtext[2];
-          char buf[64]; if (radar_fmt(buf, sizeof(buf), t.fmt, in)) {
-          if (t.curved) rtext_draw_curved(theme_font::radar_text(2), buf, (float)t.curveR, t.arcDeg, lv_color_hex(t.color), t.glow, lv_color_hex(t.glowColor));
-          else rtext_draw_straight(theme_font::radar_text(2), buf, (float)t.x, (float)t.y, lv_color_hex(t.color), t.glow, lv_color_hex(t.glowColor), t.align); } }
-#endif
+        for (int i = 0; i < 3; ++i) {
+            const theme_style::RadarText &t = rs.rtext[i];
+            if (!t.show) continue;
+            char buf[64];
+            if (!radar_fmt(buf, sizeof(buf), t.fmt, in)) continue;
+            if (t.curved) { rtext_draw_curved(theme_font::radar_text(i), buf, (float)t.curveR, t.arcDeg, lv_color_hex(t.color), t.glow, lv_color_hex(t.glowColor)); continue; }
+            // A line riding the card reads x/y as an offset from the card's own centre, so
+            // it travels with it. Only when a card is actually showing: a line pinned to a
+            // card that is switched off would otherwise land at an offset from the middle
+            // of the scope, which is not where anyone put it.
+            const float lx = (t.onCard && cardOn) ? cardCx + (float)(t.x - SCREEN_W / 2) : (float)t.x;
+            const float ly = (t.onCard && cardOn) ? cardCy + (float)(t.y - SCREEN_H / 2) : (float)t.y;
+            rtext_draw_straight(theme_font::radar_text(i), buf, lx, ly, lv_color_hex(t.color), t.glow, lv_color_hex(t.glowColor), t.align);
+        }
     }
     // The range banner describes the scope itself (its configured radius), not a
     // selected aircraft, so it's outside the `have` gate above — it stays on the
     // whole time a custom design is active, matching the editor's own preview.
-#if CUSTOM_HAS_RTEXT4
-    { const theme_style::RadarText &t = theme_style::radar().rtext[3];
+    if (rs.rtext[3].show) {
+      const theme_style::RadarText &t = rs.rtext[3];
       char buf[64]; radar_range_fmt(buf, sizeof(buf), t.fmt);
       if (t.curved) rtext_draw_curved(theme_font::radar_text(3), buf, (float)t.curveR, t.arcDeg, lv_color_hex(t.color), t.glow, lv_color_hex(t.glowColor));
-      else rtext_draw_straight(theme_font::radar_text(3), buf, (float)t.x, (float)t.y, lv_color_hex(t.color), t.glow, lv_color_hex(t.glowColor), t.align); }
-#endif
+      else rtext_draw_straight(theme_font::radar_text(3), buf, (float)t.x, (float)t.y, lv_color_hex(t.color), t.glow, lv_color_hex(t.glowColor), t.align);
+    }
     lv_obj_invalidate(s_textCanvas);
 }
 #else
