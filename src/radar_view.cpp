@@ -200,7 +200,8 @@ static lv_obj_t   *s_textCanvas = nullptr;   // callsign/stats/route banners (cu
 static lv_obj_t   *s_cardObj  = nullptr;     // the drawn (vector) card
 static lv_obj_t   *s_cardImg  = nullptr;     // the image card
 static lv_color_t *s_textBuf    = nullptr;
-static lv_obj_t   *s_plateImg   = nullptr;   // baked background+rings+crosshair (bottom layer), a Launch Kit push
+static lv_obj_t   *s_plateImg   = nullptr;   // baked background (bottom layer), a Launch Kit push
+static lv_obj_t   *s_ringsImg   = nullptr;   // etched rings+crosshair, above the map, below the sweep (THEME_CAPS 6)
 static lv_obj_t   *s_overlayImg = nullptr;   // baked CRT+glass (top layer), a Launch Kit push
 static lv_obj_t   *s_staticImg[2] = { nullptr, nullptr };   // two plain decorative overlays, a Launch Kit push
 static lv_obj_t   *s_dimLayer  = nullptr;   // plain full-scope color wash (the "Overlay" card) — reorderable, a Launch Kit push
@@ -1423,6 +1424,15 @@ void init(void *lv_parent) {
     lv_obj_center(s_flowCanvas);
 
     s_gridLayer = make_layer(parent, grid_draw_cb);
+
+    // Rings and crosshair, created straight after the map so LVGL's own creation order
+    // puts the etching over the roads. Everything movable is lifted above this by
+    // applyRadarLayerOrder(), so it can never end up over an aircraft.
+    s_ringsImg = lv_img_create(parent);
+    lv_obj_clear_flag(s_ringsImg, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_center(s_ringsImg);
+    lv_obj_add_flag(s_ringsImg, LV_OBJ_FLAG_HIDDEN);
+
     s_sweep     = make_layer(parent, sweep_draw_cb);
     s_acLayer   = make_layer(parent, ac_draw_cb);
 
@@ -1619,6 +1629,7 @@ static bool         s_flatTook[3] = { false, false, false };   // static1, stati
 // assumes the map is "etched in"; this makes that assumption true.
 static lv_img_dsc_t *s_mapSnap  = nullptr;
 static bool          s_mapBaked = false;
+static bool          s_ringsBaked = false;   // the etching went into the flat plate, so hide the live object
 
 static void take_map_snapshot() {
     if (!s_gridLayer || !customStyled()) return;
@@ -1670,12 +1681,16 @@ static void release_flat_background() {
     if (s_flatBuf)    { heap_caps_free(s_flatBuf); s_flatBuf = nullptr; }
     s_flatOn = false;
     s_flatTook[0] = s_flatTook[1] = s_flatTook[2] = false;
+    s_ringsBaked = false;
+    if (s_ringsImg && radar_custom_rings()) show(s_ringsImg, true);
 }
 
 static void rebuild_flat_background() {
     s_flatOn = false;
     s_mapBaked = false;
+    s_ringsBaked = false;
     s_flatTook[0] = s_flatTook[1] = s_flatTook[2] = false;
+    if (s_ringsImg && radar_custom_rings()) show(s_ringsImg, true);
     if (!customStyled() || !s_plateImg) return;
 
     const lv_img_dsc_t *plate = radar_custom_plate();
@@ -1730,6 +1745,12 @@ static void rebuild_flat_background() {
         lv_canvas_draw_img(s_flatCanvas, 0, 0, s_mapSnap, &d);
         s_mapBaked = true;
     }
+    // 1c. the etched rings, over the map for the same reason they sit over it live.
+    if (const lv_img_dsc_t *rings = radar_custom_rings()) {
+        lv_draw_img_dsc_t d; lv_draw_img_dsc_init(&d);
+        lv_canvas_draw_img(s_flatCanvas, 0, 0, rings, &d);
+        s_ringsBaked = true;
+    }
     // 2. the decorative statics we are allowed to absorb, same transform as the
     //    live path above (zoom about the image's own centre, positioned by
     //    unscaled w/h so the visual centre lands on x,y at any scale)
@@ -1760,11 +1781,12 @@ static void rebuild_flat_background() {
     // Swap the plate over to the merged image and retire what it now contains.
     lv_img_set_src(s_plateImg, lv_canvas_get_img(s_flatCanvas));
     show(s_plateImg, true);
+    if (s_ringsBaked && s_ringsImg) show(s_ringsImg, false);
     for (int i = 0; i < 2; ++i) if (s_flatTook[i] && s_staticImg[i]) show(s_staticImg[i], false);
     if (s_flatTook[2] && s_dimLayer) show(s_dimLayer, false);
     s_flatOn = true;
-    Serial.printf("[radar] flattened into the plate: map=%d static1=%d static2=%d wash=%d\n",
-                  (int)s_mapBaked, (int)s_flatTook[0], (int)s_flatTook[1], (int)s_flatTook[2]);
+    Serial.printf("[radar] flattened into the plate: map=%d rings=%d static1=%d static2=%d wash=%d\n",
+                  (int)s_mapBaked, (int)s_ringsBaked, (int)s_flatTook[0], (int)s_flatTook[1], (int)s_flatTook[2]);
 }
 
 // Call once at init(), and again from Flight Tracker's onEnter after an
@@ -1776,6 +1798,11 @@ void refreshCustomStyle() {
         const lv_img_dsc_t *plate = radar_custom_plate();
         if (plate) { lv_img_set_src(s_plateImg, plate); show(s_plateImg, true); }
         else show(s_plateImg, false);
+    }
+    if (s_ringsImg) {
+        const lv_img_dsc_t *rg = radar_custom_rings();
+        if (rg) { lv_img_set_src(s_ringsImg, rg); show(s_ringsImg, true); }
+        else show(s_ringsImg, false);
     }
     if (s_overlayImg) {
         const lv_img_dsc_t *ov = radar_custom_overlay();

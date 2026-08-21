@@ -79,7 +79,12 @@ namespace theme_style {
 //          mapAirportColor, previously a fixed grey drawn whether or not it was wanted.
 //        - rangeKm: how far the rim is. Launch Kit could set this only by recompiling
 //          (CUSTOM_RADAR_RANGE_KM), so a files-only theme had no way to state it at all.
-constexpr int THEME_CAPS = 5;
+//   6  the rings and crosshair as their OWN etched plate (radar_rings.png), drawn above
+//      the map instead of baked into the background beneath it. Scope furniture could not
+//      stay readable over busy roads while it lived under them. An Orb below this level
+//      finds no such asset and draws a background with no rings on it at all, which is
+//      why `ringsPlate` below exists to be refused rather than silently dropped.
+constexpr int THEME_CAPS = 6;
 
 struct ClockText {
     bool     show   = false;
@@ -354,6 +359,12 @@ struct Radar {
     // every theme made before this field is unaffected.
     int      order[6]        = { 0, 1, 2, 3, 4, 5 };
     int      orderN          = 0;
+
+    // This theme ships radar_rings.png and its background plate therefore has no rings
+    // baked in. Purely a declaration for Orb Studio to check against THEME_CAPS: the
+    // firmware draws whatever asset it finds either way, but an Orb that cannot draw it
+    // must refuse the theme rather than show a dial with no grid on it.
+    bool     ringsPlate      = false;
 };
 
 struct MenuText {

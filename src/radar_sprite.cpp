@@ -120,6 +120,7 @@ uint8_t     *s_overlayBuf = nullptr; lv_img_dsc_t s_overlayDsc; bool s_overlayTr
 uint8_t     *s_blipBuf = nullptr;    lv_img_dsc_t s_blipDsc;    bool s_blipTried = false;
 uint8_t     *s_staticBuf[2] = { nullptr, nullptr }; lv_img_dsc_t s_staticDsc[2]; bool s_staticTried[2] = { false, false };
 uint8_t     *s_cardBuf = nullptr; lv_img_dsc_t s_cardDsc; bool s_cardTried = false;
+uint8_t     *s_ringsBuf = nullptr; lv_img_dsc_t s_ringsDsc; bool s_ringsTried = false;
 uint8_t     *s_sweepBuf = nullptr; lv_img_dsc_t s_sweepDsc; bool s_sweepTried = false;
 
 } // namespace
@@ -202,6 +203,28 @@ const lv_img_dsc_t *radar_custom_blip_icon() {
 // The selection card's own art, when the design uses an image rather than the drawn
 // plate. No compiled-macro fallback: the card is new with this field, so there is no
 // welded push that could ever have carried one.
+// The rings and crosshair as their own etched plate, drawn ABOVE the map rather than
+// baked into the background under it. Scope furniture is meant to stay readable where the
+// roads get busy, and it could not while it lived in the plate. Alpha, so the map shows
+// through everywhere the etching is not. No compiled-macro fallback: this asset arrives
+// with THEME_CAPS 6 and no welded push ever carried one.
+const lv_img_dsc_t *radar_custom_rings() {
+    if (!s_ringsTried) {
+        s_ringsTried = true;
+        int w = 0, h = 0;
+        if (load_asset("radar_rings.png", nullptr, 0, true, s_ringsBuf, w, h, "rings")) {
+            s_ringsDsc.header.always_zero = 0;
+            s_ringsDsc.header.w = w;
+            s_ringsDsc.header.h = h;
+            s_ringsDsc.header.cf = LV_IMG_CF_TRUE_COLOR_ALPHA;
+            s_ringsDsc.data_size = (uint32_t)w * h * 3;
+            s_ringsDsc.data = s_ringsBuf;
+        }
+    }
+    if (s_ringsBuf) return &s_ringsDsc;
+    return nullptr;
+}
+
 const lv_img_dsc_t *radar_custom_card() {
     if (!s_cardTried) {
         s_cardTried = true;
@@ -284,6 +307,7 @@ void radar_sprite_release() {
     // theme_art::owns() means the pixels are memory-mapped flash, never an allocation:
     // freeing that would be a wild pointer into the partition.
     if (s_plateBuf)   { if (!theme_art::owns(s_plateBuf))   heap_caps_free(s_plateBuf);   s_plateBuf = nullptr; }
+    if (s_ringsBuf)   { if (!theme_art::owns(s_ringsBuf))   heap_caps_free(s_ringsBuf);   s_ringsBuf = nullptr; }
     if (s_overlayBuf) { if (!theme_art::owns(s_overlayBuf)) heap_caps_free(s_overlayBuf); s_overlayBuf = nullptr; }
     if (s_blipBuf)    { if (!theme_art::owns(s_blipBuf))    heap_caps_free(s_blipBuf);    s_blipBuf = nullptr; }
     for (int i = 0; i < 2; ++i) if (s_staticBuf[i]) {
@@ -292,7 +316,7 @@ void radar_sprite_release() {
     }
     if (s_sweepBuf) { if (!theme_art::owns(s_sweepBuf)) heap_caps_free(s_sweepBuf); s_sweepBuf = nullptr; }
     if (s_cardBuf) { if (!theme_art::owns(s_cardBuf)) heap_caps_free(s_cardBuf); s_cardBuf = nullptr; }
-    s_plateTried = s_overlayTried = s_blipTried = false;
+    s_plateTried = s_overlayTried = s_blipTried = s_ringsTried = false;
     s_staticTried[0] = s_staticTried[1] = false;
     s_sweepTried = false;
     s_cardTried = false;
