@@ -88,6 +88,15 @@ static const float RANGE_STEPS_KM[] = {10.0f, 20.0f, 30.0f, 50.0f, 100.0f};
 #define ADSB_FALLBACK_TLS   1
 #define ADSB_USER_AGENT     "CapsuleRadar/1.0 (ESP32-S3 hobby; +https://github.com/socquique/capsule-radar)"
 #define ADSB_HTTPS_INSECURE 1               // 1 = setInsecure() (hobby). 0 = use pinned root CA.
+// How many distinct addresses to keep for the feed. Rate limiting is per-edge, so having
+// somewhere else to ask is worth more than any backoff. Learned by DNS at runtime.
+#define ADSB_EDGE_POOL      5
+// Connect and read budgets. The read budget was 8000 and the service was measured taking
+// 11.6 s to answer during a bad spell on 2026-08-22, so every request failed for a reason
+// that had nothing to do with this device.
+#define ADSB_CONNECT_MS     6000
+#define ADSB_READ_MS        20000
+
 #define ADSB_MAX_AIRCRAFT   60              // hard cap parsed per poll (protect RAM in busy areas)
 
 // ---------- Debug ----------

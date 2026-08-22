@@ -94,102 +94,143 @@ void AdsbClient::begin(double homeLat, double homeLon, float rangeKm) {
     _lat = homeLat; _lon = homeLon; _rangeKm = rangeKm;
 }
 
+// ---------------------------------------------------------------- edge pool
+//
+// Rate limiting on this feed is applied PER EDGE, not per account and not per client.
+// Measured directly on 2026-08-22: with five addresses behind api.adsb.lol, one answered
+// 429 while four others answered 200 in the same second. A refusal is therefore not a
+// reason to stop asking, it is a reason to ask a different door.
+//
+// DNS hands back one address at a time and lwIP caches it, so the pool is LEARNED rather
+// than hardcoded: every resolve that returns something new is remembered. Hardcoding the
+// addresses would work today and rot silently the first time the operator renumbers, and a
+// dead hardcoded address costs a full connect timeout on every rotation.
+namespace {
+
+IPAddress s_edge[ADSB_EDGE_POOL];
+uint8_t   s_edgeN  = 0;      // how many distinct addresses learned so far
+uint8_t   s_edgeAt = 0;      // which one to try first next time
+
+void learn_edge() {
+    IPAddress ip;
+    if (!WiFi.hostByName(ADSB_PRIMARY_HOST, ip)) return;
+    for (uint8_t i = 0; i < s_edgeN; ++i) if (s_edge[i] == ip) return;
+    if (s_edgeN < ADSB_EDGE_POOL) {
+        s_edge[s_edgeN++] = ip;
+        Serial.printf("[adsb] learned edge %s (%u known)\n", ip.toString().c_str(), (unsigned)s_edgeN);
+    }
+}
+
+// One line of a response header, read without Arduino String. Headers are a few hundred
+// bytes so byte-at-a-time is fine here; the BODY is what gets the buffered reader.
+int read_line(WiFiClient &c, char *out, size_t cap, uint32_t deadline) {
+    size_t n = 0;
+    while ((int32_t)(millis() - deadline) < 0) {
+        const int ch = c.read();
+        if (ch < 0) { delay(1); continue; }
+        if (ch == '\n') { if (n && out[n - 1] == '\r') --n; out[n] = 0; return (int)n; }
+        if (n + 1 < cap) out[n++] = (char)ch;
+    }
+    return -1;
+}
+
+} // namespace
+
+// A whole HTTP/1.1 GET, by hand, onto a socket we own.
+//
+// Deliberately not HTTPClient. Two reasons, both measured. It cannot send a Host header
+// that differs from the address it dialled (addHeader silently drops "Host", the same trap
+// that had this device calling itself ESP32HTTPClient for months), and addressing a chosen
+// edge by IP while still saying "Host: api.adsb.lol" is the entire point of the pool above.
+// And it rebuilds several Arduino Strings per request on an internal heap whose largest
+// free block has been as low as 500 bytes on this board.
+//
+// Returns the HTTP status, or a negative transport error.
+int AdsbClient::rawGet(const IPAddress &ip, const char *path, long &contentLen) {
+    contentLen = -1;
+    // Reuse the socket when it is already open to the SAME edge; otherwise start clean.
+    if (_plain.connected() && !(_epIp == ip)) { _plain.stop(); }
+    if (!_plain.connected()) {
+        if (!_plain.connect(ip, 80, ADSB_CONNECT_MS)) return -1;
+        _epIp = ip;
+    }
+
+    char req[320];
+    const int n = snprintf(req, sizeof(req),
+        "GET %s HTTP/1.1\r\n"
+        "Host: %s\r\n"
+        "User-Agent: %s\r\n"
+        "Accept: application/json\r\n"
+        "Connection: keep-alive\r\n\r\n",
+        path, ADSB_PRIMARY_HOST, ADSB_USER_AGENT);
+    if (n <= 0 || _plain.write((const uint8_t *)req, (size_t)n) != (size_t)n) { _plain.stop(); return -2; }
+
+    const uint32_t deadline = millis() + ADSB_READ_MS;
+    char line[160];
+    if (read_line(_plain, line, sizeof(line), deadline) < 0) { _plain.stop(); return -3; }
+    // "HTTP/1.1 200 OK"
+    int status = 0;
+    { const char *sp = strchr(line, ' '); if (sp) status = atoi(sp + 1); }
+    if (status <= 0) { _plain.stop(); return -4; }
+
+    bool keepAlive = true;
+    for (;;) {
+        const int len = read_line(_plain, line, sizeof(line), deadline);
+        if (len < 0) { _plain.stop(); return -5; }
+        if (len == 0) break;                                   // blank line: body follows
+        if (!strncasecmp(line, "Content-Length:", 15)) contentLen = atol(line + 15);
+        else if (!strncasecmp(line, "Connection:", 11) && strcasestr(line, "close")) keepAlive = false;
+        else if (!strncasecmp(line, "Transfer-Encoding:", 18) && strcasestr(line, "chunked")) contentLen = -2;
+    }
+    _canKeepAlive = keepAlive;
+    return status;
+}
+
 bool AdsbClient::poll(std::vector<Aircraft>& out) {
     if (WiFi.status() != WL_CONNECTED) return false;
     _refused = false;
     _lastStatus = 0;
     _refusedStatus = 0;
-    // Try each independent provider once. Retrying the primary immediately can violate its
-    // one-request-per-second limit and adds another full timeout to an already slow failure.
-    if (fetchFrom(ADSB_PRIMARY_HOST, ADSB_PRIMARY_TLS, out)) return true;
-#if !ADSB_FALLBACK_TLS
-    // A TLS fallback on this board is not a fallback, it is a second guaranteed failure paid
-    // for on every primary miss. Measured 2026-08-22: "SSL - Memory allocation failed" every
-    // time, because a handshake needs two ~16 KB contiguous internal buffers and this board's
-    // largest free block was 2-3 KB. Attempting it anyway spent time and fragmentation on a
-    // request that could not have succeeded, right when the primary failing is the moment
-    // memory is already tightest. Only compiled in when a plain-HTTP fallback host is
-    // configured; skipped entirely while ADSB_FALLBACK_TLS is 1, which it is today.
-    return fetchFrom(ADSB_FALLBACK_HOST, ADSB_FALLBACK_TLS, out);
-#else
+
+    // Keep discovering addresses. Cheap (a cached lookup most of the time) and it is what
+    // keeps the pool current without anything being written down in the source.
+    if (s_edgeN < ADSB_EDGE_POOL) learn_edge();
+    if (s_edgeN == 0) return false;                            // no DNS yet; try again next poll
+
+    // Try each known edge once before giving up on the poll entirely. A 429 or a dead
+    // socket on one address says nothing about the others.
+    for (uint8_t attempt = 0; attempt < s_edgeN; ++attempt) {
+        const uint8_t idx = (uint8_t)((s_edgeAt + attempt) % s_edgeN);
+        if (fetchFrom(s_edge[idx], out)) {
+            s_edgeAt = idx;                                    // stay on what works
+            return true;
+        }
+    }
+    s_edgeAt = (uint8_t)((s_edgeAt + 1) % s_edgeN);            // rotate for next time
     return false;
-#endif
 }
 
-bool AdsbClient::fetchFrom(const char* host, bool tls, std::vector<Aircraft>& out) {
+bool AdsbClient::fetchFrom(const IPAddress &ip, std::vector<Aircraft>& out) {
     const double nm = _rangeKm * 0.539957;            // km -> nautical miles (API radius unit)
-    char url[160];
-    snprintf(url, sizeof(url), "%s://%s/v2/point/%.4f/%.4f/%.0f",
-             tls ? "https" : "http", host, _lat, _lon, nm);
+    char path[96];
+    snprintf(path, sizeof(path), "/v2/point/%.4f/%.4f/%.0f", _lat, _lon, nm);
 
-    // WiFiClientSecure is heap-allocated and ONLY when tls is actually requested. It used to
-    // be a plain stack local built unconditionally on every call — "cheap", the old comment
-    // said, on the reasoning that only the handshake was expensive. That undersold its
-    // constructor: WiFiClientSecure wraps an mbedtls context that allocates its own internal
-    // state, and this function runs once per poll, forever, whether or not tls is true. With
-    // the TLS fallback disabled (see poll() above) tls is always false today, which means the
-    // "cheap" object was being built and torn down every 5 seconds for a code path that could
-    // never be reached. Suspected to be the source of the slow allocated-block creep measured
-    // 2026-08-22 (1956 -> 1968 blocks over 240 s of failed polls, free_bytes plateaued but
-    // never fully recovering) — a constructor/destructor pair whose alloc/free do not land in
-    // the exact reverse order leaves a permanent hole even when nothing looks "leaked" by
-    // total byte count.
-    // unique_ptr, not a raw new/delete pair: fetchFrom has several early returns (begin
-    // failed, non-200, JSON error, empty payload), and a leak only has to be missed on ONE
-    // of them to reproduce exactly the slow creep this was built to fix. RAII means every
-    // exit, however it happens, frees this the same way.
-    std::unique_ptr<WiFiClientSecure> secure;
-    WiFiClient                       *client = &_plain;   // the persistent socket; see adsb_client.h
-    if (tls) {
-        secure = std::make_unique<WiFiClientSecure>();
-#if ADSB_HTTPS_INSECURE
-        secure->setInsecure();                          // hobby: skip cert validation
-#else
-        // secure->setCACert(ROOT_CA_PEM);              // production: pin the root CA
-#endif
-        client = secure.get();
-    }
-
-    // _http is a member now, and setReuse(true) is what actually holds the TCP connection
-    // open between polls: begin() below re-points it at the same still-connected socket and
-    // HTTPClient::connect() skips dialling entirely. On the TLS path (compiled out today)
-    // reuse would keep a handshake alive too, which this board cannot afford to repeat.
-    HTTPClient &http = _http;
-    http.setReuse(true);
-    http.setConnectTimeout(6000);    // fail reasonably fast: a slow host must not block the
-    http.setTimeout(8000);           // task (and the user's route/photo lookups) for too long
-    if (!http.begin(*client, url)) { Serial.printf("[adsb] begin failed (%s)\n", host); return false; }
-    // setUserAgent, NOT addHeader. ESP32's HTTPClient keeps its own _userAgent member and
-    // addHeader() silently DROPS "User-Agent" (along with Host and Connection) rather than
-    // erroring, so this line looked correct for as long as it has existed while the Orb
-    // actually introduced itself as the library default, "ESP32HTTPClient". Captured on the
-    // wire 2026-08-22 by pointing the device at a local server and printing what arrived.
-    //
-    // It stopped being harmless when api.adsb.lol began refusing that default agent with a
-    // 403: a generic unidentified client is exactly what an anti-abuse rule looks for. Every
-    // other fetch in this project already used setUserAgent (see net_fetch.cpp); this one
-    // was the odd one out.
-    http.setUserAgent(ADSB_USER_AGENT);
-    http.addHeader("Accept", "application/json");
-
-    const int code = http.GET();
+    long contentLen = -1;
+    const int code = rawGet(ip, path, contentLen);
     _lastStatus = code;
-    // Any 4xx is the server declining, not this board failing. 403 and 429 are the two that
-    // actually turn up: a feed that has decided we are asking too often. Recorded here so
-    // the caller can back off for minutes and, above all, NOT reboot over it.
+    // Any 4xx is a server declining, not this board failing. Recorded so the caller can back
+    // off and, above all, NOT reboot over it. With the pool above, a 4xx from one edge is
+    // handled by simply trying the next one first.
     if (code >= 400 && code < 500) { _refused = true; _refusedStatus = code; }
     if (code != 200) {
-        // Only the secure client can explain itself; over plain HTTP there is no TLS state
-        // to report, and asking for it would mean calling through the base pointer.
-        char tlsMsg[128] = "";
-        const int tlsCode = (tls && secure) ? secure->lastError(tlsMsg, sizeof(tlsMsg)) : 0;
-        Serial.printf("[adsb] HTTP %d (%s) tls=%d '%s' heap=%u largest=%u psram=%u\n",
-                      code, host, tlsCode, tlsMsg,
+        Serial.printf("[adsb] %s -> %d  heap=%u largest=%u\n",
+                      ip.toString().c_str(), code,
                       (unsigned)ESP.getFreeHeap(),
-                      (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL),
-                      (unsigned)ESP.getFreePsram());
-        http.end(); return false;
+                      (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
+        if (code < 0) _plain.stop();                   // transport failure: do not reuse it
+        return false;
     }
+    if (contentLen == -2) { Serial.println("[adsb] chunked response, unsupported"); _plain.stop(); return false; }
 
     // Only keep the fields we use -> much smaller parsed document.
     JsonDocument filter(&s_jsonPsram);
@@ -202,19 +243,31 @@ bool AdsbClient::fetchFrom(const char* host, bool tls, std::vector<Aircraft>& ou
             filter[k][0][f] = true;
 
     JsonDocument doc(&s_jsonPsram);
-    const int expectedBytes = http.getSize();
-    NetworkClient& responseStream = http.getStream();
-    ReliableJsonStream jsonStream(responseStream);
+    ReliableJsonStream jsonStream(_plain);
     DeserializationError err = deserializeJson(doc, jsonStream,
                                                DeserializationOption::Filter(filter));
     if (err) {
-        Serial.printf("[adsb] JSON parse failed (%s): %s; expected=%d read=%u available=%d connected=%d\n",
-                      host, err.c_str(), expectedBytes, (unsigned)jsonStream.bytesRead(),
-                      responseStream.available(), responseStream.connected());
-        http.end();
+        Serial.printf("[adsb] %s parse failed: %s; expected=%ld read=%u\n",
+                      ip.toString().c_str(), err.c_str(), contentLen,
+                      (unsigned)jsonStream.bytesRead());
+        _plain.stop();                       // unknown position in the stream: never reuse it
         return false;
     }
-    http.end();
+    // Keep-alive only works if the socket is left exactly at the end of this body. The
+    // parser stops on the closing brace, so anything the server appended after it (a
+    // trailing newline is common) has to be consumed or it becomes the first bytes of the
+    // NEXT response and corrupts a perfectly good poll.
+    if (_canKeepAlive && contentLen > 0) {
+        long left = contentLen - (long)jsonStream.bytesRead();
+        const uint32_t until = millis() + 1000;
+        while (left > 0 && (int32_t)(millis() - until) < 0) {
+            if (_plain.read() < 0) { delay(1); continue; }
+            --left;
+        }
+        if (left > 0) _plain.stop();         // could not get clean: start fresh next time
+    } else {
+        _plain.stop();
+    }
 
     JsonArrayConst arr = doc["ac"].as<JsonArrayConst>();
     if (arr.isNull()) arr = doc["aircraft"].as<JsonArrayConst>();

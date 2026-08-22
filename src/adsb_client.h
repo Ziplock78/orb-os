@@ -41,7 +41,11 @@ public:
 private:
     // tls picks the transport per host: see the ADSB_*_TLS notes in config.h for why the
     // primary deliberately runs over plain HTTP on this board.
-    bool fetchFrom(const char* host, bool tls, std::vector<Aircraft>& out);   // one host, one attempt
+    // One edge, one attempt. Addressed by IP so a specific server can be chosen; the Host
+    // header still says api.adsb.lol, which is what the pool in the .cpp is for.
+    bool fetchFrom(const IPAddress &ip, std::vector<Aircraft>& out);
+    // A whole HTTP/1.1 GET by hand. Returns the status, or negative for a transport failure.
+    int  rawGet(const IPAddress &ip, const char *path, long &contentLen);
 
     bool   _refused = false;
     int    _lastStatus = 0;
@@ -64,7 +68,8 @@ private:
     // reuse (_canReuse), and closes the socket when it did not. That degrades to exactly the
     // old connect-every-time behaviour rather than breaking.
     WiFiClient _plain;
-    HTTPClient _http;
+    IPAddress  _epIp;              // which edge _plain is currently connected to
+    bool       _canKeepAlive = true;
 #endif
 
     double _lat = 0, _lon = 0;
