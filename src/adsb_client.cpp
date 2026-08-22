@@ -29,21 +29,63 @@ static PsramJsonAllocator s_jsonPsram;
 // which makes ArduinoJson intermittently report IncompleteInput. Deliberately wrap
 // the client without overriding readBytes(): Stream's timed byte reader retries
 // temporary no-data reads until the configured timeout.
+//
+// BUFFERED as of 2026-08-22. ArduinoJson pulls its input one byte at a time, so parsing a
+// ~40 KB aircraft response meant ~40,000 separate single-byte reads straight into the
+// socket, every poll, forever. Each of those goes through lwIP, whose buffers live in the
+// internal RAM this feed is starved for — a far better explanation for the measured
+// fragmentation than the parsed document itself, which is already allocated in PSRAM (see
+// PsramJsonAllocator above, and note it was added for exactly this class of problem).
+//
+// The buffer refills in 1 KB chunks and ArduinoJson is served from it. Same bytes, same
+// order, same reliability contract; roughly a thousandth of the socket calls.
 class ReliableJsonStream : public Stream {
 public:
     explicit ReliableJsonStream(Stream& source) : _source(source) {}
-    int available() override { return _source.available(); }
+    int available() override { return (int)(_len - _pos) + _source.available(); }
     int read() override {
-        const int value = _source.read();
-        if (value >= 0) ++_bytesRead;
-        return value;
+        if (_pos >= _len && !refill()) return -1;
+        ++_bytesRead;
+        return _buf[_pos++];
     }
-    int peek() override { return _source.peek(); }
+    // peek() must not consume, but it may legitimately need to pull the next chunk in to
+    // answer at all — the parser peeks across a buffer boundary like any other position.
+    int peek() override {
+        if (_pos >= _len && !refill()) return -1;
+        return _buf[_pos];
+    }
     void flush() override { _source.flush(); }
     size_t write(uint8_t) override { return 0; }
     size_t bytesRead() const { return _bytesRead; }
 
 private:
+    // Keeps the original contract: wait for bytes rather than treating a momentary empty
+    // socket as end-of-input, which is the bug the single-byte version existed to dodge.
+    // Returns false only on a real timeout or a closed connection with nothing left.
+    bool refill() {
+        _pos = _len = 0;
+        const uint32_t started = millis();
+        for (;;) {
+            const int avail = _source.available();
+            if (avail > 0) {
+                const size_t want = avail < (int)sizeof(_buf) ? (size_t)avail : sizeof(_buf);
+                const int got = _source.readBytes(_buf, want);
+                if (got > 0) { _len = (size_t)got; return true; }
+            }
+            // Nothing right now. Give up only on the same timeout the single-byte reader
+            // used. Deliberately NOT down-casting _source to ask whether the peer is still
+            // connected: this holds a Stream&, and quietly assuming it is really a
+            // NetworkClient would be undefined behaviour the moment anything else is passed
+            // in. The timeout is the honest, type-safe stopping condition, and it is exactly
+            // what the previous implementation relied on.
+            if (millis() - started > 8000) return false;
+            delay(1);
+        }
+    }
+
+    uint8_t _buf[1024];
+    size_t  _pos = 0;
+    size_t  _len = 0;
     Stream& _source;
     size_t _bytesRead = 0;
 };
