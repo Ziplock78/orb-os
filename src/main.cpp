@@ -127,6 +127,21 @@ static volatile bool         g_feedOk = true;                        // ADS-B fe
 // Tracker is the entered app (radar_show_home_custom / radar_exit_release_style).
 static volatile bool         g_radarViewActive = false;
 static volatile uint32_t     g_lastFeedOkMs = 0;                     // millis() of the last good poll (HUD staleness)
+
+// How many times we have already restarted THIS POWER CYCLE trying to un-stick the feed.
+// RTC_NOINIT survives ESP.restart() and is cleared by a real power cycle, which is exactly
+// the scope wanted: one attempt per plug-in.
+//
+// The restart genuinely does help here, briefly. The feed reads its first snapshots fine on
+// a fresh heap and then starts timing out as internal memory fragments, so rebooting buys
+// another minute or two. That is precisely why it must be capped: a recovery that works for
+// ninety seconds and then needs performing again is not a recovery, it is a loop, and from
+// the desk it looks like a device that will not stay on the screen you put it on. One go,
+// then stop and show the honest stale-feed state instead.
+RTC_NOINIT_ATTR static uint32_t g_feedReboots;
+RTC_NOINIT_ATTR static uint32_t g_feedRebootsMagic;
+static const uint32_t FEED_REBOOT_MAGIC = 0x0FEED123;
+static const uint32_t FEED_REBOOT_LIMIT = 1;
 static volatile uint32_t     g_rebootAtMs = 0;
 // /theme?slug=... — applied from loop() rather than the request handler, because
 // theme_select::set() reboots and would cut the HTTP reply off mid-flight.
@@ -221,10 +236,20 @@ static void adsb_task(void*) {
             lastFeedOk = millis();
         }
         else if (millis() - lastFeedOk > 180000UL) {
-            Serial.println("[adsb] feed stuck >180s with WiFi up -> restarting to recover");
-            diag::log("feed stuck 180s -> reboot (heap %u)", (unsigned)ESP.getFreeHeap());
-            delay(100);
-            ESP.restart();
+            if (g_feedReboots >= FEED_REBOOT_LIMIT) {
+                // Already tried it this power cycle and here we are again. Stop bouncing.
+                lastFeedOk = millis();
+                radar::setFeedNote("Aircraft feed keeps dropping\nThis Orb needs a power cycle\nEverything else still works");
+                Serial.println("[adsb] feed stuck again, but a restart already failed to fix it this power cycle — staying up");
+                diag::log("feed stuck again; restart already tried, staying up");
+            } else {
+                ++g_feedReboots;
+                Serial.println("[adsb] feed stuck >180s with WiFi up -> restarting to recover (once)");
+                diag::log("feed stuck 180s -> reboot %u (heap %u)",
+                          (unsigned)g_feedReboots, (unsigned)ESP.getFreeHeap());
+                delay(100);
+                ESP.restart();
+            }
         }
         if (g_requery) {                          // display range changed (double-tap zoom)
             g_adsb.begin(g_settings.homeLat, g_settings.homeLon, g_requeryKm);
@@ -1906,6 +1931,10 @@ void setup() {
     orb_link::begin();
     orb_link::setThemeRequestHook(request_theme_switch);
     diag::boot();   // print + continue the RTC-memory event history across this reboot
+
+    // RTC_NOINIT holds whatever was in it, including rubbish after a real power cycle, so it
+    // is only trusted when the companion magic says we wrote it. Same guard diag_log uses.
+    if (g_feedRebootsMagic != FEED_REBOOT_MAGIC) { g_feedRebootsMagic = FEED_REBOOT_MAGIC; g_feedReboots = 0; }
 
     // Send large allocations (>=4KB) to PSRAM instead of the ~300KB internal heap.
     // TLS handshakes (WiFiClientSecure, fresh one built for every poll of every feed —

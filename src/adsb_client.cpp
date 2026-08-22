@@ -88,7 +88,17 @@ bool AdsbClient::fetchFrom(const char* host, bool tls, std::vector<Aircraft>& ou
     http.setConnectTimeout(6000);    // fail reasonably fast: a slow host must not block the
     http.setTimeout(8000);           // task (and the user's route/photo lookups) for too long
     if (!http.begin(*client, url)) { Serial.printf("[adsb] begin failed (%s)\n", host); return false; }
-    http.addHeader("User-Agent", ADSB_USER_AGENT);
+    // setUserAgent, NOT addHeader. ESP32's HTTPClient keeps its own _userAgent member and
+    // addHeader() silently DROPS "User-Agent" (along with Host and Connection) rather than
+    // erroring, so this line looked correct for as long as it has existed while the Orb
+    // actually introduced itself as the library default, "ESP32HTTPClient". Captured on the
+    // wire 2026-08-22 by pointing the device at a local server and printing what arrived.
+    //
+    // It stopped being harmless when api.adsb.lol began refusing that default agent with a
+    // 403: a generic unidentified client is exactly what an anti-abuse rule looks for. Every
+    // other fetch in this project already used setUserAgent (see net_fetch.cpp); this one
+    // was the odd one out.
+    http.setUserAgent(ADSB_USER_AGENT);
     http.addHeader("Accept", "application/json");
 
     const int code = http.GET();
