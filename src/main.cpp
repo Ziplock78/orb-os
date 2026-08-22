@@ -478,6 +478,28 @@ static void adsb_task(void*) {
     }
 }
 
+// Settings the ACTIVE THEME gets to override, applied after it has been read.
+//
+// These four lived at the bottom of loadSettings(), which runs at main.cpp's line ~1971 —
+// three lines BEFORE theme_select::init() loads the theme. So every one of them tested a
+// theme_style struct that was still all defaults and therefore never fired: a design could
+// state range 100 km and 14 aircraft, have both written correctly into radar_style.json,
+// have the device read that file at boot, and still draw 5 aircraft at 31 km from its own
+// stored settings. Verified on the device with [acdbg]: "drawn=5 cap=5 rangeKm=31" against
+// a theme file holding 14 and 100.
+//
+// Order is the whole fix. Nothing else about these rules changed.
+static void applyThemeSettings() {
+    const theme_style::Radar &rs = theme_style::radar();
+    // -1 (or 0 for range) means "no opinion", leaving the Orb's own stored setting alone.
+    if (rs.rangeKm     > 0.0f) g_settings.rangeKm = rs.rangeKm;
+    if (rs.maxAircraft > 0)    g_maxAc     = rs.maxAircraft;
+    if (rs.minAltFt   >= 0)    g_minAltFt  = rs.minAltFt;
+    if (rs.hideGround >= 0)    g_hideGround = (rs.hideGround != 0);
+    Serial.printf("[theme] applied: rangeKm=%.0f maxAircraft=%d minAltFt=%d hideGround=%d\n",
+                  (double)g_settings.rangeKm, g_maxAc, g_minAltFt, (int)g_hideGround);
+}
+
 static void loadSettings() {
     Preferences p;
     p.begin("capsuleradar", true);
@@ -502,10 +524,6 @@ static void loadSettings() {
     // fresh push, same one-shot-per-boot precedent as CUSTOM_BOOT_TARGET.
     g_settings.rangeKm = CUSTOM_RADAR_RANGE_KM;
 #endif
-    // The active theme's own range, if it states one, wins over both the stored zoom and
-    // the welded macro above. Same shape as minAltFt below: -1 means "no opinion", so a
-    // theme that never mentions range leaves the Orb's own setting alone.
-    if (theme_style::radar().rangeKm > 0.0f) g_settings.rangeKm = theme_style::radar().rangeKm;
     g_brightnessDay    = p.getInt("bright", BRIGHTNESS_DEFAULT);
     g_volume           = p.getInt("vol", 60);
     g_muted            = p.getBool("mute", false);
@@ -519,12 +537,6 @@ static void loadSettings() {
 #if CUSTOM_HAS_RADAR_MAXAC
     g_maxAc = CUSTOM_RADAR_MAXAC;   // a pushed design's own "max aircraft shown" cap, same one-shot-per-boot precedent as range/boot-target
 #endif
-    // Theme data wins over the welded macro when it says anything. A theme installed as
-    // files alone (Orb Studio) can only speak through radar_style.json, and it should not
-    // be outranked by a number baked in by whichever firmware push happened to run last.
-    if (theme_style::radar().maxAircraft > 0) g_maxAc = theme_style::radar().maxAircraft;
-    if (theme_style::radar().minAltFt   >= 0) g_minAltFt = theme_style::radar().minAltFt;
-    if (theme_style::radar().hideGround >= 0) g_hideGround = (theme_style::radar().hideGround != 0);
     g_idleDimMs        = p.getUInt("idledim", IDLE_DIM_MS);
     g_units            = p.getInt("units", 0);
     g_wxUnits          = p.getInt("wxUnits", 0);
@@ -1972,6 +1984,7 @@ void setup() {
     route_cache_begin();   // clear stale route cache if the label format changed
     app_theme::init();     // load the saved app skin (Default/Office) before any view reads it
     theme_select::init();  // load the saved Launch Kit theme slug before any screen reads it
+    applyThemeSettings();  // ...and only NOW can the theme's own range/count/altitude win
     psram_mark("after theme_select");
 
     // Map the pre-baked art partition. Must come after theme_select::init() (it needs
@@ -2574,14 +2587,24 @@ void loop() {
             {
                 multi_heap_info_t hi;
                 heap_caps_get_info(&hi, MALLOC_CAP_INTERNAL);
+                // Frames since the previous [memdbg], i.e. a real fps over a known 15 s
+                // window. host_fps() cannot serve this: it measures frames since ITS last
+                // call and is only called by /health, so a single request always reads 0 —
+                // which is exactly why this looked like a dead renderer earlier today.
+                static uint32_t s_dbgFrames = 0, s_dbgMs = 0;
+                const uint32_t nowFr = display_frames(), nowMsFr = millis();
+                unsigned realFps = 0;
+                if (s_dbgMs && nowMsFr > s_dbgMs)
+                    realFps = (unsigned)((nowFr - s_dbgFrames) * 1000UL / (nowMsFr - s_dbgMs));
+                s_dbgFrames = nowFr; s_dbgMs = nowMsFr;
                 Serial.printf("[memdbg] internal free=%u largest=%u blocks(free/alloc)=%u/%u "
-                              "stacks(adsb/audio/loop)=%u/%u/%u radar=%d\n",
+                              "stacks(adsb/audio/loop)=%u/%u/%u radar=%d fps=%u\n",
                               (unsigned)hi.total_free_bytes, (unsigned)hi.largest_free_block,
                               (unsigned)hi.free_blocks, (unsigned)hi.allocated_blocks,
                               (unsigned)(g_adsbTaskHandle ? uxTaskGetStackHighWaterMark(g_adsbTaskHandle) : 0),
                               (unsigned)audio_stack_free_bytes(),
                               (unsigned)uxTaskGetStackHighWaterMark(nullptr),
-                              (int)g_radarViewActive);
+                              (int)g_radarViewActive, realFps);
             }
         }
 #if DEBUG_MEM

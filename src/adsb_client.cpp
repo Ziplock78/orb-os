@@ -57,6 +57,13 @@ public:
     void flush() override { _source.flush(); }
     size_t write(uint8_t) override { return 0; }
     size_t bytesRead() const { return _bytesRead; }
+    // Bytes actually taken OFF THE SOCKET, which is not the same as bytes handed to the
+    // parser: this reads ahead in 1 KB chunks, so at the closing brace the socket sits
+    // further along than the parser does. Draining to Content-Length using the parser's
+    // count therefore waits for bytes that were already consumed, times out, and drops the
+    // connection on EVERY poll — measured as "sockets opened=28 reused=0", i.e. keep-alive
+    // never once worked, which is what exhausted the socket table.
+    size_t socketBytes() const { return _socketBytes; }
 
 private:
     // Keeps the original contract: wait for bytes rather than treating a momentary empty
@@ -70,7 +77,7 @@ private:
             if (avail > 0) {
                 const size_t want = avail < (int)sizeof(_buf) ? (size_t)avail : sizeof(_buf);
                 const int got = _source.readBytes(_buf, want);
-                if (got > 0) { _len = (size_t)got; return true; }
+                if (got > 0) { _len = (size_t)got; _socketBytes += (size_t)got; return true; }
             }
             // Nothing right now. Give up only on the same timeout the single-byte reader
             // used. Deliberately NOT down-casting _source to ask whether the peer is still
@@ -86,6 +93,7 @@ private:
     uint8_t _buf[1024];
     size_t  _pos = 0;
     size_t  _len = 0;
+    size_t  _socketBytes = 0;
     Stream& _source;
     size_t _bytesRead = 0;
 };
@@ -150,7 +158,16 @@ int AdsbClient::rawGet(const IPAddress &ip, const char *path, long &contentLen) 
     contentLen = -1;
     // Reuse the socket when it is already open to the SAME edge; otherwise start clean.
     if (_plain.connected() && !(_epIp == ip)) { _plain.stop(); }
-    if (!_plain.connected()) {
+    if (_plain.connected()) {
+        ++_reuseCount;
+    } else {
+        // Every one of these costs a socket, and a closed TCP socket does not disappear —
+        // it sits in TIME_WAIT for a while holding an lwIP control block. That pool is small
+        // (order of a dozen), which is why rotating hard across five edges worked for about
+        // thirteen polls after a reboot and then failed EVERY connect while the same servers
+        // answered a laptop fine. Reuse is not an optimisation here, it is the difference
+        // between working and running out of sockets.
+        ++_openCount;
         if (!_plain.connect(ip, 80, ADSB_CONNECT_MS)) return -1;
         _epIp = ip;
     }
@@ -197,9 +214,12 @@ bool AdsbClient::poll(std::vector<Aircraft>& out) {
     if (s_edgeN < ADSB_EDGE_POOL) learn_edge();
     if (s_edgeN == 0) return false;                            // no DNS yet; try again next poll
 
-    // Try each known edge once before giving up on the poll entirely. A 429 or a dead
-    // socket on one address says nothing about the others.
-    for (uint8_t attempt = 0; attempt < s_edgeN; ++attempt) {
+    // At most TWO edges per poll, never all of them. Trying every edge on every poll is
+    // what exhausted the socket table: five fresh connections every ten seconds, each
+    // lingering in TIME_WAIT long after it closed. One retry is enough to route around a
+    // single rate-limited or sulking server, and the pool still rotates across polls.
+    const uint8_t tries = s_edgeN < ADSB_TRIES_PER_POLL ? s_edgeN : ADSB_TRIES_PER_POLL;
+    for (uint8_t attempt = 0; attempt < tries; ++attempt) {
         const uint8_t idx = (uint8_t)((s_edgeAt + attempt) % s_edgeN);
         if (fetchFrom(s_edge[idx], out)) {
             s_edgeAt = idx;                                    // stay on what works
@@ -207,6 +227,8 @@ bool AdsbClient::poll(std::vector<Aircraft>& out) {
         }
     }
     s_edgeAt = (uint8_t)((s_edgeAt + 1) % s_edgeN);            // rotate for next time
+    Serial.printf("[adsb] poll gave up after %u edge(s); sockets opened=%lu reused=%lu\n",
+                  (unsigned)tries, (unsigned long)_openCount, (unsigned long)_reuseCount);
     return false;
 }
 
@@ -258,7 +280,7 @@ bool AdsbClient::fetchFrom(const IPAddress &ip, std::vector<Aircraft>& out) {
     // trailing newline is common) has to be consumed or it becomes the first bytes of the
     // NEXT response and corrupts a perfectly good poll.
     if (_canKeepAlive && contentLen > 0) {
-        long left = contentLen - (long)jsonStream.bytesRead();
+        long left = contentLen - (long)jsonStream.socketBytes();
         const uint32_t until = millis() + 1000;
         while (left > 0 && (int32_t)(millis() - until) < 0) {
             if (_plain.read() < 0) { delay(1); continue; }

@@ -91,6 +91,9 @@ static const float RANGE_STEPS_KM[] = {10.0f, 20.0f, 30.0f, 50.0f, 100.0f};
 // How many distinct addresses to keep for the feed. Rate limiting is per-edge, so having
 // somewhere else to ask is worth more than any backoff. Learned by DNS at runtime.
 #define ADSB_EDGE_POOL      5
+// Edges attempted per poll. Deliberately small: see the socket-exhaustion note in
+// adsb_client.cpp. The pool still rotates BETWEEN polls, so all of it stays in play.
+#define ADSB_TRIES_PER_POLL 2
 // Connect and read budgets. The read budget was 8000 and the service was measured taking
 // 11.6 s to answer during a bad spell on 2026-08-22, so every request failed for a reason
 // that had nothing to do with this device.

@@ -70,6 +70,8 @@ private:
     WiFiClient _plain;
     IPAddress  _epIp;              // which edge _plain is currently connected to
     bool       _canKeepAlive = true;
+    uint32_t   _openCount = 0;     // sockets actually dialled (each one costs an lwIP PCB)
+    uint32_t   _reuseCount = 0;    // polls served by an already-open connection
 #endif
 
     double _lat = 0, _lon = 0;

@@ -2079,6 +2079,10 @@ void update(const std::vector<Aircraft> &aircraft, const RadarSettings &s) {
     // what is interesting twice a second.
     std::sort(out.begin(), out.end(),
               [](const AcDraw &a, const AcDraw &b) { return a.distKm < b.distKm; });
+    // Counted BEFORE the cap below trims `out`, which is the whole point: the interesting
+    // number is how many candidates existed, not how many survived.
+    int dbgInRange = 0, dbgFlying = 0;
+    for (const AcDraw &a : out) if (a.inRange) { ++dbgInRange; if (!a.onGround) ++dbgFlying; }
     if ((int)out.size() > s_maxOnScreen) {
         // Trackable means on the scope and flying. Ground traffic is never worth a slot,
         // and the feed already drops it when hide-ground or a minimum altitude is set —
@@ -2104,6 +2108,23 @@ void update(const std::vector<Aircraft> &aircraft, const RadarSettings &s) {
     }
     s_tracked.clear();
     for (const AcDraw &a : out) s_tracked.insert(std::string(a.hex));
+
+    // Why the dial shows what it shows. Added 2026-08-22: the theme asked for 14 aircraft
+    // and five appeared, and every explanation for that gap was a guess. These are the four
+    // numbers that actually decide it — what the feed sent, how many fell inside the ring,
+    // how many of those were flying, and how many survived the cap — so the answer is read
+    // rather than reasoned about. Throttled to one line every ~10 s.
+    {
+        // lv_tick_get(), not millis(): this file also builds for the desktop simulator,
+        // where millis() does not exist. LVGL's tick is available in both.
+        static uint32_t s_acDbgAt = 0;
+        if (lv_tick_get() - s_acDbgAt > 10000) {
+            s_acDbgAt = lv_tick_get();
+            Serial.printf("[acdbg] feed=%u inRange=%d flying=%d drawn=%u cap=%d rangeKm=%.0f\n",
+                          (unsigned)aircraft.size(), dbgInRange, dbgFlying,
+                          (unsigned)out.size(), s_maxOnScreen, (double)s.rangeKm);
+        }
+    }
 
     if (++s_flowRedrawCtr >= FLOW_REDRAW_EVERY) {
         s_flowRedrawCtr = 0;
