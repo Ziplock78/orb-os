@@ -53,6 +53,8 @@ void AdsbClient::begin(double homeLat, double homeLon, float rangeKm) {
 
 bool AdsbClient::poll(std::vector<Aircraft>& out) {
     if (WiFi.status() != WL_CONNECTED) return false;
+    _refused = false;
+    _lastStatus = 0;
     // Try each independent provider once. Retrying the primary immediately can violate its
     // one-request-per-second limit and adds another full timeout to an already slow failure.
     if (fetchFrom(ADSB_PRIMARY_HOST, ADSB_PRIMARY_TLS, out)) return true;
@@ -89,6 +91,11 @@ bool AdsbClient::fetchFrom(const char* host, bool tls, std::vector<Aircraft>& ou
     http.addHeader("Accept", "application/json");
 
     const int code = http.GET();
+    _lastStatus = code;
+    // Any 4xx is the server declining, not this board failing. 403 and 429 are the two that
+    // actually turn up: a feed that has decided we are asking too often. Recorded here so
+    // the caller can back off for minutes and, above all, NOT reboot over it.
+    if (code >= 400 && code < 500) _refused = true;
     if (code != 200) {
         // Only the secure client can explain itself; over plain HTTP there is no TLS state
         // to report, and asking for it would mean calling through the base pointer.

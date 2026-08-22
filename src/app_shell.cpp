@@ -347,3 +347,5 @@ void app_shell::selectApp(int idx) {
 int         app_shell::count() { return s_count; }
 int         app_shell::index() { return s_cur; }
 const char *app_shell::name()  { return s_count ? s_apps[s_cur].name : ""; }
+const char *app_shell::nameAt(int idx)  { return (idx >= 0 && idx < s_count) ? s_apps[idx].name : ""; }
+bool        app_shell::hiddenAt(int idx){ return (idx >= 0 && idx < s_count) ? s_apps[idx].hidden : true; }

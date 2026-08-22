@@ -25,8 +25,12 @@
 #define ADSB_QUERY_MIN_KM   12.0f
 #define ADSB_QUERY_MAX_KM   150.0f
 static const float RANGE_STEPS_KM[] = {10.0f, 20.0f, 30.0f, 50.0f, 100.0f};
-#define POLL_INTERVAL_MS    2000           // be gentle with the free API (>=1000)
-#define POLL_INTERVAL_BATTERY_MS 5000      // slower polling when running on battery
+// Be gentle with the free API. This was 2000, which respects adsb.lol's documented
+// one-per-second rule but still means 1,800 requests an hour from one home address while
+// the Flight Tracker is up, and on 2026-08-22 that address was being answered with 403.
+// Aircraft do not move far in five seconds at any range this dial draws.
+#define POLL_INTERVAL_MS    5000
+#define POLL_INTERVAL_BATTERY_MS 15000      // slower polling when running on battery
 #define MOTION_INTERP       1              // 1 = glyphs glide between polls; 0 = snap to new pos
 #define AC_STALE_MS         15000          // keep the last contacts through brief empty feed responses
 

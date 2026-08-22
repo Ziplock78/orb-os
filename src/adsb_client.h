@@ -20,10 +20,22 @@ public:
 
     uint32_t lastOkMs() const { return _lastOkMs; }
 
+    // True when the last poll failed because a SERVER said no (any 4xx), rather than because
+    // this board could not make the request. The difference matters a great deal: a refusal
+    // is a policy answer that more attempts cannot change, while a local failure is the
+    // fragmented-heap case that a reboot really does clear. Treating the two the same is
+    // what had the Orb rebooting itself every three minutes against a feed that was
+    // rate-limiting it, which is the one response guaranteed to make a rate limit worse.
+    bool lastWasRefused() const { return _refused; }
+    int  lastStatus() const { return _lastStatus; }
+
 private:
     // tls picks the transport per host: see the ADSB_*_TLS notes in config.h for why the
     // primary deliberately runs over plain HTTP on this board.
     bool fetchFrom(const char* host, bool tls, std::vector<Aircraft>& out);   // one host, one attempt
+
+    bool   _refused = false;
+    int    _lastStatus = 0;
 
     double _lat = 0, _lon = 0;
     float  _rangeKm = 15.0f;

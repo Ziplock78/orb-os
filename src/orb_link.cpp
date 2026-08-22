@@ -14,6 +14,8 @@
 #include "theme_select.h"
 #include "theme_style.h"
 #include "update_ui.h"
+#include "app_shell.h"   // selectApp/nameAt for the app + apps commands
+#include <strings.h>     // strncasecmp
 
 namespace orb_link {
 namespace {
@@ -158,6 +160,65 @@ void cmd_theme(const char *slug) {
     out_ch('}');
     out_send();
     Serial.flush();   // the reboot is ~400 ms out; do not race it
+}
+
+// ---------------- apps ----------------
+//
+// Which screens this Orb has, and which one is showing. Added 2026-08-22 to chase a bug the
+// device would only exhibit in one app: the ADS-B poll runs in Flight Tracker ONLY
+// (main.cpp), so a fault in the feed prints nothing at all while the Orb sits on the clock,
+// and reproducing it meant a person standing at the desk turning the knob for every
+// attempt. Reading the state and being able to set it makes that a loop a tool can run.
+//
+// Safe from here: poll() is called from loop(), the same task LVGL runs in, which is the
+// same context the knob's own handler switches apps from.
+void cmd_apps() {
+    out_reset();
+    out_str("{\"ok\":true,\"current\":");
+    out_fmt("%d", app_shell::index());
+    out_str(",\"apps\":[");
+    for (int i = 0; i < app_shell::count(); ++i) {
+        if (i) out_ch(',');
+        out_str("{\"i\":");
+        out_fmt("%d", i);
+        out_str(",\"name\":");
+        out_json_string(app_shell::nameAt(i));
+        out_str(app_shell::hiddenAt(i) ? ",\"hidden\":true}" : "}");
+    }
+    out_str("]}");
+    out_send();
+}
+
+// By index, or by name, case-insensitively and on a prefix, so "flight" reaches "Flight
+// Tracker" without anyone having to remember the exact label. A name that matches more than
+// one app is refused rather than guessed at.
+void cmd_app(const char *arg) {
+    if (!arg || !*arg) { reply_error("missing app"); return; }
+    const int n = app_shell::count();
+    int want = -1;
+
+    bool numeric = true;
+    for (const char *p = arg; *p; ++p) if (*p < '0' || *p > '9') { numeric = false; break; }
+    if (numeric) {
+        want = atoi(arg);
+        if (want < 0 || want >= n) { reply_error("no such app"); return; }
+    } else {
+        const size_t len = strlen(arg);
+        int hits = 0;
+        for (int i = 0; i < n; ++i) {
+            const char *nm = app_shell::nameAt(i);
+            if (strncasecmp(nm, arg, len) == 0) { want = i; ++hits; }
+        }
+        if (hits == 0) { reply_error("no such app"); return; }
+        if (hits > 1)  { reply_error("that name matches more than one app"); return; }
+    }
+
+    app_shell::selectApp(want);
+    out_reset();
+    out_str("{\"ok\":true,\"app\":");
+    out_json_string(app_shell::nameAt(want));
+    out_fmt(",\"i\":%d}", want);
+    out_send();
 }
 
 // ---------------- file transfer (put-begin / put-data / put-end) ----------------
@@ -370,6 +431,8 @@ void dispatch(char *line) {
     else if (!strcmp(line, "themes"))    cmd_themes();
     else if (!strcmp(line, "theme"))     cmd_theme(arg);
     else if (!strcmp(line, "delete"))    cmd_delete(arg);
+    else if (!strcmp(line, "apps"))      cmd_apps();
+    else if (!strcmp(line, "app"))       cmd_app(arg);
     else if (!strcmp(line, "get-begin")) cmd_get_begin(arg);
     else if (!strcmp(line, "get-data"))  cmd_get_data();
     else if (!strcmp(line, "put-begin")) cmd_put_begin(arg);

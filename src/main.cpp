@@ -178,6 +178,13 @@ static void adsb_task(void*) {
     uint32_t wxGen = 0;                        // refresh generation, bumped each full loop
     uint32_t nextLocInfoAt = UINT32_MAX;
     uint32_t lastFeedOk = millis();          // self-heal: time of last good (or no-WiFi) poll
+    // Has the feed EVER answered since this boot? The restart below is a recovery, and a
+    // recovery needs something to recover to. If no poll has ever succeeded, restarting
+    // cannot restore a working state that never existed; it just arrives back in the same
+    // place twenty seconds later and tries again, forever. That is exactly what the Flight
+    // Tracker was doing on 2026-08-22: rebooting every three minutes against a feed that was
+    // refusing the request, which no restart was ever going to change.
+    bool feedEverOk = false;
     bool wasRadarActive = false;
     for (;;) {
         const bool conn = (WiFi.status() == WL_CONNECTED);
@@ -207,6 +214,12 @@ static void adsb_task(void*) {
         // self-heal: a long feed outage while WiFi is up usually means the internal heap
         // fragmented and the TLS handshake can't allocate -> reboot to recover (settings persist).
         if (!conn || !radarActive) lastFeedOk = millis();
+        else if (!feedEverOk) {
+            // Never worked this session: nothing to restore, so hold the clock and let the
+            // backoff keep trying. The HUD already shows the feed as stale, which is the
+            // honest thing to show, and the rest of the device stays usable.
+            lastFeedOk = millis();
+        }
         else if (millis() - lastFeedOk > 180000UL) {
             Serial.println("[adsb] feed stuck >180s with WiFi up -> restarting to recover");
             diag::log("feed stuck 180s -> reboot (heap %u)", (unsigned)ESP.getFreeHeap());
@@ -292,6 +305,7 @@ static void adsb_task(void*) {
                     if (!simulated) Serial.printf("[adsb] fetched %u aircraft\n", (unsigned)fresh.size());
                     failCount = 0;
                     adsbBackoffMs = 0;                        // recovered: back to real-time polling
+                    feedEverOk = true;                        // a restart now has a known-good state to return to
                     g_feedOk = true;
                     const uint32_t receivedMs = millis();
                     lastFeedOk = receivedMs;
@@ -315,13 +329,32 @@ static void adsb_task(void*) {
                             xSemaphoreGive(g_ac_mutex);
                         }
                     }
+                } else if (g_adsb.lastWasRefused()) {
+                    // The SERVER said no (4xx), which no amount of retrying changes. Two things
+                    // follow, and both are the opposite of what the branch below does.
+                    //
+                    // Back off in minutes, not seconds: this is a rate limit, and the honest
+                    // response to being told we ask too often is to ask far less often.
+                    //
+                    // And hold the watchdog off. lastFeedOk is pushed forward so the 180 s
+                    // "feed stuck -> reboot" recovery cannot fire, because rebooting does not
+                    // clear a rate limit; it just returns in twenty seconds and asks again,
+                    // which is precisely how a temporary limit becomes a lasting one. That
+                    // recovery exists for a fragmented heap, and this is not that.
+                    if (++failCount >= 5) g_feedOk = false;
+                    adsbBackoffMs = (adsbBackoffMs < 60000UL) ? 60000UL
+                                  : (adsbBackoffMs < 300000UL) ? adsbBackoffMs * 2
+                                                               : 300000UL;
+                    lastFeedOk = millis();
+                    Serial.printf("[adsb] refused by the feed (HTTP %d) — waiting ~%lus, not rebooting\n",
+                                  g_adsb.lastStatus(), (unsigned long)(adsbBackoffMs / 1000));
                 } else {
                     if (++failCount >= 5) g_feedOk = false;   // sustained outage -> HUD warning
-                    // A failed poll is almost always the TLS handshake starving on a fragmented
-                    // internal heap (SSL -32512). Hammering both hosts every 2s only fragments it
-                    // further and floods the log; backing off exponentially (2s -> 30s cap) lets the
-                    // internal heap coalesce so a later handshake can allocate, and we snap straight
-                    // back to real-time the instant a poll succeeds (see the success branch above).
+                    // A failed poll here is the TLS handshake starving on a fragmented internal
+                    // heap (SSL -32512). Hammering both hosts only fragments it further and floods
+                    // the log; backing off exponentially (2s -> 30s cap) lets the internal heap
+                    // coalesce so a later handshake can allocate, and we snap straight back to
+                    // real-time the instant a poll succeeds (see the success branch above).
                     adsbBackoffMs = (adsbBackoffMs == 0)     ? 2000UL
                                   : (adsbBackoffMs < 15000UL) ? adsbBackoffMs * 2
                                                               : 30000UL;
