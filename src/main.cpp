@@ -306,6 +306,7 @@ static void adsb_task(void*) {
                     failCount = 0;
                     adsbBackoffMs = 0;                        // recovered: back to real-time polling
                     feedEverOk = true;                        // a restart now has a known-good state to return to
+                    radar::setFeedNote(nullptr);              // back to the plain notice if it is somehow still up
                     g_feedOk = true;
                     const uint32_t receivedMs = millis();
                     lastFeedOk = receivedMs;
@@ -346,8 +347,12 @@ static void adsb_task(void*) {
                                   : (adsbBackoffMs < 300000UL) ? adsbBackoffMs * 2
                                                                : 300000UL;
                     lastFeedOk = millis();
+                    // Say it on the dial too. The "Loading aircraft and location data" notice
+                    // clears only when aircraft arrive, so a feed that never answers left it
+                    // claiming to be loading for as long as the device was switched on.
+                    radar::setFeedNote("No aircraft feed\nThe service is refusing requests\nTrying again in a few minutes");
                     Serial.printf("[adsb] refused by the feed (HTTP %d) — waiting ~%lus, not rebooting\n",
-                                  g_adsb.lastStatus(), (unsigned long)(adsbBackoffMs / 1000));
+                                  g_adsb.refusedStatus(), (unsigned long)(adsbBackoffMs / 1000));
                 } else {
                     if (++failCount >= 5) g_feedOk = false;   // sustained outage -> HUD warning
                     // A failed poll here is the TLS handshake starving on a fragmented internal

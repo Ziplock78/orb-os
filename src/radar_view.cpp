@@ -1347,6 +1347,14 @@ const char *themeName(int t) {
 void cycleTheme() { setTheme(s_theme + 1); }
 void flashThemeName() { show_theme_label(THEME_NAMES[s_theme]); }   // touch reveal (no theme change)
 void setThemeChangedCb(void (*cb)(int)) { s_themeCb = cb; }
+// Only meaningful while the loading notice is up: once aircraft arrive the notice is gone
+// and there is nothing to relabel, and a scope with traffic on it does not need telling
+// that the feed is fine.
+void setFeedNote(const char *note) {
+    if (!s_loading || !s_loadingPending) return;
+    lv_label_set_text(s_loading, note ? note : "Loading aircraft\nand location data");
+}
+
 void setRangeLabelVisible(bool v) { s_rangeLblVisible = v; if (s_rangeLbl) show(s_rangeLbl, v && !orb() && !customStyled()); }
 
 void setSweepEnabled(bool on) {

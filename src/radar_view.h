@@ -85,6 +85,12 @@ void cycleTheme();
 void flashThemeName();                           // briefly show the current theme's name banner (on touch)
 void setThemeChangedCb(void (*cb)(int theme));   // called when the theme changes (for persistence)
 void setRangeLabelVisible(bool v);               // hide the built-in range label (UI shows its own)
+
+// Replace the "Loading aircraft and location data" notice with the truth, while it is still
+// up. That notice only clears when the first aircraft arrive, so a feed that never answers
+// left it saying "loading" indefinitely, which is the device telling the person in front of
+// it something that is not true. Pass nullptr to put the original wording back.
+void setFeedNote(const char *note);
 // Diagnostic only: hide one layer at runtime so its per-frame cost can be priced
 // by difference, instead of reflashing once per hypothesis. kind: 0=sweep,
 // 1=aircraft, 2=text, 3=static1, 4=static2, 5=wash, 6=plate. Not persisted.

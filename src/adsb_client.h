@@ -28,6 +28,11 @@ public:
     // rate-limiting it, which is the one response guaranteed to make a rate limit worse.
     bool lastWasRefused() const { return _refused; }
     int  lastStatus() const { return _lastStatus; }
+    // The 4xx that caused the refusal, which is NOT lastStatus(): poll() tries the primary
+    // and then the fallback, so the last status belongs to whichever host failed second. The
+    // message said "refused (HTTP -1)" while the actual refusal was a 403 from the host
+    // before it.
+    int  refusedStatus() const { return _refusedStatus; }
 
 private:
     // tls picks the transport per host: see the ADSB_*_TLS notes in config.h for why the
@@ -36,6 +41,7 @@ private:
 
     bool   _refused = false;
     int    _lastStatus = 0;
+    int    _refusedStatus = 0;
 
     double _lat = 0, _lon = 0;
     float  _rangeKm = 15.0f;
