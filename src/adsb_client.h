@@ -3,6 +3,10 @@
 // the readsb JSON into a vector<Aircraft>. See docs/DATA_SOURCE.md.
 #include <vector>
 #include "aircraft.h"
+#ifdef ARDUINO
+#include <WiFiClient.h>
+#include <HTTPClient.h>
+#endif
 
 class AdsbClient {
 public:
@@ -42,6 +46,26 @@ private:
     bool   _refused = false;
     int    _lastStatus = 0;
     int    _refusedStatus = 0;
+
+#ifdef ARDUINO
+    // THE SOCKET AND THE HTTP CLIENT PERSIST ACROSS POLLS. Both used to be stack locals
+    // rebuilt from nothing on every fetchFrom(), i.e. every 5 seconds forever: a fresh TCP
+    // socket opened, a full request/response, then a complete teardown, all so the next poll
+    // five seconds later could do it again to the same host.
+    //
+    // Keeping them as members does two separate things. The objects themselves stop being
+    // constructed and destroyed on a loop, which is the same class of churn that the
+    // WiFiClientSecure fix removed. And because the WiFiClient outlives the request, the
+    // TCP connection underneath it can be kept alive between polls: HTTPClient::connect()
+    // reuses an already-connected client instead of dialling again, and end() leaves the
+    // socket open when reuse is on and the server agreed to keep-alive.
+    //
+    // Safe if the server declines: HTTPClient tracks whether the response actually permitted
+    // reuse (_canReuse), and closes the socket when it did not. That degrades to exactly the
+    // old connect-every-time behaviour rather than breaking.
+    WiFiClient _plain;
+    HTTPClient _http;
+#endif
 
     double _lat = 0, _lon = 0;
     float  _rangeKm = 15.0f;

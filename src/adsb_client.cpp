@@ -96,9 +96,8 @@ bool AdsbClient::fetchFrom(const char* host, bool tls, std::vector<Aircraft>& ou
     // failed, non-200, JSON error, empty payload), and a leak only has to be missed on ONE
     // of them to reproduce exactly the slow creep this was built to fix. RAII means every
     // exit, however it happens, frees this the same way.
-    WiFiClient                        plain;
     std::unique_ptr<WiFiClientSecure> secure;
-    WiFiClient                       *client = &plain;
+    WiFiClient                       *client = &_plain;   // the persistent socket; see adsb_client.h
     if (tls) {
         secure = std::make_unique<WiFiClientSecure>();
 #if ADSB_HTTPS_INSECURE
@@ -109,8 +108,12 @@ bool AdsbClient::fetchFrom(const char* host, bool tls, std::vector<Aircraft>& ou
         client = secure.get();
     }
 
-    HTTPClient http;
-    http.setReuse(false);
+    // _http is a member now, and setReuse(true) is what actually holds the TCP connection
+    // open between polls: begin() below re-points it at the same still-connected socket and
+    // HTTPClient::connect() skips dialling entirely. On the TLS path (compiled out today)
+    // reuse would keep a handshake alive too, which this board cannot afford to repeat.
+    HTTPClient &http = _http;
+    http.setReuse(true);
     http.setConnectTimeout(6000);    // fail reasonably fast: a slow host must not block the
     http.setTimeout(8000);           // task (and the user's route/photo lookups) for too long
     if (!http.begin(*client, url)) { Serial.printf("[adsb] begin failed (%s)\n", host); return false; }
