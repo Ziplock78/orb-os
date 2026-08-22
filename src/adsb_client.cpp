@@ -13,6 +13,7 @@
 #include <HTTPClient.h>
 #include <ArduinoJson.h>   // v7
 #include <esp_heap_caps.h>
+#include <memory>          // std::unique_ptr for the TLS client
 
 // Parse the JSON in PSRAM, not internal RAM. Otherwise the per-poll JSON alloc/free
 // churn fragments the internal heap and, after a while, mbedTLS can't find a large
@@ -59,7 +60,18 @@ bool AdsbClient::poll(std::vector<Aircraft>& out) {
     // Try each independent provider once. Retrying the primary immediately can violate its
     // one-request-per-second limit and adds another full timeout to an already slow failure.
     if (fetchFrom(ADSB_PRIMARY_HOST, ADSB_PRIMARY_TLS, out)) return true;
+#if !ADSB_FALLBACK_TLS
+    // A TLS fallback on this board is not a fallback, it is a second guaranteed failure paid
+    // for on every primary miss. Measured 2026-08-22: "SSL - Memory allocation failed" every
+    // time, because a handshake needs two ~16 KB contiguous internal buffers and this board's
+    // largest free block was 2-3 KB. Attempting it anyway spent time and fragmentation on a
+    // request that could not have succeeded, right when the primary failing is the moment
+    // memory is already tightest. Only compiled in when a plain-HTTP fallback host is
+    // configured; skipped entirely while ADSB_FALLBACK_TLS is 1, which it is today.
     return fetchFrom(ADSB_FALLBACK_HOST, ADSB_FALLBACK_TLS, out);
+#else
+    return false;
+#endif
 }
 
 bool AdsbClient::fetchFrom(const char* host, bool tls, std::vector<Aircraft>& out) {
@@ -68,19 +80,33 @@ bool AdsbClient::fetchFrom(const char* host, bool tls, std::vector<Aircraft>& ou
     snprintf(url, sizeof(url), "%s://%s/v2/point/%.4f/%.4f/%.0f",
              tls ? "https" : "http", host, _lat, _lon, nm);
 
-    // Both live on the stack so the chosen one outlives the request either way. Building the
-    // secure client is cheap; it is the handshake that wants memory this board does not
-    // have, and that only happens if it is the one handed to begin().
-    WiFiClient       plain;
-    WiFiClientSecure secure;
-    WiFiClient      *client = &plain;
+    // WiFiClientSecure is heap-allocated and ONLY when tls is actually requested. It used to
+    // be a plain stack local built unconditionally on every call — "cheap", the old comment
+    // said, on the reasoning that only the handshake was expensive. That undersold its
+    // constructor: WiFiClientSecure wraps an mbedtls context that allocates its own internal
+    // state, and this function runs once per poll, forever, whether or not tls is true. With
+    // the TLS fallback disabled (see poll() above) tls is always false today, which means the
+    // "cheap" object was being built and torn down every 5 seconds for a code path that could
+    // never be reached. Suspected to be the source of the slow allocated-block creep measured
+    // 2026-08-22 (1956 -> 1968 blocks over 240 s of failed polls, free_bytes plateaued but
+    // never fully recovering) — a constructor/destructor pair whose alloc/free do not land in
+    // the exact reverse order leaves a permanent hole even when nothing looks "leaked" by
+    // total byte count.
+    // unique_ptr, not a raw new/delete pair: fetchFrom has several early returns (begin
+    // failed, non-200, JSON error, empty payload), and a leak only has to be missed on ONE
+    // of them to reproduce exactly the slow creep this was built to fix. RAII means every
+    // exit, however it happens, frees this the same way.
+    WiFiClient                        plain;
+    std::unique_ptr<WiFiClientSecure> secure;
+    WiFiClient                       *client = &plain;
     if (tls) {
+        secure = std::make_unique<WiFiClientSecure>();
 #if ADSB_HTTPS_INSECURE
-        secure.setInsecure();                          // hobby: skip cert validation
+        secure->setInsecure();                          // hobby: skip cert validation
 #else
-        // secure.setCACert(ROOT_CA_PEM);              // production: pin the root CA
+        // secure->setCACert(ROOT_CA_PEM);              // production: pin the root CA
 #endif
-        client = &secure;
+        client = secure.get();
     }
 
     HTTPClient http;
@@ -111,7 +137,7 @@ bool AdsbClient::fetchFrom(const char* host, bool tls, std::vector<Aircraft>& ou
         // Only the secure client can explain itself; over plain HTTP there is no TLS state
         // to report, and asking for it would mean calling through the base pointer.
         char tlsMsg[128] = "";
-        const int tlsCode = tls ? secure.lastError(tlsMsg, sizeof(tlsMsg)) : 0;
+        const int tlsCode = (tls && secure) ? secure->lastError(tlsMsg, sizeof(tlsMsg)) : 0;
         Serial.printf("[adsb] HTTP %d (%s) tls=%d '%s' heap=%u largest=%u psram=%u\n",
                       code, host, tlsCode, tlsMsg,
                       (unsigned)ESP.getFreeHeap(),

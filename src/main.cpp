@@ -81,6 +81,12 @@
 // ---- shared state ----
 static std::vector<Aircraft> g_aircraft;      // latest snapshot
 static SemaphoreHandle_t     g_ac_mutex;      // guards g_aircraft
+// Handles captured at creation, purely so /taskmem can ask each task how much of its own
+// stack it has ever come within of using (uxTaskGetStackHighWaterMark). Phase 0 of the
+// 2026-08-22 memory investigation: before trimming anything, find out who is actually
+// holding the internal RAM that ADS-B polling needs.
+static TaskHandle_t          g_adsbTaskHandle = nullptr;
+static TaskHandle_t          g_audioTaskHandle = nullptr;
 static volatile bool         g_acDirty = false; // set when a new snapshot is ready
 static AdsbClient            g_adsb;
 static RadarSettings         g_settings;
@@ -2238,10 +2244,39 @@ void setup() {
     // just sit unused. That memory goes to the Weather Radar animation frames instead.
     g_ac_mutex = xSemaphoreCreateMutex();
     psram_mark("before adsb task");
-    xTaskCreatePinnedToCore(adsb_task, "adsb", 16384, nullptr, 1, nullptr, 0);  // TLS needs a big stack
+    xTaskCreatePinnedToCore(adsb_task, "adsb", 8192, nullptr, 1, &g_adsbTaskHandle, 0);
+    // Measured on the device 2026-08-22 (uxTaskGetStackHighWaterMark over a 5-minute soak,
+    // the feed both succeeding and failing): peak usage was ~4.6 KB of the 16 KB this held.
+    // The old comment here said "TLS needs a big stack"; that stopped being true when the
+    // TLS fallback was disabled above, and even the plain-HTTP path never came close to
+    // justifying the size. 8 KB keeps roughly double the observed peak as margin and returns
+    // 8 KB of internal RAM, which is the exact resource the feed is starved for.
 
     // configuration web page (http://capsuleradar.local/)
     g_web.on("/diag", []{ g_web.send(200, "text/plain", diag::text()); });
+    // Per-task and heap-fragmentation detail, added for the 2026-08-22 investigation into
+    // why ADS-B reads start timing out a minute or two into Flight Tracker. /health already
+    // gives one internal-heap number; this is who is holding the rest of it, and how broken
+    // up what remains actually is (a device can report 8 KB free and still be unable to
+    // satisfy a 2 KB request if that 8 KB is forty scattered 200-byte crumbs).
+    g_web.on("/taskmem", []{
+        multi_heap_info_t hi;
+        heap_caps_get_info(&hi, MALLOC_CAP_INTERNAL);
+        char b[640];
+        snprintf(b, sizeof(b),
+            "{\"internal\":{\"free_bytes\":%u,\"largest_free_block\":%u,"
+            "\"free_blocks\":%u,\"allocated_blocks\":%u,\"total_blocks\":%u},"
+            "\"stack_free_bytes\":{\"adsb\":%u,\"audio\":%u,\"loop\":%u},"
+            "\"radar_active\":%s}",
+            (unsigned)hi.total_free_bytes, (unsigned)hi.largest_free_block,
+            (unsigned)hi.free_blocks, (unsigned)hi.allocated_blocks,
+            (unsigned)(hi.free_blocks + hi.allocated_blocks),
+            (unsigned)(g_adsbTaskHandle ? uxTaskGetStackHighWaterMark(g_adsbTaskHandle) : 0),
+            (unsigned)audio_stack_free_bytes(),
+            (unsigned)uxTaskGetStackHighWaterMark(nullptr),   // nullptr = the calling (loop) task
+            g_radarViewActive ? "true" : "false");
+        g_web.send(200, "application/json", b);
+    });
     // Reboot on request. Added because capturing the boot log (the only place the PSRAM
     // ledger prints) otherwise means physically unplugging the device, and the serial
     // port cannot be held open during a flash anyway. Deliberately delayed so the HTTP
@@ -2530,6 +2565,24 @@ void loop() {
             diagTick = 0;
             diag::log("heap %u min %u app %s", (unsigned)ESP.getFreeHeap(),
                       (unsigned)ESP.getMinFreeHeap(), app_shell::name());
+            // Direct to Serial, not the diag ring buffer: this is instrumentation for the
+            // 2026-08-22 memory investigation, wanted live over the cable rather than
+            // competing for room in the compact RTC history. Fragmentation is the thing
+            // "heap %u" above cannot show — a device can report 8 KB free and still be
+            // unable to satisfy a 2 KB request if that 8 KB is forty scattered crumbs, which
+            // is exactly the gap between free_bytes and largest_free_block below.
+            {
+                multi_heap_info_t hi;
+                heap_caps_get_info(&hi, MALLOC_CAP_INTERNAL);
+                Serial.printf("[memdbg] internal free=%u largest=%u blocks(free/alloc)=%u/%u "
+                              "stacks(adsb/audio/loop)=%u/%u/%u radar=%d\n",
+                              (unsigned)hi.total_free_bytes, (unsigned)hi.largest_free_block,
+                              (unsigned)hi.free_blocks, (unsigned)hi.allocated_blocks,
+                              (unsigned)(g_adsbTaskHandle ? uxTaskGetStackHighWaterMark(g_adsbTaskHandle) : 0),
+                              (unsigned)audio_stack_free_bytes(),
+                              (unsigned)uxTaskGetStackHighWaterMark(nullptr),
+                              (int)g_radarViewActive);
+            }
         }
 #if DEBUG_MEM
         static uint32_t lastFrames = 0;

@@ -13,6 +13,8 @@ enum AudioCue {
 };
 
 bool audio_begin();                 // init ES8311 + I2S + PA + playback task (call on core 1)
+#include <stdint.h>
+uint32_t audio_stack_free_bytes();  // bytes of its stack never touched, for /taskmem
 bool audio_present();
 void audio_set_volume(int pct);     // 0..100 (software amplitude)
 void audio_set_muted(bool muted);

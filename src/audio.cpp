@@ -18,6 +18,7 @@
 #define SR            16000          // playback sample rate (a beep; pitch-tolerant)
 #define I2S_PORT      I2S_NUM_0
 
+static TaskHandle_t s_taskHandle = nullptr;
 static bool s_ok = false;
 static int16_t *s_buf = nullptr;     // tone scratch in PSRAM (keeps internal RAM free for TLS)
 static const size_t S_BUF_LEN = SR / 2 * 2;   // up to 500 ms, stereo interleaved
@@ -245,13 +246,17 @@ bool audio_begin() {
         return false;
     }
     s_sem = xSemaphoreCreateBinary();
-    xTaskCreatePinnedToCore(audio_task, "audio", 4096, nullptr, 1, nullptr, 0);  // I2S only -> core 0
+    xTaskCreatePinnedToCore(audio_task, "audio", 4096, nullptr, 1, &s_taskHandle, 0);  // I2S only -> core 0
     s_ok = true;
     Serial.println("[audio] ES8311 ready");
     return true;
 }
 
 bool audio_present() { return s_ok; }
+// Bytes of its 4 KB stack this task has never come within of using, for the memory
+// investigation started 2026-08-22 (a fixed number reported per task, cheaper than
+// exposing a raw TaskHandle_t across the header and letting every caller learn FreeRTOS).
+uint32_t audio_stack_free_bytes() { return s_taskHandle ? uxTaskGetStackHighWaterMark(s_taskHandle) : 0; }
 void audio_set_volume(int pct) { s_vol = constrain(pct, 0, 100); }
 void audio_set_muted(bool m) { s_muted = m; }
 
