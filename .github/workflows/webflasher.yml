@@ -1,9 +1,11 @@
-name: Build firmware & deploy web flasher
+name: Build firmware
 
-# Builds the ESP32-S3 firmware, merges it into a single binary, and publishes the
-# browser web-flasher (web/flash/) to GitHub Pages so makers can flash from Chrome/Edge.
+# Builds the ESP32-S3 firmware and merges it into a single flashable binary,
+# then attaches that binary to the run so it can be downloaded from the
+# Actions tab.
 #
-# One-time setup in the repo: Settings -> Pages -> Source = "GitHub Actions".
+# No GitHub Pages deploy: the web flasher for this project is Orb Studio,
+# hosted separately on Cloudflare.
 
 on:
   push:
@@ -12,11 +14,9 @@ on:
 
 permissions:
   contents: read
-  pages: write
-  id-token: write
 
 concurrency:
-  group: pages
+  group: build-firmware
   cancel-in-progress: true
 
 jobs:
@@ -59,16 +59,7 @@ jobs:
             0xe000  "$BOOT_APP0" \
             0x10000 "$B/firmware.bin"
 
-      - uses: actions/upload-pages-artifact@v3
+      - uses: actions/upload-artifact@v4
         with:
+          name: firmware
           path: site
-
-  deploy:
-    needs: build
-    runs-on: ubuntu-latest
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-    steps:
-      - id: deployment
-        uses: actions/deploy-pages@v4
