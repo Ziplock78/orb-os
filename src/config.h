@@ -25,11 +25,20 @@
 #define ADSB_QUERY_MIN_KM   12.0f
 #define ADSB_QUERY_MAX_KM   150.0f
 static const float RANGE_STEPS_KM[] = {10.0f, 20.0f, 30.0f, 50.0f, 100.0f};
-// Be gentle with the free API. This was 2000, which respects adsb.lol's documented
-// one-per-second rule but still means 1,800 requests an hour from one home address while
-// the Flight Tracker is up, and on 2026-08-22 that address was being answered with 403.
-// Aircraft do not move far in five seconds at any range this dial draws.
-#define POLL_INTERVAL_MS    5000
+// Be gentle with the free API. This was 2000, then 5000, and is now 10000 — each step
+// taken because the feed kept answering with 403/429.
+//
+// The last step is the counter-intuitive one and it is worth writing down: polling LESS
+// delivers MORE. Measured over a 10-minute soak at 5 s, the feed refused four times, and
+// each refusal costs a 60 s backoff by design (see the refusal branch in main.cpp). That is
+// roughly four of the ten minutes spent deliberately silent, in bursts, so the dial went
+// stale for a minute at a time. At 10 s the request rate halves to about 360/hour, which
+// should stay under whatever window is being tripped, and steady updates every 10 s beat
+// bursts of updates every 5 s separated by minute-long penalties.
+//
+// Aircraft do not move far in ten seconds at any range this dial draws: 400 kt is about
+// 2 km, which at the default range is a couple of pixels.
+#define POLL_INTERVAL_MS    10000
 #define POLL_INTERVAL_BATTERY_MS 15000      // slower polling when running on battery
 #define MOTION_INTERP       1              // 1 = glyphs glide between polls; 0 = snap to new pos
 #define AC_STALE_MS         15000          // keep the last contacts through brief empty feed responses
