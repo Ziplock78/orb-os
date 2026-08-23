@@ -52,6 +52,7 @@
 #include "custom_apps.h"              // CUSTOM_APP_* — which apps a theme flash includes in the menu
 #include "location_view.h"          // location info app (Aviator dial)
 #include "spycam_view.h"             // Spy Cam: looping "security camera" flip-book
+#include "intel_view.h"              // world headlines, read through the gateway
 #include <set>                       // audio: track which contacts are in range
 #include <string>
 #include <WiFiManager.h>             // captive portal
@@ -113,7 +114,7 @@ static bool                  g_milOnly      = false;                 // only sho
 static int                   g_rotation = 0;                         // clockwise display rotation, 0..359° (web/NVS)
 static bool                  g_useGps = false;                       // auto-set home from the LC76G GPS (-G variant) (web/NVS)
 static int                   g_trailLen = 2;                         // aircraft trails 0=off 1=short 2=med 3=long (web/NVS)
-static int                   g_maxAc = 20;                           // max aircraft drawn on the scope (web/NVS)
+static int                   g_maxAc = 12;                           // max aircraft drawn on the scope (web/NVS)
 static bool                  g_bigText = false;                      // accessibility: large fonts (web/NVS, applied at boot)
 static volatile bool         g_onBattery = false;                    // discharging (set on core 1, read on core 0)
 static bool                  g_rtcSynced = false;                    // RTC written from NTP this session?
@@ -158,6 +159,7 @@ static volatile bool         g_weatherDirty = false;
 static volatile bool         g_wxRadarDirty = false;
 static volatile bool         g_wxAnimDirty = false;      // new Weather app: frame set ready
 static volatile bool         g_cloudImageDirty = false;
+static volatile bool         g_intelDirty = false;      // headlines: a fresh set is in the store
 
 // Web-selectable time zones (label + POSIX TZ). The <option> value is the index; the save
 // handler maps it back to the POSIX string stored in NVS and used by configTzTime at boot.
@@ -218,6 +220,29 @@ static void adsb_task(void*) {
             lastFeedOk = millis();
         }
         wasRadarActive = radarActive;
+
+        // WIFI DOES NOT COME BACK BY ITSELF. WiFiManager's autoConnect runs once, at boot,
+        // and nothing here ever tried again: this loop watched `conn` go false and then just
+        // carried on asking a network it no longer had. Measured on the device 2026-08-23 —
+        // four hours of uptime showing "No WiFi" with the router two metres away and the
+        // credentials still saved, and it reconnected instantly the moment it was rebooted.
+        //
+        // A desk instrument has to survive its router restarting overnight without a person
+        // power-cycling it, so: log the drop (previously silent, which is why this hid for so
+        // long), then retry on a slow cadence. 20 s is unhurried enough not to thrash the
+        // radio and quick enough that a blip costs one missed poll rather than a whole night.
+        if (!conn && wasConnected) {
+            Serial.println("[wifi] connection LOST");
+            diag::log("wifi lost");
+        }
+        if (!conn) {
+            static uint32_t s_wifiRetryAt = 0;
+            if (millis() - s_wifiRetryAt > 20000UL) {
+                s_wifiRetryAt = millis();
+                Serial.println("[wifi] disconnected — reconnecting");
+                WiFi.reconnect();
+            }
+        }
         if (conn && !wasConnected) {
             // disable WiFi modem power-save: on a mains-powered desk gadget it just adds latency
             // and makes RSSI bounce (feed goes stale -> amber bars) even sitting next to the router.
@@ -453,6 +478,11 @@ static void adsb_task(void*) {
                 nextLocInfoAt = millis() + (locationview::hasData() ? 300000UL : 30000UL);
             }
             locationview::pump(g_settings.homeLat, g_settings.homeLon);
+            // Headlines. One plain-HTTP request against a cached gateway response, well
+            // under a kilobyte, so unlike the location pump there is nothing to spread over
+            // several cycles. fetchStep() owns its own timing and returns immediately when
+            // nothing is due, which is almost every pass through this loop.
+            if (intelview::fetchStep()) g_intelDirty = true;
             // Then the on-demand lookups for the selected aircraft. Their timeouts are kept
             // short (see photo_client / route_client) so a slow photo server can't freeze the
             // feed for long; the next loop iteration polls again as soon as they return.
@@ -493,7 +523,14 @@ static void applyThemeSettings() {
     const theme_style::Radar &rs = theme_style::radar();
     // -1 (or 0 for range) means "no opinion", leaving the Orb's own stored setting alone.
     if (rs.rangeKm     > 0.0f) g_settings.rangeKm = rs.rangeKm;
-    if (rs.maxAircraft > 0)    g_maxAc     = rs.maxAircraft;
+    // Clamped on the way in, not just where it is drawn. loadSettings() clamps what NVS
+    // held, but this runs afterwards, so a theme written against the old 20/40 dials could
+    // put a larger number straight back into g_maxAc. setMaxOnScreen would still cap what
+    // reaches the scope, leaving every other reader of g_maxAc (the web UI's selected
+    // option, and whatever gets re-persisted on the next save) holding a count this
+    // firmware will not draw.
+    if (rs.maxAircraft > 0)    g_maxAc     = (rs.maxAircraft > ADSB_MAX_AIRCRAFT)
+                                             ? ADSB_MAX_AIRCRAFT : rs.maxAircraft;
     if (rs.minAltFt   >= 0)    g_minAltFt  = rs.minAltFt;
     if (rs.hideGround >= 0)    g_hideGround = (rs.hideGround != 0);
     Serial.printf("[theme] applied: rangeKm=%.0f maxAircraft=%d minAltFt=%d hideGround=%d\n",
@@ -533,10 +570,15 @@ static void loadSettings() {
     g_proximityKm      = p.getFloat("proxkm", 0.0f);
     g_useGps           = p.getBool("usegps", false);
     g_trailLen         = p.getInt("traillen", 2);
-    g_maxAc            = p.getInt("maxac", 20);
+    g_maxAc            = p.getInt("maxac", 12);
 #if CUSTOM_HAS_RADAR_MAXAC
     g_maxAc = CUSTOM_RADAR_MAXAC;   // a pushed design's own "max aircraft shown" cap, same one-shot-per-boot precedent as range/boot-target
 #endif
+    // Clamp after both sources: an Orb that ran an earlier build has a larger number sitting
+    // in NVS (20, 40, 60), and a theme built before the ceiling moved can still carry one.
+    // Neither should be able to reintroduce a count the scope no longer supports.
+    if (g_maxAc > ADSB_MAX_AIRCRAFT) g_maxAc = ADSB_MAX_AIRCRAFT;
+    if (g_maxAc < 1)                 g_maxAc = 1;
     g_idleDimMs        = p.getUInt("idledim", IDLE_DIM_MS);
     g_units            = p.getInt("units", 0);
     g_wxUnits          = p.getInt("wxUnits", 0);
@@ -1196,7 +1238,7 @@ static void handleRoot() {
         snprintf(o, sizeof(o), "<option value=%d%s>%s</option>", i, i == g_trailLen ? " selected" : "", tlnames[i]);
         tlopts += o;
     }
-    const int mxvals[] = {10, 15, 20, 30, 40, 60};   // max aircraft on the scope (<= feed cap)
+    const int mxvals[] = {4, 6, 8, 10, 12};          // max aircraft on the scope (<= feed cap)
     String mxopts;
     for (int mv : mxvals) {
         char o[64];
@@ -2029,8 +2071,18 @@ void setup() {
         int t = p.getInt("theme", 4);
         g_showSweep = p.getBool("sweep", true);
         g_showAirports = p.getBool("airports", true);
-        g_hideGround = p.getBool("hideground", false);
-        g_minAltFt = p.getInt("minalt", 0);
+        // Read only when the active theme has no opinion. This block runs AFTER
+        // applyThemeSettings(), so assigning unconditionally undid the theme's altitude
+        // floor and ground filter a few lines after they were applied: a design could state
+        // both, have them read correctly out of radar_style.json, and still fly the Orb's
+        // own stored values. Same ordering fault the comment above applyThemeSettings
+        // describes for range and aircraft count, which those two were already spared
+        // because nothing re-reads them here.
+        {
+            const theme_style::Radar &rs = theme_style::radar();
+            if (rs.hideGround < 0) g_hideGround = p.getBool("hideground", false);
+            if (rs.minAltFt   < 0) g_minAltFt   = p.getInt("minalt", 0);
+        }
 #if CUSTOM_HAS_RADAR_HIDEGROUND
         g_hideGround = (bool)CUSTOM_RADAR_HIDEGROUND;   // a pushed design's own Scope settings, same one-shot-per-boot precedent as range/max-aircraft
 #endif
@@ -2114,6 +2166,14 @@ void setup() {
     app_shell::add(settingsview::screen(), theme_style::names().settings,
                    settingsview::onPress, settingsview::onTurn,
                    true, settingsview::onEnter, settingsview::onExit, false);  // captures the knob on entry; onEnter resets to the menu and takes the text canvas, onExit gives it back
+    // Appended AFTER Settings on purpose. Several boot paths and the simulator's selftests
+    // address apps by hardcoded index (Settings is 5, Flight Tracker is 1); inserting this
+    // anywhere earlier would move both and send a factory-reset boot into the wrong screen.
+    // The cost is that Settings is no longer last in the wrap-around, which is cosmetic.
+    intelview::init();
+    psram_mark("after intelview");
+    app_shell::add(intelview::screen(), theme_style::names().headlines,
+                   intelview::onPress, nullptr, false, nullptr, nullptr, !theme_style::apps().headlines);  // push fetches now instead of waiting out the poll
     app_shell::begin();                // start on the clock (index 0 — see comment above)
     psram_mark("after app_shell::begin");
 
@@ -2225,6 +2285,11 @@ void setup() {
     // after WiFi.mode(WIFI_STA) or via WiFiManager's own getWiFiSSID(), and (b) never call
     // WiFi.begin() with fallback credentials before autoConnect() has had its turn.
     psram_mark("before wifi connect");
+    // Belt as well as braces: ask the SDK to keep the link up on its own, in addition to the
+    // explicit retry in adsb_task. This alone is not enough — it gives up after repeated
+    // failures, which is exactly the case that stranded the device — but it recovers the
+    // common brief blip without waiting for the 20 s retry.
+    WiFi.setAutoReconnect(true);
     const bool wifiUp = g_wm.autoConnect("The Orb Setup");
     if (wifiUp) Serial.println("[wifi] connected");
     else        Serial.println("[wifi] config portal open - join 'The Orb Setup' to set WiFi; UI stays live");
@@ -2559,6 +2624,14 @@ void loop() {
     if (g_weatherDirty) {
         g_weatherDirty = false;
         ui_on_data_updated();
+    }
+    // Headlines arrived on core 0; the labels are LVGL objects and may only be written
+    // here. Cheap enough to do whether or not the screen is showing: it is five short
+    // label writes, and doing it now means the screen is already right when someone
+    // turns the knob to it rather than blank for a moment.
+    if (g_intelDirty) {
+        g_intelDirty = false;
+        intelview::onHeadlinesReady();
     }
     if (g_wxRadarDirty) {
         g_wxRadarDirty = false;

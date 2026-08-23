@@ -80,12 +80,17 @@ static const float RANGE_STEPS_KM[] = {10.0f, 20.0f, 30.0f, 50.0f, 100.0f};
 // Dropping to HTTP costs almost nothing here, because ADSB_HTTPS_INSECURE was already 1:
 // certificates were never verified, so TLS was only hiding public flight data from
 // eavesdroppers, never authenticating the source. No credentials are sent. adsb.lol serves
-// this endpoint over HTTP; airplanes.live answers 403 to it, so that one stays on HTTPS as
-// a fallback for if the memory picture ever changes.
+// this endpoint over HTTP.
+//
+// There is no fallback host. The airplanes.live entry that used to sit here was never
+// referenced by any code, and as of 2026-08-23 that service answers 403 to every request
+// with a note demanding you email them for permission first, so it was a fallback in name
+// only. The nearest free replacement, opendata.adsb.fi, redirects HTTP to HTTPS and so is
+// unreachable from this device at all (see the TLS note above). Until a gateway exists to
+// hold real failover off-device, this feed is genuinely single-sourced, and adsb.lol's
+// slow spells (a 32.2 s TCP connect measured 2026-08-22) are felt directly by the scope.
 #define ADSB_PRIMARY_HOST   "api.adsb.lol"          // GET /v2/point/{lat}/{lon}/{radius_nm}
 #define ADSB_PRIMARY_TLS    0
-#define ADSB_FALLBACK_HOST  "api.airplanes.live"    // same readsb format
-#define ADSB_FALLBACK_TLS   1
 #define ADSB_USER_AGENT     "CapsuleRadar/1.0 (ESP32-S3 hobby; +https://github.com/socquique/capsule-radar)"
 #define ADSB_HTTPS_INSECURE 1               // 1 = setInsecure() (hobby). 0 = use pinned root CA.
 // How many distinct addresses to keep for the feed. Rate limiting is per-edge, so having
@@ -108,7 +113,26 @@ static const float RANGE_STEPS_KM[] = {10.0f, 20.0f, 30.0f, 50.0f, 100.0f};
 #define ADSB_CONNECT_MS     15000
 #define ADSB_READ_MS        20000
 
-#define ADSB_MAX_AIRCRAFT   60              // hard cap parsed per poll (protect RAM in busy areas)
+// A deliberate product ceiling, not a RAM guess: twelve is what a 466 px scope can show
+// without the icons piling into each other over a busy city. Note it does NOT shrink the
+// download, which is whatever the provider decides to send (~95 KB / ~200 aircraft over
+// Phoenix); the trim happens here, after the whole response is on the device.
+#define ADSB_MAX_AIRCRAFT   12              // hard cap parsed per poll
+
+// ---------- Intel (headlines) ----------
+// The gateway, not a publisher. Plain HTTP for the same reason as everything else here:
+// no TLS on this board. See the long note above intel_fetch.
+#define INTEL_GATEWAY_HOST  "buildtheorb.zionbrock.workers.dev"
+// Ten minutes, matching the gateway's own edge cache: polling faster only re-reads the
+// same cached answer, and world news does not move faster than that on a glanceable dial.
+#define INTEL_POLL_MS       600000UL
+// A failed poll should not leave the screen empty for the rest of the ten minutes.
+#define INTEL_RETRY_MS      60000UL
+#define INTEL_CONNECT_MS    6000
+#define INTEL_READ_MS       9000
+// What a fresh Orb shows before anyone picks. Sensible for a device on a shelf in a room.
+#define INTEL_DEFAULT_TOPICS "general"
+#define INTEL_DEFAULT_COUNT  3
 
 // ---------- Debug ----------
 #define DEBUG_MEM           0               // 1 = print a [mem] heap/fps line every 5s on serial

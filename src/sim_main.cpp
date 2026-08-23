@@ -28,6 +28,7 @@
 #include "aircraft.h"
 #include "clock_view.h"
 #include "location_view.h"
+#include "intel_view.h"
 #include "app_shell.h"
 #include "app_theme.h"
 #include "theme_select.h"
@@ -588,6 +589,16 @@ static void sim_register_apps(lv_obj_t *radarScreen) {
     app_shell::add(survScreen,  theme_style::names().surveillance, nullptr, nullptr, false, nullptr, nullptr, !theme_style::apps().surveillance);
     app_shell::add(settingsview::screen(), theme_style::names().settings,
                    settingsview::onPress, settingsview::onTurn, true, settingsview::onEnter, settingsview::onExit, false);
+    // After Settings, matching main.cpp. The selftests below address apps by index, so the
+    // two lineups have to stay in the same order or the simulator stops standing in for
+    // the device at exactly the moment someone is using it to check one.
+    intelview::init();
+    // Fetch once, synchronously, the way the location app's own sim path does: the device
+    // does this from its network task, which the simulator has no equivalent of, and a
+    // headless screenshot of an empty screen would tell nobody anything.
+    if (intelview::fetchStep()) intelview::onHeadlinesReady();
+    app_shell::add(intelview::screen(), theme_style::names().headlines,
+                   intelview::onPress, nullptr, false, nullptr, nullptr, !theme_style::apps().headlines);
     app_shell::begin();   // start on Clock (index 0), matching the device
 }
 
@@ -1066,7 +1077,17 @@ int main(int argc, char **argv) {
             // already showing) — temporary dev tool, same idea as SIM_FRAMESHOT above.
             static bool cshotDone = false;
             const char *cshot = getenv("SIM_CLOCKSHOT");
-            if (cshot && !cshotDone && now - start > 4000) {
+            // SIM_SHOT_APP picks which app to photograph instead of whatever booted.
+            // Anything past the radar is otherwise unreachable in a headless run, which is
+            // exactly when a picture of one is wanted. Switched well before the shot rather
+            // than in the same pass: selecting an app starts a transition, and a capture
+            // taken immediately photographs the screen being left behind.
+            static bool shotAppPicked = false;
+            if (cshot && !shotAppPicked && now - start > 3000) {
+                shotAppPicked = true;
+                if (const char *which = getenv("SIM_SHOT_APP")) app_shell::selectApp(atoi(which));
+            }
+            if (cshot && !cshotDone && now - start > 5000) {
                 cshotDone = true;
                 lv_refr_now(NULL); present_composite(now);
                 int ow, oh; SDL_GetRendererOutputSize(s_ren, &ow, &oh);

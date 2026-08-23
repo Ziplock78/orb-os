@@ -159,6 +159,7 @@ struct Apps {
     bool weather      = true;
     bool intel        = true;
     bool surveillance = true;
+    bool headlines    = true;   // world headlines, fetched through the gateway
 };
 
 // Display names, kept strictly separate from the identifiers they label.
@@ -179,6 +180,7 @@ struct Names {
     char weather[20]      = "Weather Radar";
     char intel[20]        = "Intel";
     char surveillance[20] = "Surveillance";
+    char headlines[20]    = "Headlines";
     char settings[20]     = "Settings";      // renameable, but never hideable
 };
 
