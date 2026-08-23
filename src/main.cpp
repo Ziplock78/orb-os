@@ -2641,6 +2641,10 @@ void loop() {
         // freeze but the icon would otherwise stay white.
         const bool feedFresh = wifiUp && (millis() - g_lastFeedOkMs < 18000UL);
         ui_set_status(wifiUp, feedFresh, rssi, clk);
+        // Same two facts, said in words on the scope itself. The HUD's amber bars already
+        // encode this, but a colour change on a signal icon is not something anyone reads as
+        // "somebody else's server is down" — which is what it almost always means.
+        radar::setFeedStatus(wifiUp, (uint32_t)((millis() - g_lastFeedOkMs) / 1000UL));
         char net[112];
         if (WiFi.status() == WL_CONNECTED)
             // IP + the active centre point (helps users verify what actually got saved)

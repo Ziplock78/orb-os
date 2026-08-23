@@ -90,6 +90,12 @@ void setRangeLabelVisible(bool v);               // hide the built-in range labe
 // the selection idle countdown so the newly-arrived text gets a full reading window.
 void noteSelectionDetailArrived();
 
+// Tell the scope whether the WiFi is up and how long since the last aircraft. It shows a
+// small banner naming the actual culprit once a gap is real (45 s), because a blank scope
+// looks the same from the desk whether the network dropped, the firmware wedged, or the
+// feed provider is having a bad night — and it is nearly always the last one.
+void setFeedStatus(bool wifiUp, uint32_t staleSec);
+
 // Replace the "Loading aircraft and location data" notice with the truth, while it is still
 // up. That notice only clears when the first aircraft arrive, so a feed that never answers
 // left it saying "loading" indefinitely, which is the device telling the person in front of

@@ -220,6 +220,7 @@ static void radar_exit_select();             // -> default view (deselect + rele
 // route could land with a second left on the clock and vanish as you registered it.
 void noteSelectionDetailArrived();
 static float       s_lastRangeKm = 0.0f;     // current scope range, for the range banner (radar_range_fmt)
+static lv_obj_t   *s_feedWarn   = nullptr;   // "the feed is down, not your Orb" banner
 static lv_obj_t   *s_textCanvas = nullptr;   // callsign/stats/route banners (curved+glow capable), a Launch Kit push
 // The selection card: a plate under those banners, parked on the far side of the scope
 // from whatever is selected. Two objects rather than one drawn shape, so LVGL does the
@@ -1607,6 +1608,20 @@ void init(void *lv_parent) {
     lv_obj_set_style_text_line_space(s_loading, 6, 0);
     show(s_loading, false);
 
+    // A small, honest banner near the bottom of the dial for when the aircraft feed is not
+    // answering. Deliberately NOT the big centred "Loading" box: by the time this shows,
+    // there is usually a scope full of last-known traffic worth still seeing, and covering
+    // it would be its own kind of lie. Amber rather than red because nothing is broken.
+    s_feedWarn = make_label(parent, "", &lv_font_montserrat_14,
+                            lv_color_hex(0xFFB23C), LV_ALIGN_BOTTOM_MID, 0, -46);
+    lv_obj_set_style_bg_color(s_feedWarn, lv_color_black(), 0);
+    lv_obj_set_style_bg_opa(s_feedWarn, LV_OPA_70, 0);
+    lv_obj_set_style_radius(s_feedWarn, 8, 0);
+    lv_obj_set_style_pad_all(s_feedWarn, 8, 0);
+    lv_obj_set_style_text_align(s_feedWarn, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_style_text_line_space(s_feedWarn, 3, 0);
+    show(s_feedWarn, false);
+
     s_themeLabel = make_label(parent, "", &lv_font_montserrat_20, lv_color_white(), LV_ALIGN_TOP_MID, 0, 92);
     lv_obj_set_style_bg_color(s_themeLabel, lv_color_black(), 0);
     lv_obj_set_style_bg_opa(s_themeLabel, LV_OPA_90, 0);
@@ -2676,6 +2691,7 @@ void knobExit() {
     s_selectMode = false;
     s_loadingPending = false;
     if (s_loading) show(s_loading, false);   // never leave it stranded over another app
+    if (s_feedWarn) show(s_feedWarn, false); // same for the feed banner
 }
 
 bool selected(AcInfo &out) {
@@ -2703,6 +2719,37 @@ void tickSweep() { /* sweep self-animates via lv_timer */ }
 
 // Late detail landed on a card that is still up: give the reader a full window from now,
 // rather than whatever was left of the one that started when they turned the knob.
+// Say WHICH thing is unwell, because from the desk a blank scope looks identical whether
+// the WiFi dropped, the firmware wedged, or somebody else's server is having a bad night —
+// and the last of those is by far the likeliest. The device knows which it is, so it should
+// say so rather than leave a person guessing at their own hardware.
+//
+// Only after a real gap: aircraft arrive every ten seconds and a single missed poll is
+// normal, so warning at the first hiccup would train people to ignore this.
+void setFeedStatus(bool wifiUp, uint32_t staleSec) {
+    if (!s_feedWarn) return;
+    // While the big "Loading" box is still up it is already saying this, in more words.
+    if (s_loadingPending) { show(s_feedWarn, false); return; }
+    const char *msg = nullptr;
+    if (!wifiUp)              msg = "No WiFi\nYour Orb is fine";
+    else if (staleSec >= 45)  msg = "Aircraft feed unavailable\nWiFi is fine, the service is not answering";
+    // Log only on change: this is called every status tick, and a line per tick would bury
+    // the feed diagnostics underneath it.
+    static const char *s_shown = nullptr;
+    if (!msg) {
+        if (s_shown) { Serial.println("[feedwarn] cleared"); s_shown = nullptr; }
+        show(s_feedWarn, false);
+        return;
+    }
+    if (s_shown != msg) {
+        s_shown = msg;
+        Serial.printf("[feedwarn] showing: %s (stale %lus)\n", msg, (unsigned long)staleSec);
+    }
+    lv_label_set_text(s_feedWarn, msg);
+    show(s_feedWarn, true);
+    lv_obj_move_foreground(s_feedWarn);
+}
+
 void noteSelectionDetailArrived() {
     if (s_selectMode) s_selActivityMs = lv_tick_get();
 }
