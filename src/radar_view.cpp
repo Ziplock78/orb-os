@@ -2730,9 +2730,25 @@ void setFeedStatus(bool wifiUp, uint32_t staleSec) {
     if (!s_feedWarn) return;
     // While the big "Loading" box is still up it is already saying this, in more words.
     if (s_loadingPending) { show(s_feedWarn, false); return; }
+    // STATE ONLY, NEVER A CAUSE.
+    //
+    // This used to say "WiFi is fine, the service is not answering". Measured 2026-08-23 while
+    // that exact sentence was on the dial: the service answered a laptop in 1.3 s with 88
+    // aircraft, and the Orb itself was unreachable over WiFi. Both halves were wrong.
+    //
+    // The bug was claiming a diagnosis from WiFi.status(), which only reports that the radio
+    // is ASSOCIATED with an access point. It says nothing about whether the device can
+    // actually use the network — and when internal memory is exhausted it cannot, while
+    // still reporting WL_CONNECTED. So the banner asserted the one thing it had no way to
+    // know, and asserted it confidently.
+    //
+    // An indicator that names the wrong culprit is worse than none: it sends a person to
+    // check their router while the fault is somewhere else entirely, and once it has done
+    // that twice nothing it says is believed again. So it now reports only what is directly
+    // observable — no fresh aircraft — and leaves the diagnosis to the logs, which can be
+    // checked rather than trusted.
     const char *msg = nullptr;
-    if (!wifiUp)              msg = "No WiFi\nYour Orb is fine";
-    else if (staleSec >= 45)  msg = "Aircraft feed unavailable\nWiFi is fine, the service is not answering";
+    if (staleSec >= 45) msg = "No aircraft data";
     // Log only on change: this is called every status tick, and a line per tick would bury
     // the feed diagnostics underneath it.
     static const char *s_shown = nullptr;

@@ -246,7 +246,12 @@ bool audio_begin() {
         return false;
     }
     s_sem = xSemaphoreCreateBinary();
-    xTaskCreatePinnedToCore(audio_task, "audio", 4096, nullptr, 1, &s_taskHandle, 0);  // I2S only -> core 0
+    // 2048, not 4096. Measured with uxTaskGetStackHighWaterMark on the device: this task
+    // never came within 3,276 bytes of filling its 4 KB, i.e. it uses about 820 B. The other
+    // 3 KB sat reserved in INTERNAL RAM, which is the memory the networking stack starves
+    // for — a clean boot leaves roughly 9.5 KB free in total. 2048 keeps well over double
+    // the observed peak and hands the rest back.
+    xTaskCreatePinnedToCore(audio_task, "audio", 2048, nullptr, 1, &s_taskHandle, 0);  // I2S only -> core 0
     s_ok = true;
     Serial.println("[audio] ES8311 ready");
     return true;

@@ -34,8 +34,31 @@
 // dead with 70 KB free but a 17 KB largest block. Too low and LVGL's per-draw scratch sits
 // behind the slower external bus. Measure before moving it; see the boot log's
 // heap/largest numbers on any [adsb] or [weather] line.
+// 2 KB, measured 2026-08-23. This sat at 16 KB, and the comment above ends "Measure before
+// moving it" — so it was measured, on the device, by printing INTERNAL free at every boot
+// milestone (the [intram] lines) instead of only PSRAM, which is all anything here had ever
+// reported. The scarce pool was invisible.
+//
+// What 16 KB was costing, per boot:
+//                        internal free   largest block   feed
+//     16384 (before)          19 KB          7.1 KB      0 of 14 polls
+//      2048 (now)             67 KB         31.7 KB     14 of 15 polls
+//      1024 (also tried)      75 KB         31.7 KB     no better where it counts
+//
+// Display and radar alone were holding 137 KB of internal RAM in 641 small allocations,
+// every one of them under the old threshold and so kept in the pool the network stack needs.
+// A TCP connect plus an HTTP request could not fit in what was left, which is why the feed
+// died in a different-looking way every time and why two days of fixes downstream of it kept
+// helping a little and never holding.
+//
+// 1024 frees more total but does NOT raise the largest contiguous block, which is the number
+// that decides whether a connection can be made, so it buys nothing here and pushes more of
+// LVGL's per-draw scratch behind the slow bus for free. 2048 is the knee.
+//
+// Frame rate did not regress: 9 fps measured, against a sweep timer deliberately paced at
+// 100 ms (10 fps ceiling). The scratch buffers that matter are still internal.
 #ifndef ORB_LV_BIG_ALLOC
-#define ORB_LV_BIG_ALLOC (16 * 1024)
+#define ORB_LV_BIG_ALLOC (2 * 1024)
 #endif
 static inline void *orb_lv_malloc(size_t size) {
     if (size >= ORB_LV_BIG_ALLOC) {

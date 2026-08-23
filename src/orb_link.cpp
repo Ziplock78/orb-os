@@ -16,6 +16,9 @@
 #include "update_ui.h"
 #include "app_shell.h"   // selectApp/nameAt for the app + apps commands
 #include <strings.h>     // strncasecmp
+#include <esp_heap_caps.h> // heap_caps_get_info for the "mem" command
+#include "radar_view.h"  // debugHideLayer for the "layer" command
+void host_set_poll_override(uint32_t ms);   // main.cpp
 
 namespace orb_link {
 namespace {
@@ -238,6 +241,44 @@ void cmd_press() {
     out_send();
 }
 
+// ---------------- diagnostics over the cable ----------------
+//
+// Mirrors of the /rdbg web controls, on the wire that still works when the device is too
+// short of memory to answer HTTP — which is the only condition this investigation cares
+// about. Without these, every experiment needs the very resource under investigation.
+void cmd_poll(const char *arg) {
+    const uint32_t ms = (arg && *arg) ? (uint32_t)atol(arg) : 0;
+    host_set_poll_override(ms);
+    out_reset();
+    out_fmt("{\"ok\":true,\"pollMs\":%lu}", (unsigned long)ms);
+    out_send();
+}
+
+void cmd_layer(char *arg) {
+    // "<kind> <0|1>"; 0=sweep 1=aircraft 2=readout 3/4=still art 5=wash 6=plate 7=map 8=glass
+    if (!arg || !*arg) { reply_error("usage: layer <kind> <0|1>"); return; }
+    char *sp = strchr(arg, ' ');
+    if (!sp) { reply_error("usage: layer <kind> <0|1>"); return; }
+    *sp++ = '\0';
+    const int kind = atoi(arg);
+    const bool hide = (atoi(sp) != 0);
+    radar::debugHideLayer(kind, hide);
+    out_reset();
+    out_fmt("{\"ok\":true,\"layer\":%d,\"hidden\":%s}", kind, hide ? "true" : "false");
+    out_send();
+}
+
+void cmd_mem() {
+    multi_heap_info_t hi;
+    heap_caps_get_info(&hi, MALLOC_CAP_INTERNAL);
+    out_reset();
+    out_fmt("{\"ok\":true,\"free\":%u,\"largest\":%u,\"freeBlocks\":%u,\"allocBlocks\":%u,\"psramFree\":%u}",
+            (unsigned)hi.total_free_bytes, (unsigned)hi.largest_free_block,
+            (unsigned)hi.free_blocks, (unsigned)hi.allocated_blocks,
+            (unsigned)ESP.getFreePsram());
+    out_send();
+}
+
 // ---------------- file transfer (put-begin / put-data / put-end) ----------------
 //
 // Why this exists: Orb Studio is a public HTTPS page, and a secure page is forbidden by
@@ -455,6 +496,9 @@ void dispatch(char *line) {
     else if (!strcmp(line, "apps"))      cmd_apps();
     else if (!strcmp(line, "app"))       cmd_app(arg);
     else if (!strcmp(line, "press"))     cmd_press();
+    else if (!strcmp(line, "poll"))      cmd_poll(arg);
+    else if (!strcmp(line, "layer"))     cmd_layer(arg);
+    else if (!strcmp(line, "mem"))       cmd_mem();
     else if (!strcmp(line, "get-begin")) cmd_get_begin(arg);
     else if (!strcmp(line, "get-data"))  cmd_get_data();
     else if (!strcmp(line, "put-begin")) cmd_put_begin(arg);

@@ -124,6 +124,11 @@ static volatile bool         g_requery = false;                      // range ch
 // because the poll is the biggest periodic work on the device and the prime suspect for a
 // periodic frame hitch: proving that by changing one number live beats one flash per guess.
 static volatile uint32_t     g_pollOverrideMs = 0;
+// Set from the web /rdbg AND from the cable (orb_link "poll"). The cable matters: the whole
+// point of this investigation is a device whose memory is too low to serve its own web page,
+// which is precisely when the WiFi route to these controls stops existing.
+void host_set_poll_override(uint32_t ms) { g_pollOverrideMs = ms; }
+uint32_t host_get_poll_override() { return g_pollOverrideMs; }
 static float                 g_requeryKm = 0.0f;
 static volatile bool         g_feedOk = true;                        // ADS-B feed healthy? (HUD warning)
 // Flight Tracker is the only consumer of ADS-B data, but adsb_task used to poll it
@@ -1906,6 +1911,26 @@ static void psram_mark(const char *stage) {
     if (s_prev) Serial.printf("   (%+ld KB)", (long)delta);
     Serial.println();
     s_prev = now;
+
+    // INTERNAL RAM at the same milestones, which is the memory that actually runs out.
+    //
+    // Every boot marker in this file has reported PSRAM, of which there are megabytes spare,
+    // while the resource the networking stack starves for went unmeasured. Measured
+    // 2026-08-23 on a clean power-on: 9,480 bytes free with a largest block of 3,316 — and
+    // that is the HEALTHY state, before anything goes wrong. A TCP connect plus an HTTP
+    // request needs more than that at peak, so ordinary dips take the feed down. It was
+    // never a leak; the ceiling is simply too low, and nobody could see it because nobody
+    // was printing this number.
+    multi_heap_info_t hi;
+    heap_caps_get_info(&hi, MALLOC_CAP_INTERNAL);
+    static uint32_t s_prevInt = 0;
+    const uint32_t nowInt = (uint32_t)hi.total_free_bytes;
+    Serial.printf("[intram] %-25s free %6u B  largest %5u B  blocks %u",
+                  stage, (unsigned)nowInt, (unsigned)hi.largest_free_block,
+                  (unsigned)hi.allocated_blocks);
+    if (s_prevInt) Serial.printf("   (%+ld B)", (long)((int32_t)nowInt - (int32_t)s_prevInt));
+    Serial.println();
+    s_prevInt = nowInt;
 }
 
 
@@ -2322,9 +2347,21 @@ void setup() {
     // just sit unused. That memory goes to the Weather Radar animation frames instead.
     g_ac_mutex = xSemaphoreCreateMutex();
     psram_mark("before adsb task");
-    xTaskCreatePinnedToCore(adsb_task, "adsb", 8192, nullptr, 1, &g_adsbTaskHandle, 0);
-    // Measured on the device 2026-08-22 (uxTaskGetStackHighWaterMark over a 5-minute soak,
-    // the feed both succeeding and failing): peak usage was ~4.6 KB of the 16 KB this held.
+    xTaskCreatePinnedToCore(adsb_task, "adsb", 7168, nullptr, 1, &g_adsbTaskHandle, 0);
+    // 7168, not 6144. 6144 was tried and MEASURED: under a real fetch the high-water mark
+    // fell to 1,012 bytes of headroom, which is not a margin, it is a fuse. A FreeRTOS stack
+    // overflow is a hard crash and this task runs unattended for weeks. So the saving here is
+    // 1 KB rather than 2; the real memory came from audio (reserving 4 KB to use 0.8) and
+    // from keeping allocations off internal RAM in the first place.
+    //
+    // Measured on the device (uxTaskGetStackHighWaterMark over multi-minute soaks, the feed
+    // both succeeding and failing): peak usage ~5.3 KB. Was 16 KB, then 8 KB, now 6 KB.
+    //
+    // A task stack is INTERNAL RAM, which is the resource this device actually runs out of:
+    // a clean boot leaves about 9.5 KB free, and a TCP connect plus an HTTP request needs
+    // more than that at peak. Every kilobyte reserved and never touched here is a kilobyte
+    // the network cannot have. 6144 keeps ~800 B over the observed peak, and the high-water
+    // mark is printed every 15 s in [memdbg] so the margin is watched rather than assumed.
     // The old comment here said "TLS needs a big stack"; that stopped being true when the
     // TLS fallback was disabled above, and even the plain-HTTP path never came close to
     // justifying the size. 8 KB keeps roughly double the observed peak as margin and returns
