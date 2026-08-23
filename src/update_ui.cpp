@@ -100,6 +100,23 @@ void file_received(const char *name, int count) {
 #endif
 }
 
+void file_progress(const char *name, int count, uint32_t bytes) {
+    ensure();                       // first chunk of the first file also raises the overlay
+    s_lastActivity = millis();      // the whole point: this is activity
+    if (s_interrupted) {            // a big file mid-flight is not an interruption after all
+        s_interrupted = false;
+        lv_label_set_text(s_title, "Updating");
+    }
+    // Repainting per 400-byte chunk would spend more time in LVGL than on the transfer.
+    static uint32_t s_painted = 0;
+    if (millis() - s_painted < 500) return;
+    s_painted = millis();
+    char b[112];
+    snprintf(b, sizeof(b), "Step 1 of 3 - receiving files (%d)\n%.28s  %lu KB",
+             count + 1, name ? name : "", (unsigned long)(bytes / 1024));
+    lv_label_set_text(s_sub, b);
+}
+
 void rebooting() {
     // Only meaningful mid-update. A bare /reboot (a deploy script, a curl) on an idle
     // device should not flash an update screen for 400 ms on its way down.

@@ -1,4 +1,5 @@
 #pragma once
+#include <stdint.h>   // uint32_t in file_progress below
 
 // On-screen update status: the Orb tells the user it is mid-update.
 //
@@ -21,6 +22,15 @@ namespace update_ui {
 // overlay says the update was interrupted and then clears itself: a failed send must not
 // leave a permanent "updating" screen over a device that is otherwise fine.
 void file_received(const char *name, int count);
+
+// A CHUNK of the current file just landed. Files arrive whole before file_received() can be
+// called, and a single big one (a 98 KB plate becomes ~130 KB base64 on the wire, over ten
+// seconds at this line rate) outlasts the twelve-second interrupted-watchdog on its own. So
+// the device announced a dead transfer, cleared its own overlay, dropped back to whatever
+// app was showing, and then carried on receiving the very file it had just given up on.
+// Feeding progress here keeps the watchdog measuring what it means to measure: silence,
+// rather than a large file.
+void file_progress(const char *name, int count, uint32_t bytes);
 
 // The device is about to restart as part of an update (called by /reboot only while the
 // overlay is up). Swaps the message to "restarting to finish the update" so the reboot

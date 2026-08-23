@@ -401,6 +401,10 @@ void cmd_put_data(const char *b64) {
         put_abort(); reply_error("short write (card full or removed?)"); return;
     }
     s_putWritten += rawLen;
+    // Tell the screen a chunk landed. Without this the interrupted-watchdog only ever hears
+    // about COMPLETED files, so any file taking more than twelve seconds looked like a dead
+    // transfer while it was still arriving.
+    update_ui::file_progress(s_putName, s_putCount, s_putWritten);
     out_reset(); out_fmt("{\"ok\":true,\"n\":%lu}", (unsigned long)s_putWritten); out_send();
 }
 
