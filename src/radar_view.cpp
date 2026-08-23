@@ -101,7 +101,24 @@ static struct { void printf(const char *fmt, ...) const { va_list a; va_start(a,
 //
 // Slower and regular beats faster and ragged here: a steady sweep is what makes this read
 // as an instrument, and that was Zion's explicit priority over everything else on screen.
-#define SWEEP_FRAME_MS    66
+// Paced to what this device can ACTUALLY render, not to what looks good on paper.
+//
+// This was 66 ms (15 fps requested). Measured on hardware, a Flight Tracker frame takes
+// 66-160 ms, averaging 81: the minimum is exactly this timer period, and everything above
+// it is the renderer failing to keep up. So the timer was asking for frames faster than
+// they could be drawn, and the overshoot landed as uneven arrival — 66 ms then 160 ms then
+// 70 — which is precisely the stutter the eye picks up. A frame rate you cannot hit is not
+// a frame rate, it is a source of jitter.
+//
+// Zion's priority is explicit and this follows it: perfectly even motion beats a higher
+// number. At 100 ms the timer, not the renderer, decides when frames happen almost all of
+// the time, so they arrive evenly. Costs ~2 fps and buys consistency.
+// Measured, not guessed. Three values tried on the hardware, steady-state frame-time
+// spread (the thing the eye actually reads as stutter):
+//     66 ms  -> avg 81 ms,  spread 94-99 ms    (the old value: asking for frames it cannot draw)
+//    100 ms  -> avg 103 ms, spread 55-60 ms    <- best
+//    120 ms  -> avg 123 ms, spread 122-157 ms  (worse: heavy frames land as bigger multiples)
+#define SWEEP_FRAME_MS    100
 #define SWEEP_TRAIL_DEG   38.0f
 #define SWEEP_TRAIL_STEPS 20
 #define SWEEP_TRAIL_OPA   72
@@ -732,6 +749,26 @@ static void sweep_timer_cb(lv_timer_t *t) {
     // stutter the eye picks up. Zion's stated priority is explicit: perfectly even
     // motion beats exactly correct speed. An EMA drifts the speed by a few percent
     // while it adapts, which nobody can see; uneven steps are what everybody sees.
+    // Criterion for "the sweep must not look like it stutters": what the eye catches is not
+    // a low frame rate, it is UNEVEN steps. So measure the spread of frame times directly
+    // rather than trusting the average — 12 fps that arrives every 83 ms looks smooth, and
+    // 12 fps that arrives 40/120/60/140 does not, and both report the same fps.
+    {
+        static uint32_t s_jMin = 0xFFFFFFFF, s_jMax = 0, s_jAt = 0, s_jN = 0, s_jSum = 0;
+        if (dtMs < s_jMin) s_jMin = dtMs;
+        if (dtMs > s_jMax) s_jMax = dtMs;
+        s_jSum += dtMs; ++s_jN;
+        if (lv_tick_get() - s_jAt > 15000) {
+            if (s_jAt && s_jN) {
+                const uint32_t avg = s_jSum / s_jN;
+                Serial.printf("[sweep] frames=%lu dt min/avg/max=%lu/%lu/%lu ms spread=%lu ms\n",
+                              (unsigned long)s_jN, (unsigned long)s_jMin,
+                              (unsigned long)avg, (unsigned long)s_jMax,
+                              (unsigned long)(s_jMax - s_jMin));
+            }
+            s_jAt = lv_tick_get(); s_jMin = 0xFFFFFFFF; s_jMax = 0; s_jN = 0; s_jSum = 0;
+        }
+    }
     if (s_emaDtMs <= 0.0f) s_emaDtMs = (float)dtMs;
     s_emaDtMs += 0.08f * ((float)dtMs - s_emaDtMs);
     if (s_emaDtMs < 20.0f) s_emaDtMs = 20.0f;
@@ -1314,6 +1351,8 @@ void debugHideLayer(int kind, bool hide) {
         case 5: o = s_dimLayer;     break;
         case 6: o = s_plateImg;     break;
         case 7: o = s_gridLayer;    break;   // map: roads + coastline + airports, re-vectored per draw
+        case 8: o = s_overlayImg;   break;   // glass + CRT: a full-screen alpha blend, composited
+                                             // over whatever region the sweep invalidates, every frame
         default: return;
     }
     // "Show" for the map layer means "whatever the bake decided", not blindly visible:
