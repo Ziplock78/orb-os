@@ -1242,6 +1242,10 @@ static int radarLayerOrder(const int **out) {
     return CUSTOM_RADAR_LAYER_ORDER_N;
 }
 
+// The readout's slot in the six-kind order (0=sweep, 1=aircraft, 2=text, 3/4=statics,
+// 5=wash), named because it now stands for a group rather than a single object.
+static constexpr int KIND_TEXT = 2;
+
 static void applyRadarLayerOrder() {
     const int *order = nullptr;
     const int orderN = radarLayerOrder(&order);
@@ -1253,9 +1257,43 @@ static void applyRadarLayerOrder() {
     lv_obj_t *byKind[6] = { sweepImgActive ? s_sweepImg : s_sweep, s_acLayer, s_textCanvas, s_staticImg[0], s_staticImg[1], s_dimLayer };
     for (int i = 0; i < orderN; ++i) {
         const int k = order[i];
-        if (k >= 0 && k < 6 && byKind[k]) lv_obj_move_foreground(byKind[k]);
+        if (k < 0 || k >= 6) continue;
+        // Kind 2 is not one object, it is THREE: the card's art, the drawn plate behind the
+        // words, and the words themselves. Only the text was ever in this table, so lifting
+        // the aircraft (kind 1) raised them above the card plate while the text kept rising
+        // above everything — the card sat UNDER the aircraft on the device while Orb Studio
+        // showed it near the top of the stack. They are one thing to the person designing
+        // it, so they move as one, plate first and words last.
+        if (k == KIND_TEXT) {
+            if (s_cardImg) lv_obj_move_foreground(s_cardImg);
+            if (s_cardObj) lv_obj_move_foreground(s_cardObj);
+            if (s_textCanvas) lv_obj_move_foreground(s_textCanvas);
+            continue;
+        }
+        if (byKind[k]) lv_obj_move_foreground(byKind[k]);
     }
     if (s_overlayImg) lv_obj_move_foreground(s_overlayImg);
+
+    // What the stack ACTUALLY is, straight from LVGL, rather than what the order array was
+    // supposed to achieve. lv_obj_get_index is the real z-position among siblings, so this
+    // is the answer to "does the device draw the layers the way Orb Studio shows them?"
+    // measured instead of argued. It is how the info card was caught sitting under the
+    // aircraft: its plate and its text were in two different places in this list.
+    {
+        struct { const char *name; lv_obj_t *o; } zs[] = {
+            { "background", s_plateImg },  { "map",     s_gridLayer },
+            { "rings",      s_ringsImg },  { "sweep",   sweepImgActive ? s_sweepImg : s_sweep },
+            { "aircraft",   s_acLayer },   { "cardArt", s_cardImg },
+            { "cardPlate",  s_cardObj },   { "readout", s_textCanvas },
+            { "wash",       s_dimLayer },  { "glass",   s_overlayImg },
+        };
+        char line[240]; int n = 0;
+        n += snprintf(line + n, sizeof(line) - n, "[zorder]");
+        for (auto &z : zs)
+            if (z.o && n < (int)sizeof(line) - 24)
+                n += snprintf(line + n, sizeof(line) - n, " %s=%d", z.name, (int)lv_obj_get_index(z.o));
+        Serial.println(line);
+    }
 }
 
 namespace radar {
