@@ -86,6 +86,10 @@ void flashThemeName();                           // briefly show the current the
 void setThemeChangedCb(void (*cb)(int theme));   // called when the theme changes (for persistence)
 void setRangeLabelVisible(bool v);               // hide the built-in range label (UI shows its own)
 
+// Late-arriving detail (the route line) reached a card that is already on screen. Restarts
+// the selection idle countdown so the newly-arrived text gets a full reading window.
+void noteSelectionDetailArrived();
+
 // Replace the "Loading aircraft and location data" notice with the truth, while it is still
 // up. That notice only clears when the first aircraft arrive, so a feed that never answers
 // left it saying "loading" indefinitely, which is the device telling the person in front of

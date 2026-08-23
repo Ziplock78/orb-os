@@ -97,7 +97,15 @@ static const float RANGE_STEPS_KM[] = {10.0f, 20.0f, 30.0f, 50.0f, 100.0f};
 // Connect and read budgets. The read budget was 8000 and the service was measured taking
 // 11.6 s to answer during a bad spell on 2026-08-22, so every request failed for a reason
 // that had nothing to do with this device.
-#define ADSB_CONNECT_MS     6000
+// Patience, because the measurements demand it. During one of this provider's slow spells
+// a plain TCP connect to api.adsb.lol took 32.2 SECONDS from a laptop on the same network,
+// while adsb.fi and adsbdb answered in 0.0-0.2 s. At a 6 s budget the Orb was hanging up on
+// a server that was going to answer, then reporting a transport error, then backing off —
+// guaranteeing no aircraft for the whole of an outage the device could have ridden out.
+//
+// The cost of waiting is bounded and lands on the feed task, not the UI: worst case is this
+// times ADSB_TRIES_PER_POLL. The cost of NOT waiting is measured, and it is every aircraft.
+#define ADSB_CONNECT_MS     15000
 #define ADSB_READ_MS        20000
 
 #define ADSB_MAX_AIRCRAFT   60              // hard cap parsed per poll (protect RAM in busy areas)

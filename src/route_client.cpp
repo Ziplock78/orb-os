@@ -102,16 +102,25 @@ bool route_fetch(const char *callsign, char *from, size_t fn, char *to, size_t t
     if (j == 0) return false;
 
     char url[96];
-    snprintf(url, sizeof(url), "https://api.adsbdb.com/v0/callsign/%s", cs);
+    // PLAIN HTTP, deliberately. This was https, which on this board is not "slower", it is
+    // impossible: a handshake needs two contiguous ~16 KB internal buffers and the largest
+    // free block here runs about 7 KB, so every lookup failed with SSL -32512 and the route
+    // line simply never arrived. The card was not too quick — the data was never coming.
+    // api.adsbdb.com serves the same JSON over port 80 (verified: HNL -> DEN, 702 bytes),
+    // and a public flight's origin and destination are not a secret worth a handshake this
+    // device cannot perform.
+    snprintf(url, sizeof(url), "http://api.adsbdb.com/v0/callsign/%s", cs);
 
-    WiFiClientSecure client;
-    client.setInsecure();
+    WiFiClient client;
     HTTPClient http;
     http.setReuse(false);
     http.setConnectTimeout(3000);   // short: runs on the feed task, don't stall the live poll
     http.setTimeout(6000);
     if (!http.begin(client, url)) return false;
-    http.addHeader("User-Agent", ADSB_USER_AGENT);
+    // setUserAgent, not addHeader: HTTPClient silently DROPS a "User-Agent" added as a
+    // header and sends its own default. Same trap that had the ADS-B feed introducing this
+    // device as "ESP32HTTPClient" until it started being refused for it.
+    http.setUserAgent(ADSB_USER_AGENT);
 
     const int code = http.GET();
     if (code != 200) { http.end(); return false; }

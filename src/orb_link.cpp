@@ -221,6 +221,23 @@ void cmd_app(const char *arg) {
     out_send();
 }
 
+// A knob press, over the cable. Only meaningful on the Flight Tracker, where a press
+// enters selection mode and puts the info card on screen.
+//
+// Added for the same reason as `app`: the route line on that card is fetched on demand and
+// only ever requested for a SELECTED aircraft, so nothing about it — not the lookup, not
+// the card's idle timeout, not whether the text arrives before the card closes — can be
+// observed without someone standing at the device pressing the knob. Same task as the
+// knob's own handler, so this is exactly the input path, not a parallel one.
+void cmd_press() {
+    app_shell::pressCurrent();
+    out_reset();
+    out_str("{\"ok\":true,\"pressed\":");
+    out_json_string(app_shell::name());
+    out_ch('}');
+    out_send();
+}
+
 // ---------------- file transfer (put-begin / put-data / put-end) ----------------
 //
 // Why this exists: Orb Studio is a public HTTPS page, and a secure page is forbidden by
@@ -437,6 +454,7 @@ void dispatch(char *line) {
     else if (!strcmp(line, "delete"))    cmd_delete(arg);
     else if (!strcmp(line, "apps"))      cmd_apps();
     else if (!strcmp(line, "app"))       cmd_app(arg);
+    else if (!strcmp(line, "press"))     cmd_press();
     else if (!strcmp(line, "get-begin")) cmd_get_begin(arg);
     else if (!strcmp(line, "get-data"))  cmd_get_data();
     else if (!strcmp(line, "put-begin")) cmd_put_begin(arg);

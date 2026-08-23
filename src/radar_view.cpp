@@ -205,8 +205,20 @@ static std::string s_selHex;
 // input, drops back to the default view. See knobPress()/knobTurn()/knobEnter().
 static bool        s_selectMode    = false;
 static uint32_t    s_selActivityMs = 0;      // lv_tick_get() of the last knob input in selection mode
-static constexpr uint32_t SELECT_IDLE_MS = 5000;
+// How long a selected aircraft stays selected without input.
+//
+// Was 5000, which was never long enough to read the card even when it worked. The route
+// line ("PHX -> SFO") is fetched on demand from a second service, and that lookup queues
+// behind the ADS-B poll and the weather pumps on the same task — so the card could easily
+// time out before its own text arrived. That is now much likelier to succeed at all (the
+// lookup used TLS this board cannot do, see route_client.cpp), but it is still a network
+// round trip, and five seconds was a window you had to race.
+static constexpr uint32_t SELECT_IDLE_MS = 20000;
 static void radar_exit_select();             // -> default view (deselect + release knob); defined below
+// Called when late-arriving detail (the route) reaches a card that is already up. Restarts
+// the idle countdown, because the thing worth reading only just appeared: without this the
+// route could land with a second left on the clock and vanish as you registered it.
+void noteSelectionDetailArrived();
 static float       s_lastRangeKm = 0.0f;     // current scope range, for the range banner (radar_range_fmt)
 static lv_obj_t   *s_textCanvas = nullptr;   // callsign/stats/route banners (curved+glow capable), a Launch Kit push
 // The selection card: a plate under those banners, parked on the far side of the scope
@@ -2313,6 +2325,16 @@ static bool radar_fmt(char *out, size_t outSz, const char *fmt, const AcInfo &in
     if (needsRoute && in.call[0]) {
         route_request(in.call);
         route_get(in.call, rfrom, sizeof(rfrom), rto, sizeof(rto));
+        // The moment a route first completes for the aircraft on screen, restart the idle
+        // countdown. This runs on the LVGL task (route_store does not), so the timer is
+        // touched from the same task that reads it. Without this the route could arrive
+        // with a second left on the clock and vanish as it registered — the card looking
+        // "too fast" when really the text had only just turned up.
+        static char s_routeShownFor[12] = "";
+        if (rfrom[0] && rto[0] && strncmp(s_routeShownFor, in.call, sizeof(s_routeShownFor) - 1) != 0) {
+            snprintf(s_routeShownFor, sizeof(s_routeShownFor), "%s", in.call);
+            noteSelectionDetailArrived();
+        }
     }
     if (needsRoute && (!rfrom[0] || !rto[0])) { if (outSz) out[0] = 0; return false; }
     RadarTok toks[] = {
@@ -2631,8 +2653,9 @@ void knobEnter() {
 // at all, confusingly named the same as actual Launch Kit themes. Retired in favor of
 // the real Settings "Design" picker (theme_select) — see its header for why.
 void knobPress() {
+    Serial.printf("[select] press: mode=%d inRange=%d\n", (int)s_selectMode, countInRange());
     if (s_selectMode) { radar_exit_select(); return; }
-    if (countInRange() <= 0) return;
+    if (countInRange() <= 0) { Serial.println("[select] nothing in range to select"); return; }
     selectNext(1);
     s_selectMode = true;
     s_selActivityMs = lv_tick_get();
@@ -2677,5 +2700,11 @@ bool info(int idx, AcInfo &out) {
 }
 
 void tickSweep() { /* sweep self-animates via lv_timer */ }
+
+// Late detail landed on a card that is still up: give the reader a full window from now,
+// rather than whatever was left of the one that started when they turned the knob.
+void noteSelectionDetailArrived() {
+    if (s_selectMode) s_selActivityMs = lv_tick_get();
+}
 
 } // namespace radar
