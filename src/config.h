@@ -41,7 +41,15 @@ static const float RANGE_STEPS_KM[] = {10.0f, 20.0f, 30.0f, 50.0f, 100.0f};
 #define POLL_INTERVAL_MS    10000
 #define POLL_INTERVAL_BATTERY_MS 15000      // slower polling when running on battery
 #define MOTION_INTERP       1              // 1 = glyphs glide between polls; 0 = snap to new pos
-#define AC_STALE_MS         15000          // keep the last contacts through brief empty feed responses
+
+// A contact is kept on the table (and on the scope) for as long as it is this old or
+// younger, dimming continuously between the first two numbers, held at its dimmest from
+// the second to the third, then dropped. This is what lets one missed poll (routine ADS-B
+// reception gaps, not a fault) read as a plane going briefly quiet rather than the scope
+// flickering it in and out of existence. See ac_freshness() in radar_view.cpp.
+#define AC_DIM_START_MS      60000         // full brightness up to here
+#define AC_DIM_FLOOR_MS      120000        // dimmest steady state from here
+#define AC_HARD_EXPIRE_MS    180000        // dropped from the table entirely past here
 
 // ---------- Weather forecast (Open-Meteo, no API key) ----------
 #define WEATHER_REFRESH_MS  1800000UL      // 30 minutes; forecast data changes slowly

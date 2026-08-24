@@ -162,6 +162,8 @@ static const char *THEME_NAMES[THEME_COUNT] = { "ORB", "MILITARY", "AVIATOR" };
 // crash rather than as loading. So say what is happening.
 static lv_obj_t   *s_loading         = nullptr;
 static bool        s_loadingPending  = false;   // shown, waiting for the first update()
+static uint32_t    s_loadStartMs     = 0;       // lv_tick_get() when loading began, for the elapsed-time line
+static int         s_loadShownSec    = -1;      // last elapsed-second value painted, so a still-frozen number is never redrawn as "live"
 static lv_obj_t   *s_themeLabel      = nullptr;   // "AVIATOR" etc. banner, shown briefly on a theme change
 static lv_timer_t *s_themeLabelTimer = nullptr;   // one-shot: hides the banner after ~2s
 static lv_obj_t  *s_parent   = nullptr;
@@ -221,6 +223,8 @@ static void radar_exit_select();             // -> default view (deselect + rele
 void noteSelectionDetailArrived();
 static float       s_lastRangeKm = 0.0f;     // current scope range, for the range banner (radar_range_fmt)
 static lv_obj_t   *s_feedWarn   = nullptr;   // "the feed is down, not your Orb" banner
+static lv_obj_t   *s_simBadge   = nullptr;   // "this traffic is made up" mark, see setSimulatedBadge()
+static lv_obj_t   *s_loadTicker = nullptr;   // live elapsed-seconds line under the loading message
 static lv_obj_t   *s_textCanvas = nullptr;   // callsign/stats/route banners (curved+glow capable), a Launch Kit push
 // The selection card: a plate under those banners, parked on the far side of the scope
 // from whatever is selected. Two objects rather than one drawn shape, so LVGL does the
@@ -256,6 +260,7 @@ struct AcDraw {
     bool       onGround;
     float      vsFpm, gsKt, distKm, bearingDeg;
     int        squawk;
+    float      freshness;      // 1.0 = seen this poll, fading to a floor as it ages, see ac_freshness()
     std::vector<lv_point_t> trail;
 };
 static std::vector<AcDraw> s_acs;
@@ -362,6 +367,22 @@ static lv_color_t alt_color(float altFt, bool onGround) {
     if (altFt < 20000) return lv_color_hex(0xC8FF3C);
     if (altFt < 30000) return lv_color_hex(0x39FF14);
     return lv_color_hex(0x3CE0FF);
+}
+
+// 1.0 for the first minute (indistinguishable from a contact seen this poll), fading
+// linearly to a dim floor by the second, held there until the table drops it entirely at
+// the third (AC_HARD_EXPIRE_MS, in main.cpp's applyPolledAircraft — this never sees an
+// entry older than that). Never reaches zero before removal: the point is to SAY a contact
+// has gone quiet, not to make it disappear piecemeal ahead of actually being gone.
+static float ac_freshness(uint32_t ageMs) {
+    if (ageMs <= AC_DIM_START_MS) return 1.0f;
+    if (ageMs >= AC_DIM_FLOOR_MS) return 0.22f;
+    const float span = (float)(AC_DIM_FLOOR_MS - AC_DIM_START_MS);
+    return 1.0f - 0.78f * (float)(ageMs - AC_DIM_START_MS) / span;
+}
+
+static inline lv_opa_t scale_opa(lv_opa_t base, float mul) {
+    return (lv_opa_t)lroundf((float)base * (mul < 0.0f ? 0.0f : (mul > 1.0f ? 1.0f : mul)));
 }
 
 static inline lv_point_t rim_point(float bearingDeg, float r) {
@@ -742,7 +763,24 @@ static void sweep_timer_cb(lv_timer_t *t) {
     // Held still until the scope has data. Re-seeding the pacing state here means the
     // first step after the wait is measured from the first real frame, not from the
     // seconds-long projection stall that preceded it.
-    if (s_loadingPending) { s_lastSweepMs = 0; s_emaDtMs = 0.0f; return; }
+    if (s_loadingPending) {
+        s_lastSweepMs = 0; s_emaDtMs = 0.0f;
+        // Repaint only when the displayed second actually changes: this timer fires every
+        // SWEEP_FRAME_MS (100 ms), and re-laying-out a label ten times a second for a number
+        // that only moves once a second would just be a different way to burn the frame
+        // budget this whole file exists to protect.
+        if (s_loadTicker) {
+            const int sec = (int)((lv_tick_get() - s_loadStartMs) / 1000U);
+            if (sec != s_loadShownSec) {
+                s_loadShownSec = sec;
+                char t[24];
+                snprintf(t, sizeof(t), "%ds", sec);
+                lv_label_set_text(s_loadTicker, t);
+                show(s_loadTicker, true);
+            }
+        }
+        return;
+    }
     s_prevSweepDeg = s_sweepDeg;
     const float speedDps = customStyled() ? (float)theme_style::radar().sweepSpeed : (360.0f * 1000.0f / (float)SWEEP_PERIOD_MS);
     // Advance by REAL elapsed time, not by an assumed SWEEP_FRAME_MS per tick. LVGL
@@ -866,7 +904,7 @@ static void draw_ball(lv_draw_ctx_t *d, const AcDraw &ac) {
     for (int wv = 0; wv < 3; ++wv) {
         float ph = s_wavePhase + (float)wv * 0.34f;
         if (ph >= 1.0f) ph -= 1.0f;
-        w.opa = (lv_opa_t)((1.0f - ph) * 245.0f);
+        w.opa = scale_opa((lv_opa_t)((1.0f - ph) * 245.0f), ac.freshness);
         if (w.opa > 6) lv_draw_arc(d, &w, &ac.pos, (uint16_t)(BALL_R + 3 + ph * WAVE_EXPAND), 0, 360);
     }
 
@@ -874,11 +912,11 @@ static void draw_ball(lv_draw_ctx_t *d, const AcDraw &ac) {
     lv_draw_rect_dsc_t b;
     lv_draw_rect_dsc_init(&b);
     b.bg_color = ac.emergency ? ORB_EMERG : ORB_BLIP;
-    b.bg_opa = LV_OPA_COVER;
+    b.bg_opa = scale_opa(LV_OPA_COVER, ac.freshness);
     b.radius = LV_RADIUS_CIRCLE;
     b.border_color = lv_color_hex(0x7A5A00);
     b.border_width = 1;
-    b.border_opa = 150;
+    b.border_opa = scale_opa(150, ac.freshness);
     lv_area_t r = { (lv_coord_t)(ac.pos.x - BALL_R), (lv_coord_t)(ac.pos.y - BALL_R),
                     (lv_coord_t)(ac.pos.x + BALL_R), (lv_coord_t)(ac.pos.y + BALL_R) };
     lv_draw_rect(d, &b, &r);
@@ -887,7 +925,7 @@ static void draw_ball(lv_draw_ctx_t *d, const AcDraw &ac) {
     lv_draw_rect_dsc_t hl;
     lv_draw_rect_dsc_init(&hl);
     hl.bg_color = lv_color_hex(0xFFFBCC);
-    hl.bg_opa = 170;
+    hl.bg_opa = scale_opa(170, ac.freshness);
     hl.radius = LV_RADIUS_CIRCLE;
     lv_area_t hr = { (lv_coord_t)(ac.pos.x - 5), (lv_coord_t)(ac.pos.y - 6),
                      (lv_coord_t)(ac.pos.x - 1), (lv_coord_t)(ac.pos.y - 2) };
@@ -899,7 +937,7 @@ static void draw_offrange(lv_draw_ctx_t *d, const AcDraw &ac) {
     lv_draw_rect_dsc_t b;
     lv_draw_rect_dsc_init(&b);
     b.bg_color = ac.emergency ? ORB_EMERG : ORB_BLIP;
-    b.bg_opa = LV_OPA_COVER;
+    b.bg_opa = scale_opa(LV_OPA_COVER, ac.freshness);
     b.radius = LV_RADIUS_CIRCLE;
     lv_area_t r = { (lv_coord_t)(ac.pos.x - 5), (lv_coord_t)(ac.pos.y - 5),
                     (lv_coord_t)(ac.pos.x + 5), (lv_coord_t)(ac.pos.y + 5) };
@@ -914,7 +952,7 @@ static void draw_offrange(lv_draw_ctx_t *d, const AcDraw &ac) {
     lv_draw_rect_dsc_t td;
     lv_draw_rect_dsc_init(&td);
     td.bg_color = ORB_ACCENT;
-    td.bg_opa = LV_OPA_COVER;
+    td.bg_opa = scale_opa(LV_OPA_COVER, ac.freshness);
     lv_draw_polygon(d, &td, tri, 3);
 }
 
@@ -974,7 +1012,7 @@ static void draw_custom_ac(lv_draw_ctx_t *d) {
             const lv_color_t oc = lv_color_hex(rs.offRangeColor);
             lv_draw_rect_dsc_t b;
             lv_draw_rect_dsc_init(&b);
-            b.bg_color = oc; b.bg_opa = LV_OPA_COVER; b.radius = LV_RADIUS_CIRCLE;
+            b.bg_color = oc; b.bg_opa = scale_opa(LV_OPA_COVER, ac.freshness); b.radius = LV_RADIUS_CIRCLE;
             const lv_coord_t sz = (lv_coord_t)rs.offRangeSize;
             lv_area_t r = { (lv_coord_t)(ac.pos.x - sz), (lv_coord_t)(ac.pos.y - sz),
                             (lv_coord_t)(ac.pos.x + sz), (lv_coord_t)(ac.pos.y + sz) };
@@ -986,7 +1024,7 @@ static void draw_custom_ac(lv_draw_ctx_t *d) {
                                   rot_pt(-5, 4, ac.bearingDeg, ox, oy) };
             lv_draw_rect_dsc_t td;
             lv_draw_rect_dsc_init(&td);
-            td.bg_color = oc; td.bg_opa = LV_OPA_COVER;
+            td.bg_color = oc; td.bg_opa = scale_opa(LV_OPA_COVER, ac.freshness);
             lv_draw_polygon(d, &td, tri, 3);
             continue;
         }
@@ -1028,7 +1066,7 @@ static void draw_custom_ac(lv_draw_ctx_t *d) {
             if (boosted > selBlipGlowAmt) selBlipGlowAmt = boosted;
             selBlipGlowColor = lv_color_hex(rs.selGlowColor);
         }
-        draw_glow(d, ac.pos, (float)rs.blipSize, selBlipGlowAmt, selBlipGlowColor);
+        draw_glow(d, ac.pos, (float)rs.blipSize, selBlipGlowAmt * ac.freshness, selBlipGlowColor);
 
         if (rs.blipTypeImage) {
             // The uploaded aircraft icon, rotated to heading and (optionally) recolored
@@ -1051,7 +1089,7 @@ static void draw_custom_ac(lv_draw_ctx_t *d) {
                 const int bpy = rs.blipPivotY >= 0 ? rs.blipPivotY : CUSTOM_RADAR_BLIP_PIVOT_Y;
                 idsc.pivot.x = bpx;
                 idsc.pivot.y = bpy;
-                idsc.opa = LV_OPA_COVER;
+                idsc.opa = scale_opa(LV_OPA_COVER, ac.freshness);
                 idsc.antialias = 1;
                 // Selection style 2 (Recolor) forces the tint on for this one
                 // aircraft even if the design normally leaves the icon
@@ -1071,7 +1109,7 @@ static void draw_custom_ac(lv_draw_ctx_t *d) {
                 // silently invisible.
                 lv_draw_rect_dsc_t g;
                 lv_draw_rect_dsc_init(&g);
-                g.bg_color = blipColor; g.bg_opa = LV_OPA_COVER; g.radius = LV_RADIUS_CIRCLE;
+                g.bg_color = blipColor; g.bg_opa = scale_opa(LV_OPA_COVER, ac.freshness); g.radius = LV_RADIUS_CIRCLE;
                 const lv_coord_t sz = (lv_coord_t)rs.blipSize;
                 lv_area_t r = { (lv_coord_t)(ac.pos.x - sz), (lv_coord_t)(ac.pos.y - sz),
                                 (lv_coord_t)(ac.pos.x + sz), (lv_coord_t)(ac.pos.y + sz) };
@@ -1092,12 +1130,12 @@ static void draw_custom_ac(lv_draw_ctx_t *d) {
             }
             lv_draw_rect_dsc_t g;
             lv_draw_rect_dsc_init(&g);
-            g.bg_color = blipColor; g.bg_opa = LV_OPA_COVER;
+            g.bg_color = blipColor; g.bg_opa = scale_opa(LV_OPA_COVER, ac.freshness);
             lv_draw_polygon(d, &g, pts, 4);
         } else {
             lv_draw_rect_dsc_t g;
             lv_draw_rect_dsc_init(&g);
-            g.bg_color = blipColor; g.bg_opa = LV_OPA_COVER; g.radius = LV_RADIUS_CIRCLE;
+            g.bg_color = blipColor; g.bg_opa = scale_opa(LV_OPA_COVER, ac.freshness); g.radius = LV_RADIUS_CIRCLE;
             const lv_coord_t sz = (lv_coord_t)rs.blipSize;
             lv_area_t r = { (lv_coord_t)(ac.pos.x - sz), (lv_coord_t)(ac.pos.y - sz),
                             (lv_coord_t)(ac.pos.x + sz), (lv_coord_t)(ac.pos.y + sz) };
@@ -1183,12 +1221,12 @@ static void ac_draw_cb(lv_event_t *e) {
             lv_draw_rect_dsc_t g;
             lv_draw_rect_dsc_init(&g);
             g.bg_color = ac.color;
-            g.bg_opa = LV_OPA_COVER;
+            g.bg_opa = scale_opa(LV_OPA_COVER, ac.freshness);
             lv_draw_polygon(d, &g, pts, 4);
             if (ac.emergency) {
                 lv_draw_arc_dsc_t h;
                 lv_draw_arc_dsc_init(&h);
-                h.color = COL_EMERG; h.width = 2; h.opa = 200;
+                h.color = COL_EMERG; h.width = 2; h.opa = scale_opa(200, ac.freshness);
                 lv_draw_arc(d, &h, &ac.pos, 16, 0, 360);
             }
         }
@@ -1323,6 +1361,7 @@ static void applyRadarLayerOrder() {
         if (byKind[k]) lv_obj_move_foreground(byKind[k]);
     }
     if (s_overlayImg) lv_obj_move_foreground(s_overlayImg);
+    if (s_simBadge)   lv_obj_move_foreground(s_simBadge);   // outranks even the glass
 
     // What the stack ACTUALLY is, straight from LVGL, rather than what the order array was
     // supposed to achieve. lv_obj_get_index is the real z-position among siblings, so this
@@ -1443,6 +1482,16 @@ void setThemeChangedCb(void (*cb)(int)) { s_themeCb = cb; }
 void setFeedNote(const char *note) {
     if (!s_loading || !s_loadingPending) return;
     lv_label_set_text(s_loading, note ? note : "Loading aircraft\nand location data");
+}
+
+// Forced on for as long as the active theme's radar.simulate is true, regardless of what
+// else the theme asks for. There is no theme-side field that can hide this: the whole
+// defect it fixes is a Studio control whose own hint framed it as a preview convenience
+// when it is not, so nothing short of "the device itself refuses to stay quiet about it"
+// closes the gap. Called from main.cpp wherever the theme's settings are applied, so it
+// tracks the SAME flag that decides whether main.cpp fabricates aircraft, not a copy of it.
+void setSimulatedBadge(bool on) {
+    if (s_simBadge) show(s_simBadge, on);
 }
 
 void setRangeLabelVisible(bool v) { s_rangeLblVisible = v; if (s_rangeLbl) show(s_rangeLbl, v && !orb() && !customStyled()); }
@@ -1606,6 +1655,15 @@ void init(void *lv_parent) {
     lv_obj_set_style_pad_all(s_loading, 18, 0);
     lv_obj_set_style_text_align(s_loading, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_set_style_text_line_space(s_loading, 6, 0);
+
+    // A live number is the whole fix: frozen text and text that is still true both LOOK
+    // identical after the first render, and "is it stuck" was a real question asked about
+    // this exact screen. A number that visibly counts up answers it without narrating
+    // stages the poll loop does not actually have (it is one repeating step: ask, wait,
+    // maybe get an answer, not a multi-part pipeline worth pretending to show).
+    s_loadTicker = make_label(parent, "", &lv_font_montserrat_14,
+                              lv_color_hex(0xAAB2C0), LV_ALIGN_CENTER, 0, 58);
+    show(s_loadTicker, false);
     show(s_loading, false);
 
     // A small, honest banner near the bottom of the dial for when the aircraft feed is not
@@ -1715,6 +1773,19 @@ void init(void *lv_parent) {
     lv_obj_clear_flag(s_overlayImg, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
     lv_obj_center(s_overlayImg);
     lv_obj_add_flag(s_overlayImg, LV_OBJ_FLAG_HIDDEN);
+
+    // "This traffic is made up." Above the glass overlay, above everything: the one label
+    // on this screen no theme JSON can hide, resize, recolor or move, because the whole
+    // point is that it survives an author who forgot they turned Test traffic on, and
+    // an owner who never knew. See setSimulatedBadge(), driven by theme_style::radar().simulate.
+    s_simBadge = make_label(parent, "TEST DATA", &lv_font_montserrat_14,
+                            lv_color_white(), LV_ALIGN_TOP_LEFT, 10, 10);
+    lv_obj_set_style_bg_color(s_simBadge, lv_color_hex(0xC62E2E), 0);
+    lv_obj_set_style_bg_opa(s_simBadge, LV_OPA_COVER, 0);
+    lv_obj_set_style_radius(s_simBadge, 4, 0);
+    lv_obj_set_style_pad_hor(s_simBadge, 7, 0);
+    lv_obj_set_style_pad_ver(s_simBadge, 3, 0);
+    lv_obj_add_flag(s_simBadge, LV_OBJ_FLAG_HIDDEN);
 
     s_sweepDeg = 0.0f;
     s_prevSweepDeg = 0.0f;
@@ -1989,6 +2060,31 @@ void refreshCustomStyle() {
             lv_obj_set_pos(s_sweepImg, scx - spx, scy - spy);
             lv_img_set_angle(s_sweepImg, (int16_t)lroundf(s_sweepDeg * 10.0f));
             show(s_sweepImg, true);
+#if !defined(ARDUINO)
+            // SIM_SWEEP_DEG=90 pins the hand at a known angle for a capture. LVGL skips the
+            // transform entirely at angle 0, so an unpinned screenshot is taken at the one
+            // angle where a wrong pivot cannot show — which is how a rotation about the
+            // wrong point survives every screenshot anyone thinks to take.
+            if (const char *forced = getenv("SIM_SWEEP_DEG")) {
+                s_sweepDeg = (float)atof(forced);
+                lv_img_set_angle(s_sweepImg, (int16_t)lroundf(s_sweepDeg * 10.0f));
+            }
+#endif
+            // Report what LVGL actually ended up holding, not what we asked it for. A sweep
+            // sprite whose pivot is its own centre hides every possible mistake here, because
+            // that is also LVGL's default after lv_img_set_src — so a pivot that never landed
+            // looks perfect until the day a sprite is trimmed and its pivot moves off centre.
+            {
+                lv_obj_update_layout(s_sweepImg);   // position is deferred; reading it first lies
+                lv_point_t got; lv_img_get_pivot(s_sweepImg, &got);
+                Serial.printf("[sweepimg] src %dx%d  asked pivot %d,%d  lvgl holds %d,%d  obj pos %d,%d size %dx%d  turns about %d,%d (want %d,%d)\n",
+                              (int)sweepSrc->header.w, (int)sweepSrc->header.h, spx, spy,
+                              (int)got.x, (int)got.y,
+                              (int)lv_obj_get_x(s_sweepImg), (int)lv_obj_get_y(s_sweepImg),
+                              (int)lv_obj_get_width(s_sweepImg), (int)lv_obj_get_height(s_sweepImg),
+                              (int)(lv_obj_get_x(s_sweepImg) + got.x), (int)(lv_obj_get_y(s_sweepImg) + got.y),
+                              scx, scy);
+            }
         } else {
             show(s_sweepImg, false);
         }
@@ -2098,6 +2194,15 @@ void update(const std::vector<Aircraft> &aircraft, const RadarSettings &s) {
         d.distKm = (float)distKm;
         d.bearingDeg = (float)brg;
         d.squawk = ac.squawk;
+        // millis() and lv_tick_get() are the same clock on-device (lv_conf.h wires LVGL's
+        // tick straight to millis()), so this needs no unit conversion. A contact newer
+        // than "now" (clock wrapped, or the poll's stamp is momentarily ahead of this
+        // render) reads as freshness 1.0, not a negative age wrapping into "ancient."
+        {
+            const uint32_t nowMs = lv_tick_get();
+            const uint32_t ageMs = (nowMs >= ac.lastUpdateMs) ? (nowMs - ac.lastUpdateMs) : 0;
+            d.freshness = ac_freshness(ageMs);
+        }
         if (ac.onGround) snprintf(d.altTxt, sizeof(d.altTxt), "GND");
         else             snprintf(d.altTxt, sizeof(d.altTxt), "%.0f ft", (double)ac.altBaro);
 
@@ -2192,18 +2297,28 @@ void update(const std::vector<Aircraft> &aircraft, const RadarSettings &s) {
         // and the feed already drops it when hide-ground or a minimum altitude is set —
         // this is the backstop for when neither is.
         auto trackable = [](const AcDraw &a) { return a.inRange && !a.onGround; };
+        // Confirmed within the last AC_DIM_START_MS, i.e. not yet dimming. A contact that
+        // has gone quiet for longer than that must never hold a slot a genuinely current
+        // one needs — the aging/dimming display below is what keeps it visible while there
+        // IS room, not a claim on room when there is not.
+        auto current = [](const AcDraw &a) { return a.freshness >= 1.0f; };
 
         std::vector<AcDraw> kept;
         kept.reserve(s_maxOnScreen);
-        for (const AcDraw &a : out) {                       // incumbents first, nearest first
+        for (const AcDraw &a : out) {                       // current incumbents first, nearest first
             if ((int)kept.size() >= s_maxOnScreen) break;
-            if (!trackable(a)) continue;
+            if (!trackable(a) || !current(a)) continue;
             if (s_tracked.find(std::string(a.hex)) != s_tracked.end()) kept.push_back(a);
         }
-        for (const AcDraw &a : out) {                       // then backfill any free slots
+        for (const AcDraw &a : out) {                       // then backfill with new, current arrivals
             if ((int)kept.size() >= s_maxOnScreen) break;
-            if (!trackable(a)) continue;
+            if (!trackable(a) || !current(a)) continue;
             if (s_tracked.find(std::string(a.hex)) == s_tracked.end()) kept.push_back(a);
+        }
+        for (const AcDraw &a : out) {                       // only THEN spend a slot on an aging contact
+            if ((int)kept.size() >= s_maxOnScreen) break;
+            if (!trackable(a) || current(a)) continue;
+            kept.push_back(a);
         }
         // Only if nothing qualified: better to show distant or grounded contacts than an
         // empty scope, which would look broken rather than quiet.
@@ -2224,9 +2339,15 @@ void update(const std::vector<Aircraft> &aircraft, const RadarSettings &s) {
         static uint32_t s_acDbgAt = 0;
         if (lv_tick_get() - s_acDbgAt > 10000) {
             s_acDbgAt = lv_tick_get();
-            Serial.printf("[acdbg] feed=%u inRange=%d flying=%d drawn=%u cap=%d rangeKm=%.0f\n",
+            // "table" is aircraft.size(): the persistent count, fresh entries plus anything
+            // still aging out from an earlier poll. "dimming" is how many of THOSE are below
+            // full freshness right now — the direct, printable proof that a contact is
+            // being retained and faded rather than dropped the instant one poll misses it.
+            int dimming = 0;
+            for (const AcDraw &a : out) if (a.freshness < 0.999f) ++dimming;
+            Serial.printf("[acdbg] table=%u inRange=%d flying=%d drawn=%u dimming=%d cap=%d rangeKm=%.0f\n",
                           (unsigned)aircraft.size(), dbgInRange, dbgFlying,
-                          (unsigned)out.size(), s_maxOnScreen, (double)s.rangeKm);
+                          (unsigned)out.size(), dimming, s_maxOnScreen, (double)s.rangeKm);
         }
     }
 
@@ -2254,7 +2375,8 @@ void update(const std::vector<Aircraft> &aircraft, const RadarSettings &s) {
     // exactly as long as the wait actually lasts.
     if (s_loadingPending) {
         s_loadingPending = false;
-        if (s_loading) show(s_loading, false);
+        if (s_loading)    show(s_loading, false);
+        if (s_loadTicker) show(s_loadTicker, false);
         // Mirrors refreshCustomStyle's condition for the image sweep: it is visible only
         // when a custom design asks for the image type AND actually ships the sprite.
         if (s_sweepImg && customStyled() && theme_style::radar().sweepTypeImage && radar_custom_sweep())
@@ -2653,6 +2775,8 @@ void knobEnter() {
     // notice over a working display would be its own kind of lie.
     if (s_acs.empty()) {
         s_loadingPending = true;
+        s_loadStartMs = lv_tick_get();
+        s_loadShownSec = -1;
         if (s_loading) { show(s_loading, true); lv_obj_move_foreground(s_loading); }
         if (s_sweepImg) show(s_sweepImg, false);
         if (s_sweep)    lv_obj_invalidate(s_sweep);   // clear the vector wedge's last frame
@@ -2690,8 +2814,9 @@ void knobExit() {
     radar_sprite_release();
     s_selectMode = false;
     s_loadingPending = false;
-    if (s_loading) show(s_loading, false);   // never leave it stranded over another app
-    if (s_feedWarn) show(s_feedWarn, false); // same for the feed banner
+    if (s_loading)    show(s_loading, false);    // never leave it stranded over another app
+    if (s_loadTicker) show(s_loadTicker, false); // same for its elapsed-time line
+    if (s_feedWarn)   show(s_feedWarn, false);   // same for the feed banner
 }
 
 bool selected(AcInfo &out) {
@@ -2764,6 +2889,16 @@ void setFeedStatus(bool wifiUp, uint32_t staleSec) {
     lv_label_set_text(s_feedWarn, msg);
     show(s_feedWarn, true);
     lv_obj_move_foreground(s_feedWarn);
+}
+
+void setSweepFrameMs(uint32_t ms) {
+    const uint32_t use = ms ? ms : (uint32_t)SWEEP_FRAME_MS;
+    if (s_timer) lv_timer_set_period(s_timer, (uint32_t)use);
+    // Reseed the pacing state so the first step after a change is measured from now rather
+    // than from a gap that belongs to the old period.
+    s_lastSweepMs = 0;
+    s_emaDtMs = 0.0f;
+    Serial.printf("[sweep] frame period -> %lu ms\n", (unsigned long)use);
 }
 
 void noteSelectionDetailArrived() {

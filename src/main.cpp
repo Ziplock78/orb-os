@@ -6,11 +6,11 @@
 #include <HTTPClient.h>
 #include <ArduinoJson.h>
 #include <vector>
+#include <map>
 #include "config.h"
 #include "aircraft.h"
 #include "geo.h"
 #include "adsb_client.h"
-#include "snapshot_gate.h"
 #include "route.h"
 #include "route_client.h"
 #include "photo.h"
@@ -80,7 +80,10 @@
 #include <nvs.h>                    // erase the driver's "nvs.net80211" namespace (WiFi reset)
 
 // ---- shared state ----
-static std::vector<Aircraft> g_aircraft;      // latest snapshot
+static std::vector<Aircraft> g_aircraft;      // latest snapshot: g_acTable, flattened, every poll
+static std::map<std::string, Aircraft> g_acTable;   // hex -> last known fix. Upserted, never wholesale
+                                                     // replaced, so one missed poll dims a contact
+                                                     // instead of deleting it. See applyPolledAircraft().
 static SemaphoreHandle_t     g_ac_mutex;      // guards g_aircraft
 // Handles captured at creation, purely so /taskmem can ask each task how much of its own
 // stack it has ever come within of using (uxTaskGetStackHighWaterMark). Phase 0 of the
@@ -192,11 +195,30 @@ static const struct { const char *label; const char *tz; int offMin; int dst; } 
 };
 static const int TZOPTS_N = sizeof(TZOPTS) / sizeof(TZOPTS[0]);
 
+// Upsert this poll's contacts into the persistent table, drop what has aged past
+// AC_HARD_EXPIRE_MS, then hand the render side a flat snapshot of everything left.
+//
+// This is the whole fix for a contact vanishing the instant one poll misses it (routine
+// ADS-B reception gaps, not a fault): the table only ever adds and refreshes entries here,
+// it never wipes one because THIS poll happened not to mention it. An entry that goes
+// unmentioned simply keeps its last known fix and its lastUpdateMs stops advancing, which
+// is what lets radar_view.cpp read its age and dim it. Called under g_ac_mutex.
+static void applyPolledAircraft(std::vector<Aircraft> &fresh, uint32_t nowMs) {
+    for (Aircraft &ac : fresh) {
+        ac.lastUpdateMs = nowMs;              // one clock for "when main.cpp last heard this",
+        g_acTable[std::string(ac.hex.c_str())] = ac;   // independent of anything adsb_client stamped
+    }
+    for (auto it = g_acTable.begin(); it != g_acTable.end(); ) {
+        it = (nowMs - it->second.lastUpdateMs > AC_HARD_EXPIRE_MS) ? g_acTable.erase(it) : std::next(it);
+    }
+    g_aircraft.clear();
+    g_aircraft.reserve(g_acTable.size());
+    for (auto &kv : g_acTable) g_aircraft.push_back(kv.second);
+}
+
 // ---- networking task (core 0): fetch + parse, never touches the display ----
 static void adsb_task(void*) {
     std::vector<Aircraft> fresh;
-    AircraftSnapshotGate snapshotGate;
-    bool retainingEmptySnapshot = false;
     bool wasConnected = false;
     uint32_t lastPoll = 0;
     uint32_t adsbBackoffMs = 0;                // extra delay after feed failures (exponential, 30s cap)
@@ -373,23 +395,15 @@ static void adsb_task(void*) {
                     lastFeedOk = receivedMs;
                     g_lastFeedOkMs = receivedMs;      // HUD: mark data as fresh
 
-                    const bool publish = snapshotGate.shouldPublish(
-                        !fresh.empty(), receivedMs, AC_STALE_MS);
-                    if (!publish) {
-                        if (!retainingEmptySnapshot) {
-                            Serial.printf("[adsb] empty snapshot; retaining contacts for %u ms\n",
-                                          (unsigned)AC_STALE_MS);
-                            retainingEmptySnapshot = true;
-                        }
-                    } else {
-                        if (retainingEmptySnapshot && fresh.empty())
-                            Serial.println("[adsb] empty snapshot persisted; clearing stale contacts");
-                        retainingEmptySnapshot = false;
-                        if (xSemaphoreTake(g_ac_mutex, pdMS_TO_TICKS(200)) == pdTRUE) {
-                            g_aircraft.swap(fresh);   // O(1) handoff: no per-Aircraft String copies under the lock
-                            g_acDirty = true;
-                            xSemaphoreGive(g_ac_mutex);
-                        }
+                    // Every poll upserts, empty or not: a poll that came back with nothing this
+                    // cycle is not "the sky is empty," it is one sample, and the table already
+                    // knows how to age a contact it did not hear about this time. See
+                    // applyPolledAircraft() for the part that used to be a separate empty-poll
+                    // grace timer — aging per contact made that timer's whole job redundant.
+                    if (xSemaphoreTake(g_ac_mutex, pdMS_TO_TICKS(200)) == pdTRUE) {
+                        applyPolledAircraft(fresh, receivedMs);
+                        g_acDirty = true;
+                        xSemaphoreGive(g_ac_mutex);
                     }
                 } else if (g_adsb.lastWasRefused()) {
                     // The SERVER said no (4xx), which no amount of retrying changes. Two things
@@ -538,8 +552,12 @@ static void applyThemeSettings() {
                                              ? ADSB_MAX_AIRCRAFT : rs.maxAircraft;
     if (rs.minAltFt   >= 0)    g_minAltFt  = rs.minAltFt;
     if (rs.hideGround >= 0)    g_hideGround = (rs.hideGround != 0);
-    Serial.printf("[theme] applied: rangeKm=%.0f maxAircraft=%d minAltFt=%d hideGround=%d\n",
-                  (double)g_settings.rangeKm, g_maxAc, g_minAltFt, (int)g_hideGround);
+    // Same flag main.cpp's poll loop reads to decide whether to fabricate traffic (see
+    // "simulated" in the ADS-B poll branch below) — the badge tracks it here so the two
+    // can never drift apart, one deciding what is drawn and the other saying so.
+    radar::setSimulatedBadge(rs.simulate);
+    Serial.printf("[theme] applied: rangeKm=%.0f maxAircraft=%d minAltFt=%d hideGround=%d simulate=%d\n",
+                  (double)g_settings.rangeKm, g_maxAc, g_minAltFt, (int)g_hideGround, (int)rs.simulate);
 }
 
 static void loadSettings() {

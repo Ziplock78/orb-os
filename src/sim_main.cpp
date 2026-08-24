@@ -844,9 +844,15 @@ int main(int argc, char **argv) {
         lv_obj_clean(lv_layer_top());
         for (int i = 0; i < 200; ++i) { lv_timer_handler(); SDL_Delay(2); }
         int ow, oh; SDL_GetRendererOutputSize(s_ren, &ow, &oh);
+        // SIM_SETTLE_MS=7000 holds each app up before its capture. The default 400 ms is
+        // enough for onEnter to decode its art, but not enough for anything that MOVES to
+        // move: the radar's sweep has turned about five degrees by then, and a hand at five
+        // degrees is indistinguishable from a hand at zero, which is exactly the frame that
+        // hides a rotation bug. LVGL skips the transform entirely at angle 0.
+        const int settleMs = getenv("SIM_SETTLE_MS") ? atoi(getenv("SIM_SETTLE_MS")) : 400;
         for (int idx = 0; idx < app_shell::count(); ++idx) {
             app_shell::selectApp(idx);
-            for (int i = 0; i < 200; ++i) { lv_timer_handler(); SDL_Delay(2); }   // let onEnter decode
+            for (int i = 0; i < settleMs / 2; ++i) { lv_timer_handler(); SDL_Delay(2); }   // let onEnter decode
             lv_refr_now(NULL);
             SDL_RenderClear(s_ren);
             SDL_RenderCopy(s_ren, s_tex, NULL, NULL);

@@ -268,6 +268,14 @@ void cmd_layer(char *arg) {
     out_send();
 }
 
+void cmd_sweepms(const char *arg) {
+    const uint32_t ms = (arg && *arg) ? (uint32_t)atol(arg) : 0;
+    radar::setSweepFrameMs(ms);
+    out_reset();
+    out_fmt("{\"ok\":true,\"sweepMs\":%lu}", (unsigned long)ms);
+    out_send();
+}
+
 void cmd_mem() {
     multi_heap_info_t hi;
     heap_caps_get_info(&hi, MALLOC_CAP_INTERNAL);
@@ -499,6 +507,7 @@ void dispatch(char *line) {
     else if (!strcmp(line, "poll"))      cmd_poll(arg);
     else if (!strcmp(line, "layer"))     cmd_layer(arg);
     else if (!strcmp(line, "mem"))       cmd_mem();
+    else if (!strcmp(line, "sweepms"))   cmd_sweepms(arg);
     else if (!strcmp(line, "get-begin")) cmd_get_begin(arg);
     else if (!strcmp(line, "get-data"))  cmd_get_data();
     else if (!strcmp(line, "put-begin")) cmd_put_begin(arg);

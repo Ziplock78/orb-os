@@ -90,6 +90,13 @@ void setRangeLabelVisible(bool v);               // hide the built-in range labe
 // the selection idle countdown so the newly-arrived text gets a full reading window.
 void noteSelectionDetailArrived();
 
+// Retune the sweep timer at runtime. Frame pacing is a measured tradeoff between rate and
+// evenness, and the right value depends on what the device can actually render — which
+// changed materially once internal memory stopped being exhausted. Being able to sweep
+// through candidate values without a reflash each time turns a 6-minute experiment into a
+// 90-second one. 0 restores the compiled default.
+void setSweepFrameMs(uint32_t ms);
+
 // Tell the scope whether the WiFi is up and how long since the last aircraft. It shows a
 // small banner naming the actual culprit once a gap is real (45 s), because a blank scope
 // looks the same from the desk whether the network dropped, the firmware wedged, or the
@@ -101,6 +108,7 @@ void setFeedStatus(bool wifiUp, uint32_t staleSec);
 // left it saying "loading" indefinitely, which is the device telling the person in front of
 // it something that is not true. Pass nullptr to put the original wording back.
 void setFeedNote(const char *note);
+void setSimulatedBadge(bool on);                 // "TEST DATA" mark, forced on whenever the active theme fakes its traffic
 // Diagnostic only: hide one layer at runtime so its per-frame cost can be priced
 // by difference, instead of reflashing once per hypothesis. kind: 0=sweep,
 // 1=aircraft, 2=text, 3=static1, 4=static2, 5=wash, 6=plate. Not persisted.
