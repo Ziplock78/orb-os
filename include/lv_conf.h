@@ -94,8 +94,20 @@
 #define LV_FONT_MONTSERRAT_16 1
 #define LV_FONT_MONTSERRAT_18 1   /* large-text mode: 14 -> 18 */
 #define LV_FONT_MONTSERRAT_20 1   /* large-text mode: 16 -> 20 */
+/* 22..44: the Headlines screen's size ladder (THEME_CAPS 12). A theme picks a face from
+   this set and nothing else — LVGL fonts are compiled glyph bitmaps, so a size that is not
+   linked in cannot be drawn at all, and the whole ladder has to exist in the binary for a
+   slider to be able to land on it. Roughly 20-60 KB of flash each at these sizes, which is
+   what buys headlines readable from across a room. */
+#define LV_FONT_MONTSERRAT_22 1
+#define LV_FONT_MONTSERRAT_24 1
+#define LV_FONT_MONTSERRAT_26 1
 #define LV_FONT_MONTSERRAT_28 1
-#define LV_FONT_MONTSERRAT_48 1   /* big clock face (app shell) */
+#define LV_FONT_MONTSERRAT_32 1
+#define LV_FONT_MONTSERRAT_36 1
+#define LV_FONT_MONTSERRAT_40 1
+#define LV_FONT_MONTSERRAT_44 1
+#define LV_FONT_MONTSERRAT_48 1   /* big clock face (app shell), and the top of the ladder */
 #define LV_FONT_DEFAULT &lv_font_montserrat_14
 
 /*==================

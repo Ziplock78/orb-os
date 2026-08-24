@@ -17,6 +17,7 @@ static struct { void println(const char *s) const { puts(s); } } Serial;
 #include "custom_text.h"      // CUSTOM_HAS_TEXT{1,2} / CUSTOM_TEXT{1,2}_*
 #include "custom_radar.h"     // CUSTOM_SWEEP_* / CUSTOM_BLIP_* / CUSTOM_SEL_* / CUSTOM_OFFRANGE_* / CUSTOM_CENTER_* / CUSTOM_HAS_RTEXT{1..4} / CUSTOM_RTEXT{n}_*
 #include "custom_settings.h"  // CUSTOM_SETTINGS_*
+#include "intel.h"           // INTEL_MAX_ITEMS
 #include "custom_hands.h"    // CUSTOM_HAS_{HOUR,MINUTE,SECOND,STATIC1,STATIC2} / CUSTOM_*_PIVOT_* / CUSTOM_HAND_ORDER
 #include "custom_apps.h"     // CUSTOM_APP_* — compiled fallback for the per-theme app roster
 #include "custom_menu.h"      // CUSTOM_HAS_MENU_{CURRENT,PREV,NEXT} / CUSTOM_MENU_{...}_*
@@ -37,6 +38,7 @@ Clock    s_clock;
 Radar    s_radar;
 Menu     s_menu;
 Settings s_settings;
+Intel    s_intel;
 Apps     s_apps;
 Names    s_names;
 // The theme's declared asset list (theme.json "assets"). s_assetN == 0 means the theme
@@ -205,6 +207,11 @@ void seed_defaults() {
     s_radar.rtext[3].curveR = CUSTOM_RTEXT4_CURVE_R;
     s_radar.rtext[3].arcDeg = CUSTOM_RTEXT4_ARCDEG;
 #endif
+
+    // No CUSTOM_INTEL_* macros to fall back to: this screen never had theme support
+    // before THEME_CAPS 9, so there is no prior welded state a theme below that level
+    // could be relying on. Compiled defaults ARE the whole fallback.
+    s_intel = Intel{};
 
     s_settings = Settings{};
     s_settings.wheelR = CUSTOM_SETTINGS_WHEEL_R;
@@ -560,6 +567,77 @@ void load() {
     }
     {
         JsonDocument doc;
+        if (read_style_json(slug, "intel_style.json", doc)) {
+            if (doc["bg"].is<uint32_t>()) s_intel.bg = doc["bg"].as<uint32_t>();
+            if (doc["titleColor"].is<uint32_t>()) s_intel.titleColor = doc["titleColor"].as<uint32_t>();
+            if (doc["textColor"].is<uint32_t>()) s_intel.textColor = doc["textColor"].as<uint32_t>();
+            if (doc["sourceColor"].is<uint32_t>()) s_intel.sourceColor = doc["sourceColor"].as<uint32_t>();
+            if (doc["staleColor"].is<uint32_t>()) s_intel.staleColor = doc["staleColor"].as<uint32_t>();
+            if (doc["count"].is<int>()) {
+                const int c = doc["count"].as<int>();
+                s_intel.count = c < 1 ? 1 : (c > INTEL_MAX_ITEMS ? INTEL_MAX_ITEMS : c);
+            }
+            if (doc["topic"].is<const char *>())
+                snprintf(s_intel.topic, sizeof(s_intel.topic), "%s", doc["topic"].as<const char *>());
+            if (doc["source"].is<const char *>())
+                snprintf(s_intel.source, sizeof(s_intel.source), "%s", doc["source"].as<const char *>());
+            if (doc["curvedBounds"].is<bool>()) s_intel.curvedBounds = doc["curvedBounds"].as<bool>();
+            if (doc["curveRadius"].is<int>()) {
+                const int r = doc["curveRadius"].as<int>();
+                s_intel.curveRadius = r < 140 ? 140 : (r > 400 ? 400 : r);
+            }
+            // THEME_CAPS 11, widened at 12. Sizes must land on a compiled Montserrat font:
+            // an unknown size snaps to the default rather than to "nearest", because nearest
+            // would silently redesign the theme and this codebase refuses rather than
+            // guesses. This list mirrors lv_conf.h; adding a size to one means adding it to
+            // the other, and to Studio's INTEL_FONT_SIZES, or the three disagree.
+            auto fontSizeOk = [](int v) {
+                switch (v) {
+                    case 12: case 14: case 16: case 18: case 20: case 22: case 24:
+                    case 26: case 28: case 32: case 36: case 40: case 44: case 48:
+                        return true;
+                    default:
+                        return false;
+                }
+            };
+            if (doc["title"].is<const char *>())
+                snprintf(s_intel.title, sizeof(s_intel.title), "%s", doc["title"].as<const char *>());
+            if (doc["titleShow"].is<bool>()) s_intel.titleShow = doc["titleShow"].as<bool>();
+            if (doc["titleSize"].is<int>() && fontSizeOk(doc["titleSize"].as<int>()))
+                s_intel.titleSize = doc["titleSize"].as<int>();
+            auto clampPos = [](int v) { return v < 0 ? 0 : (v > 466 ? 466 : v); };
+            if (doc["titleX"].is<int>()) s_intel.titleX = clampPos(doc["titleX"].as<int>());
+            if (doc["titleY"].is<int>()) s_intel.titleY = clampPos(doc["titleY"].as<int>());
+            if (doc["textSize"].is<int>()) {
+                const int v = doc["textSize"].as<int>();
+                s_intel.textSize = fontSizeOk(v) ? v : 0;   // 0 = automatic, and the refusal
+            }
+            auto clampMargin = [](int v) { return v < 0 ? 0 : (v > 200 ? 200 : v); };
+            if (doc["marginLeft"].is<int>())  s_intel.marginLeft  = clampMargin(doc["marginLeft"].as<int>());
+            if (doc["marginRight"].is<int>()) s_intel.marginRight = clampMargin(doc["marginRight"].as<int>());
+            if (doc["pollMinutes"].is<int>()) {
+                const int m = doc["pollMinutes"].as<int>();
+                s_intel.pollMinutes = m < 5 ? 5 : (m > 120 ? 120 : m);
+            }
+            if (doc["blockOffsetY"].is<int>()) {
+                const int o = doc["blockOffsetY"].as<int>();
+                s_intel.blockOffsetY = o < -160 ? -160 : (o > 160 ? 160 : o);
+            }
+            if (doc["ageShow"].is<bool>()) s_intel.ageShow = doc["ageShow"].as<bool>();
+            if (doc["ageX"].is<int>()) s_intel.ageX = clampPos(doc["ageX"].as<int>());
+            if (doc["ageY"].is<int>()) s_intel.ageY = clampPos(doc["ageY"].as<int>());
+            if (doc["ageColor"].is<uint32_t>()) s_intel.ageColor = doc["ageColor"].as<uint32_t>();
+            if (doc["ageSize"].is<int>() && fontSizeOk(doc["ageSize"].as<int>()))
+                s_intel.ageSize = doc["ageSize"].as<int>();
+            if (doc["ageGlow"].is<int>()) {
+                const int g = doc["ageGlow"].as<int>();
+                s_intel.ageGlow = g < 0 ? 0 : (g > 20 ? 20 : g);
+            }
+            if (doc["ageGlowColor"].is<uint32_t>()) s_intel.ageGlowColor = doc["ageGlowColor"].as<uint32_t>();
+        }
+    }
+    {
+        JsonDocument doc;
         if (read_style_json(slug, "menu_style.json", doc)) {
             merge_menu_text(doc["current"], s_menu.current);
             merge_menu_text(doc["prev"], s_menu.prev);
@@ -635,6 +713,7 @@ const Clock &clock() { return s_clock; }
 const Radar &radar() { return s_radar; }
 const Menu &menu() { return s_menu; }
 const Settings &settings() { return s_settings; }
+const Intel &intel() { return s_intel; }
 const Apps &apps() { return s_apps; }
 const Names &names() { return s_names; }
 

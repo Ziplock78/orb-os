@@ -36,24 +36,25 @@ static uint32_t millis() {
 // the ADS-B services answer 403 to Cloudflare's network while answering a home connection
 // normally. News publishers have no such objection. See the note above liveTraffic in the
 // gateway's server.ts.
-bool intel_fetch(const char *topics, int want, IntelSnapshot &out) {
+bool intel_fetch(const char *topics, const char *source, int want, IntelSnapshot &out) {
 #ifdef ARDUINO
     if (WiFi.status() != WL_CONNECTED) return false;
 #endif
     if (want < 1) want = 1;
     if (want > INTEL_MAX_ITEMS) want = INTEL_MAX_ITEMS;
     if (!topics || !*topics) topics = "general";
+    if (!source || !*source) source = "bbc";
 
     char url[256];
     // The scheme differs by build, and only the scheme. The device must use plain HTTP
     // because it cannot do TLS at all; the simulator has a full TLS stack and no reason to
     // send the request in the clear, so it asks the same gateway over HTTPS.
 #ifdef ARDUINO
-    snprintf(url, sizeof(url), "http://%s/api/intel?topics=%s&n=%d",
-             INTEL_GATEWAY_HOST, topics, want);
+    snprintf(url, sizeof(url), "http://%s/api/intel?topics=%s&n=%d&source=%s",
+             INTEL_GATEWAY_HOST, topics, want, source);
 #else
-    snprintf(url, sizeof(url), "https://%s/api/intel?topics=%s&n=%d",
-             INTEL_GATEWAY_HOST, topics, want);
+    snprintf(url, sizeof(url), "https://%s/api/intel?topics=%s&n=%d&source=%s",
+             INTEL_GATEWAY_HOST, topics, want, source);
 #endif
 
 #ifdef ARDUINO

@@ -131,16 +131,16 @@ static const float RANGE_STEPS_KM[] = {10.0f, 20.0f, 30.0f, 50.0f, 100.0f};
 // The gateway, not a publisher. Plain HTTP for the same reason as everything else here:
 // no TLS on this board. See the long note above intel_fetch.
 #define INTEL_GATEWAY_HOST  "buildtheorb.zionbrock.workers.dev"
-// Ten minutes, matching the gateway's own edge cache: polling faster only re-reads the
-// same cached answer, and world news does not move faster than that on a glanceable dial.
-#define INTEL_POLL_MS       600000UL
-// A failed poll should not leave the screen empty for the rest of the ten minutes.
+// The poll interval is theme data now (theme_style::Intel::pollMinutes, THEME_CAPS 11),
+// defaulting to the ten minutes that used to be welded here as INTEL_POLL_MS.
+// A failed poll should not leave the screen empty for the rest of the interval.
 #define INTEL_RETRY_MS      60000UL
 #define INTEL_CONNECT_MS    6000
 #define INTEL_READ_MS       9000
-// What a fresh Orb shows before anyone picks. Sensible for a device on a shelf in a room.
-#define INTEL_DEFAULT_TOPICS "general"
-#define INTEL_DEFAULT_COUNT  3
+// The "what a fresh Orb shows before anyone picks" defaults now live on
+// theme_style::Intel's own compiled-in values (general / bbc / 3), not here: THEME_CAPS 9
+// made this screen theme-driven, and a single default belongs in the one struct that owns
+// it, not duplicated into a macro nothing reads any more.
 
 // ---------- Debug ----------
 #define DEBUG_MEM           0               // 1 = print a [mem] heap/fps line every 5s on serial

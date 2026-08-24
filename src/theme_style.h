@@ -91,7 +91,38 @@ namespace theme_style {
 //      size and glow. The sweep drew lines out of a bare centre and the only thing ever at
 //      the middle of the dial was the aircraft layer's centre mark, which belongs to the
 //      aircraft and travels with them through the stack.
-constexpr int THEME_CAPS = 8;
+//   9  the Headlines screen as theme data: background colour, the four text colours, how
+//      many headlines (1..5), and which topic/source the gateway is asked for. All of it
+//      was a fixed black screen with four hardcoded colours and always exactly three
+//      general-topic BBC headlines below this level, because intel_view.cpp had never
+//      once read anything from a theme.
+//  10  the Headlines screen's text boundary: square (the original fixed-width wrap) or
+//      curved, where each row's wrap width is the chord of a circle at that row's height
+//      instead of one constant. curveRadius picks which circle: small numbers pull the
+//      margins in hard near the top and bottom rows, large numbers approach the same
+//      straight-sided wrap square mode has always used. An Orb below this level has no
+//      concept of a curved boundary at all and wraps every theme at the original fixed
+//      width, which is exactly square mode's behaviour, so nothing regresses for it.
+//  11  the Headlines screen as a composed screen rather than a fixed layout: the title is
+//      its own text (any words, own size, own position, hideable), headlines can pick a
+//      type size from the compiled set instead of the automatic 14/16, the text block has
+//      real left/right margins, the poll interval is the theme's to choose, and the
+//      "just now" age line is a placeable, hideable field like every other line of text
+//      in Studio, with its own colour, type size and glow. A size that overflows the dial
+//      scrolls: press enters scroll mode, turn steps through the headlines, press again
+//      or six idle seconds releases — the same knob grammar the Flight Tracker's aircraft
+//      selection already taught. An Orb below this level draws the fixed INTEL layout it
+//      always has, whatever is set here.
+//  12  the Headlines screen finished: the full compiled size ladder (12..48 rather than
+//      the six sizes level 11 shipped with), a vertical offset that moves the whole
+//      headline block without touching the title or the age line, and a headline that
+//      does not fit its rows FADING OUT at the bottom instead of ending in an ellipsis.
+//      The scroll indicator also stopped being a column of dots beside the text, where it
+//      read as stray punctuation, and became a row along the bottom shown only while the
+//      knob is actually scrolling. An Orb below this level cannot draw the larger faces at
+//      all (they are compiled glyph bitmaps, not scalable outlines), which is why this is
+//      a level rather than a graceful fallback.
+constexpr int THEME_CAPS = 12;
 
 struct ClockText {
     bool     show   = false;
@@ -433,7 +464,93 @@ struct Settings {
     int      defaultSel   = 0;
 };
 
-// Reads /themes/<slug>/{clock,radar,settings,menu}_style.json (theme_select::activeSlug())
+// The Headlines screen. Solid background only for now, not the color-or-image control
+// Clock and Flight Tracker get: an image background needs the same bake-and-decode
+// pipeline those two already have (a named PNG, theme_art::find_active, PSRAM decode),
+// and none of that exists for this screen yet. Offering an image picker in Studio that
+// silently did nothing on the device would be exactly the kind of gap the charter's P6
+// forbids, so this stays color-only until the decode path is actually built.
+struct Intel {
+    uint32_t bg          = 0x000000;
+    uint32_t titleColor  = 0x7E8794;
+    uint32_t textColor   = 0xE8ECF1;
+    uint32_t sourceColor = 0x5F6874;
+    uint32_t staleColor  = 0xC8922E;
+    // 1..5, clamped on the way in (INTEL_MAX_ITEMS is the hard ceiling, config.h).
+    int      count       = 3;
+    // Both plain lowercase words the gateway itself defines (see INTEL_FEEDS,
+    // buildtheorb/app/src/server.ts) — general/world/sports/science/tech/business/space,
+    // and bbc/guardian. A topic with no feed for the requested source (space has no BBC or
+    // Guardian feed) is not an error: the gateway substitutes what that topic actually has
+    // and says so in its own log, same graceful-fallback shape as every other data source
+    // this Orb reads.
+    char     topic[16]   = "general";
+    char     source[16]  = "bbc";
+    // The wrap boundary each headline row is laid out inside. false (square) is the
+    // original behaviour: every row gets the same fixed width regardless of how close it
+    // sits to the top or bottom of the dial. true (curved) computes each row's width as
+    // the chord of curveRadius at that row's height, so rows nearer the middle stay wide
+    // and rows nearer the edge narrow to match the glass actually under them.
+    bool     curvedBounds = false;
+    // The radius, in px, curved mode measures its chord against. 233 is the screen's own
+    // true radius, which makes the text boundary hug the real bezel. Smaller pulls the
+    // margins in tighter than the bezel actually requires, for a more dramatic taper;
+    // larger relaxes it, approaching square mode's straight sides as it grows. Clamped to
+    // [140, 400] on the way in: below 140 an outer row's chord can hit zero or go
+    // imaginary, and above 400 the curve is imperceptible within the rows' actual height
+    // range, so it stops being worth the field.
+    int      curveRadius  = 233;
+
+    // THEME_CAPS 11 below here. Every default reproduces the fixed layout this screen
+    // shipped with, byte for byte, so a theme that never touches these looks identical.
+    //
+    // The title as its own text element. ASCII only (Studio strips the rest on export):
+    // Montserrat's compiled glyph set is the same one that already forces the gateway to
+    // send ASCII headlines. Coordinates are absolute screen px (0..466), the convention
+    // every Studio text field uses; the view subtracts the centre itself.
+    char     title[24]    = "INTEL";
+    bool     titleShow    = true;
+    int      titleSize    = 14;    // one of the compiled Montserrat sizes: 12/14/16/18/20/28
+    int      titleX       = 233;
+    int      titleY       = 65;    // 233 - 168, the fixed layout's exact spot
+    // Headline type size. 0 means automatic, which is the original behaviour: 16 px for
+    // three or fewer, 14 px for four or five. Any other value must be a compiled size
+    // (see FONT_SIZES in theme_style.cpp, which mirrors lv_conf.h exactly); the parser
+    // snaps unknown values back to 0 rather than handing LVGL a font that was never
+    // linked in. Sizes big enough to overflow the dial are what scrolling is for.
+    int      textSize     = 0;
+    // The text block's own margins, px in from each edge. 68 each side is exactly the
+    // fixed layout's 330 px column. Asymmetric margins move the block as well as size it,
+    // which is the point: "where I want to put it" and "how much room it takes up" are
+    // the same two numbers. The curved boundary, when on, intersects with this box.
+    int      marginLeft   = 68;
+    int      marginRight  = 68;
+    // Minutes between fetches. 10 is what INTEL_POLL_MS welded in before this field.
+    // Clamped to [5, 120]: the feeds themselves refresh on the order of minutes, so
+    // anything faster than 5 is pure gateway traffic for identical bytes.
+    int      pollMinutes  = 10;
+    // Move the whole headline block up or down, px, without touching the title or the age
+    // line. An offset rather than an absolute Y on purpose: the block's own position is
+    // computed (centred between the title and the age line, or filled from the top when it
+    // overflows), and an absolute coordinate would throw that arithmetic away and have to
+    // be re-tuned every time the count or the type size changed. 0 is dead centre of
+    // whatever the layout worked out, so an untouched theme is unmoved. Clamped [-160, 160].
+    int      blockOffsetY = 0;
+    // The "just now" age line, a full text field like every other one in Studio: its own
+    // colour, compiled type size, position and glow. ageColor's default is the exact grey
+    // the line borrowed from sourceColor before it had a colour of its own, so an untouched
+    // theme is unchanged. It still switches to staleColor when the headlines go stale —
+    // that flip is the line's whole reason to exist and no colour choice removes it.
+    bool     ageShow      = true;
+    int      ageX         = 233;
+    int      ageY         = 409;   // 233 + 176, the fixed layout's exact spot
+    uint32_t ageColor     = 0x5F6874;
+    int      ageSize      = 12;    // one of the compiled Montserrat sizes
+    int      ageGlow      = 0;     // px of halo, 0 = none, clamped to [0, 20]
+    uint32_t ageGlowColor = 0x5F6874;
+};
+
+// Reads /themes/<slug>/{clock,radar,settings,menu,intel}_style.json (theme_select::activeSlug())
 // and populates the runtime structs below, field by field — any file that's missing, or
 // any field a file doesn't set, keeps the CUSTOM_* compile-time default (so a theme
 // exported before this module existed, or a stock/no-design build, behaves exactly as
@@ -446,6 +563,7 @@ const Clock    &clock();
 const Radar     &radar();
 const Menu      &menu();
 const Settings  &settings();
+const Intel     &intel();
 const Apps      &apps();      // from /themes/<slug>/theme.json
 const Names     &names();     // display labels; see the Names comment on why these are not ids
 
