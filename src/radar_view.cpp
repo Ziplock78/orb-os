@@ -2770,6 +2770,12 @@ void knobEnter() {
     s_selectMode = false;
     select(-1);
     app_shell::setCaptured(false);
+    // Data now polls continuously from boot (see main.cpp's adsb_task), so this banner can
+    // already be primed to fire the instant the screen appears: staleness kept accumulating
+    // the whole time nobody was here to see it. setFeedStatus() re-evaluates on its own
+    // very next tick and will show it again if the feed genuinely is still down, but that
+    // is a fresh, honest read taken now, not a verdict reached before this screen existed.
+    if (s_feedWarn) show(s_feedWarn, false);
     // Only when there is actually nothing on the scope. Coming back to a Flight Tracker
     // that still holds its last snapshot has nothing to wait for, and flashing a loading
     // notice over a working display would be its own kind of lie.
@@ -2873,7 +2879,15 @@ void setFeedStatus(bool wifiUp, uint32_t staleSec) {
     // observable — no fresh aircraft — and leaves the diagnosis to the logs, which can be
     // checked rather than trusted.
     const char *msg = nullptr;
-    if (staleSec >= 45) msg = "No aircraft data";
+    // Same clock the contacts themselves age on (AC_DIM_START_MS, config.h), not a second
+    // number chosen independently. They used to disagree — 45s here, 60s for the first
+    // visible dimming — so for 15 real seconds the feed could be exactly stale enough to
+    // trip this banner while every aircraft on the dial was still drawn at full brightness,
+    // which read as the instrument flatly contradicting itself: "no data" over a screen
+    // full of normal-looking traffic. This is the fix Zion found live, on the device,
+    // 2026-08-24. One clock, so the banner and the first dimmed pixel can never disagree
+    // about whether anything is stale.
+    if (staleSec >= AC_DIM_START_MS / 1000) msg = "No aircraft data";
     // Log only on change: this is called every status tick, and a line per tick would bury
     // the feed diagnostics underneath it.
     static const char *s_shown = nullptr;

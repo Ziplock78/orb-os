@@ -255,6 +255,7 @@ namespace {
     lv_obj_t *s_aboutPage = nullptr;   // About: the boot splash, push to return
     lv_obj_t *s_aboutVer  = nullptr;   // firmware version line (Orb Studio needs this readable)
     lv_obj_t *s_aboutNet  = nullptr;   // config-page address, fed by settingsview::setNetInfo()
+    lv_obj_t *s_aboutCredits = nullptr; // who the data on screen actually comes from
     char      s_netInfo[112] = "";     // last line handed to setNetInfo(), replayed on page open
     lv_obj_t *s_aboutImg  = nullptr;   // decoded fresh each time (see refresh_about()) — cheap, avoids relying on splash_art's shared decode buffer staying valid
     lv_obj_t *s_resetPage = nullptr;   // Reset: warning + confirm, push to wipe, turn to cancel
@@ -1484,6 +1485,23 @@ void settingsview::init() {
     lv_obj_set_style_text_font(s_aboutNet, &lv_font_montserrat_14, 0);
     lv_obj_set_style_text_align(s_aboutNet, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_align(s_aboutNet, LV_ALIGN_CENTER, 0, 152);
+
+    // Who the aircraft on the radar actually come from, and who drew the map under them.
+    // Neither was named anywhere on the device before this. OpenStreetMap's license
+    // actually requires the second one (ODbL, not just courtesy); the first is the same
+    // argument P9 makes about the aircraft themselves: a source unnamed reads as the Orb's
+    // own claim, and it is not one. Two short lines, not a fuller list of every source in
+    // the system (routes, weather) — this is a 466 px circle, and the round bezel eats far
+    // more width at this depth than a rectangular mock-up would suggest. Kept to what sits
+    // safely inside the visible chord down here rather than what would be nice to fit.
+    s_aboutCredits = lv_label_create(s_aboutPage);
+    lv_obj_set_width(s_aboutCredits, 210);
+    lv_label_set_text(s_aboutCredits, "Aircraft data: adsb.lol\nMap data: OpenStreetMap");
+    lv_obj_set_style_text_color(s_aboutCredits, C_GREY, 0);
+    lv_obj_set_style_text_font(s_aboutCredits, &lv_font_montserrat_12, 0);
+    lv_obj_set_style_text_align(s_aboutCredits, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_style_text_line_space(s_aboutCredits, 4, 0);
+    lv_obj_align(s_aboutCredits, LV_ALIGN_CENTER, 0, 186);
 
     // --- Reset confirm: warning + push-to-confirm/turn-to-cancel, same red as the
     // other destructive-action warning (main.cpp's g_holdWarning) ---
