@@ -238,11 +238,21 @@ static void adsb_task(void*) {
     bool wasRadarActive = false;
     for (;;) {
         const bool conn = (WiFi.status() == WL_CONNECTED);
-        const bool radarActive = g_radarViewActive;
+        // Polling used to wait for someone to actually open Flight Tracker, on the
+        // reasoning that fetching data for a screen nobody is looking at wastes memory.
+        // It does not: the task, its 7168-byte stack, and the JSON parse buffer (PSRAM,
+        // see PsramJsonAllocator in adsb_client.cpp) are all already reserved for this
+        // task's entire lifetime from the moment xTaskCreatePinnedToCore ran in setup(),
+        // whether Flight Tracker is ever opened or not. The only thing the wait bought
+        // was a person watching "Loading aircraft and location data" for as long as the
+        // first poll takes, every single time, instead of arriving to a scope that was
+        // already warm. A theme that hides Flight Tracker entirely still skips this: no
+        // reachable screen, no reason to fetch for it.
+        const bool radarActive = theme_style::apps().flight;
         if (radarActive && !wasRadarActive) {
-            // Just entered Flight Tracker: poll right away and give the stuck-feed
-            // watchdog a fresh 180s window instead of one aged by however long the
-            // user was on another app (where lastFeedOk was frozen, not stale-broken).
+            // First tick after boot (or after a theme switch turns Flight Tracker back
+            // on): poll right away and give the stuck-feed watchdog a fresh 180s window
+            // rather than one dated from setup().
             lastPoll = 0;
             lastFeedOk = millis();
         }
@@ -2216,7 +2226,7 @@ void setup() {
     intelview::init();
     psram_mark("after intelview");
     app_shell::add(intelview::screen(), theme_style::names().headlines,
-                   intelview::onPress, nullptr, false, nullptr, nullptr, !theme_style::apps().headlines);  // push fetches now instead of waiting out the poll
+                   intelview::onPress, intelview::onTurn, false, intelview::onEnter, nullptr, !theme_style::apps().headlines);  // push fetches now, or toggles scroll mode when the type size overflows; onEnter resets to the top
     app_shell::begin();                // start on the clock (index 0 — see comment above)
     psram_mark("after app_shell::begin");
 
@@ -2647,34 +2657,60 @@ void loop() {
 #endif
 
     // Push a fresh ADS-B snapshot to the radar (copy under the mutex, render outside).
+    //
+    // The swap itself always runs: it costs a pointer exchange under a 5ms lock, nothing
+    // more, and is what lets g_snap hold real data even while nobody is looking at it.
+    // radar::update() is the expensive half (coastline reprojection, glyph rebuilding, the
+    // LVGL compositing tonight's whole sweep-smoothness investigation was about), and it
+    // has no reason to run against a screen that is not the one on the glass right now, so
+    // it is gated on g_radarViewActive below. checkAudioEvents() stays unconditional on
+    // purpose: an emergency squawk is worth a ping whichever screen someone is looking at.
     if (g_acDirty) {
         if (xSemaphoreTake(g_ac_mutex, pdMS_TO_TICKS(5)) == pdTRUE) {
             g_snap.swap(g_aircraft);   // O(1) handoff under the lock; render on g_snap outside it.
             g_acDirty = false;         // g_aircraft now holds the previous snapshot (overwritten next poll)
             xSemaphoreGive(g_ac_mutex);
-            // Timed because this is the one chunk of per-poll work that lands on the
-            // RENDER thread: everything else about a poll happens on core 0. If a poll
-            // costs a visible stutter, this is where it is spent.
-            const uint32_t upd0 = micros();
-            radar::update(g_snap, g_settings); // rebuild the glyph/trail layer
-            const uint32_t upd1 = micros();
-            ui_on_data_updated();              // refresh card/list/stats
-            const uint32_t upd2 = micros();
-            checkAudioEvents();                // ping new-in-range / emergency / military
-            const uint32_t upd3 = micros();
-            // Only when it actually costs a frame. This ran on every poll while the
-            // sweep stutter was being hunted, which is the right instrument but the
-            // wrong volume once it is fixed: a healthy snapshot is ~25 ms and saying so
-            // twice a second buries everything else on the console. 40 ms is half a
-            // frame at the radar's ~13 fps, so anything printed here is a real regression.
-            const uint32_t total = upd3 - upd0;
-            if (total > 40000UL) {
-                Serial.printf("[perf] SLOW snapshot %u ac: update %lu us, ui %lu us, audio %lu us, total %lu us\n",
-                              (unsigned)g_snap.size(),
-                              (unsigned long)(upd1 - upd0), (unsigned long)(upd2 - upd1),
-                              (unsigned long)(upd3 - upd2), (unsigned long)total);
+            checkAudioEvents();                // ping new-in-range / emergency / military, any screen
+            if (g_radarViewActive) {
+                // Timed because this is the one chunk of per-poll work that lands on the
+                // RENDER thread: everything else about a poll happens on core 0. If a poll
+                // costs a visible stutter, this is where it is spent.
+                const uint32_t upd0 = micros();
+                radar::update(g_snap, g_settings); // rebuild the glyph/trail layer
+                const uint32_t upd1 = micros();
+                ui_on_data_updated();              // refresh card/list/stats
+                const uint32_t upd2 = micros();
+                // Only when it actually costs a frame. This ran on every poll while the
+                // sweep stutter was being hunted, which is the right instrument but the
+                // wrong volume once it is fixed: a healthy snapshot is ~25 ms and saying so
+                // twice a second buries everything else on the console. 40 ms is half a
+                // frame at the radar's ~13 fps, so anything printed here is a real regression.
+                const uint32_t total = upd2 - upd0;
+                if (total > 40000UL) {
+                    Serial.printf("[perf] SLOW snapshot %u ac: update %lu us, ui %lu us, total %lu us\n",
+                                  (unsigned)g_snap.size(),
+                                  (unsigned long)(upd1 - upd0), (unsigned long)(upd2 - upd1),
+                                  (unsigned long)total);
+                }
             }
         }
+    }
+    // The catch-up render. A poll that landed while Flight Tracker was NOT on screen set
+    // g_acDirty, which the block above deliberately ignored for the drawing half, so
+    // g_snap can be sitting on real, current traffic the moment someone actually switches
+    // over, with s_acs (radar_view's own render state) never told about any of it. This
+    // fires exactly once, on the rising edge of g_radarViewActive, and draws from whatever
+    // g_snap already holds, background-warmed data or not, so a scope that was already
+    // being watched needs no catch-up (nothing to add) and a scope someone just switched
+    // to shows what is actually out there instead of an empty dial waiting on the next
+    // poll interval.
+    {
+        static bool s_wasRadarVisible = false;
+        if (g_radarViewActive && !s_wasRadarVisible) {
+            radar::update(g_snap, g_settings);
+            ui_on_data_updated();
+        }
+        s_wasRadarVisible = g_radarViewActive;
     }
     if (g_weatherDirty) {
         g_weatherDirty = false;

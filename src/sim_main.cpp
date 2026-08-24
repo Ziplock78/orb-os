@@ -598,7 +598,7 @@ static void sim_register_apps(lv_obj_t *radarScreen) {
     // headless screenshot of an empty screen would tell nobody anything.
     if (intelview::fetchStep()) intelview::onHeadlinesReady();
     app_shell::add(intelview::screen(), theme_style::names().headlines,
-                   intelview::onPress, nullptr, false, nullptr, nullptr, !theme_style::apps().headlines);
+                   intelview::onPress, intelview::onTurn, false, intelview::onEnter, nullptr, !theme_style::apps().headlines);
     app_shell::begin();   // start on Clock (index 0), matching the device
 }
 
@@ -839,9 +839,19 @@ int main(int argc, char **argv) {
         for (int i = 0; i < 600; ++i) { lv_timer_handler(); SDL_Delay(2); }   // let art decode
         // The boot splash and the app-switcher overlay both live on lv_layer_top, and
         // CUSTOM_BOOT_TARGET==1 parks this build on the About page which holds the splash
-        // up indefinitely. Clearing the top layer is what makes the app underneath
-        // visible; waiting alone never dismisses it.
-        lv_obj_clean(lv_layer_top());
+        // up indefinitely. Getting the top layer out of the way is what makes the app
+        // underneath visible; waiting alone never dismisses it.
+        //
+        // HIDE, do not clean. lv_obj_clean() deleted the app-switcher overlay along with
+        // the splash, and both app_shell and menu_text keep pointers to it — so the
+        // switcher capture at the very end of this function built its canvas on a freed
+        // parent and segfaulted. Every screenshot had already been written by then, which
+        // is exactly why it went unnoticed for so long: the tool did its whole job and
+        // then died, leaving nothing behind but a macOS crash dialog per run. Hiding gets
+        // the same clear view of the app underneath, and show_overlay() un-hides the
+        // overlay itself when openSwitcher() asks for it below.
+        for (uint32_t i = 0; i < lv_obj_get_child_cnt(lv_layer_top()); ++i)
+            lv_obj_add_flag(lv_obj_get_child(lv_layer_top(), i), LV_OBJ_FLAG_HIDDEN);
         for (int i = 0; i < 200; ++i) { lv_timer_handler(); SDL_Delay(2); }
         int ow, oh; SDL_GetRendererOutputSize(s_ren, &ow, &oh);
         // SIM_SETTLE_MS=7000 holds each app up before its capture. The default 400 ms is
@@ -852,6 +862,11 @@ int main(int argc, char **argv) {
         const int settleMs = getenv("SIM_SETTLE_MS") ? atoi(getenv("SIM_SETTLE_MS")) : 400;
         for (int idx = 0; idx < app_shell::count(); ++idx) {
             app_shell::selectApp(idx);
+            // SIM_SETTINGS_ABOUT=1 pushes into the About sub-page once Settings is up, so a
+            // themeshot can check what is otherwise three knob presses deep and never
+            // reachable from the top-level app list this loop already walks.
+            if (getenv("SIM_SETTINGS_ABOUT") && !strcmp(app_shell::name(), "Settings"))
+                settingsview::openAboutPage();
             for (int i = 0; i < settleMs / 2; ++i) { lv_timer_handler(); SDL_Delay(2); }   // let onEnter decode
             lv_refr_now(NULL);
             SDL_RenderClear(s_ren);
@@ -966,6 +981,33 @@ int main(int argc, char **argv) {
         printf("[selftest] Settings>Range: %.0f km -> %.0f km (expect a change, steps 10/20/30/50/100)\n",
                (double)before, (double)after);
         printf("[selftest] Settings>Range: %s\n", (before != after) ? "PASS" : "FAIL (range did not move)");
+
+        // Headlines scroll mode (THEME_CAPS 11): same press-to-own-the-knob grammar as
+        // the Flight Tracker's selection, but only when the theme's type size actually
+        // overflows the dial. With everything fitting, a push stays a refresh and must
+        // NOT capture — both behaviours are asserted, whichever this theme exhibits.
+        app_shell::setCaptured(false);
+        if (app_shell::browsing()) press();
+        app_shell::selectApp(6); pump();          // Headlines; onEnter resets to the top
+        int iFirst, iVis, iCount;
+        intelview::scrollState(iFirst, iVis, iCount);
+        const bool iScrollable = iCount > iVis;
+        printf("[selftest] Intel enter: items=%d visible=%d first=%d captured=%d (expect captured 0)\n",
+               iCount, iVis, iFirst, app_shell::captured());
+        press();
+        const bool iCap1 = app_shell::captured();
+        printf("[selftest] Intel push: captured=%d (expect %d = %s)\n",
+               iCap1, iScrollable ? 1 : 0, iScrollable ? "scroll mode" : "refresh, nothing to scroll");
+        simknob::injectTurn(+1); pump();
+        intelview::scrollState(iFirst, iVis, iCount);
+        printf("[selftest] Intel turn: first=%d (expect %d)\n", iFirst, iScrollable ? 1 : 0);
+        const bool iTurnOk = iFirst == (iScrollable ? 1 : 0);
+        press();
+        const bool iCap2 = app_shell::captured();
+        printf("[selftest] Intel push again: captured=%d (expect 0)\n", iCap2);
+        const bool iOk = iScrollable ? (iCap1 && iTurnOk && !iCap2)
+                                     : (!iCap1 && iTurnOk && !iCap2);
+        printf("[selftest] Intel scroll: %s\n", iOk ? "PASS" : "FAIL");
 
         SDL_Quit();
         return 0;
