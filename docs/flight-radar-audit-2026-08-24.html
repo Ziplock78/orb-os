@@ -1,0 +1,443 @@
+<title>Flight Radar Compliance Audit</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500;600&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&display=swap">
+
+<style>
+  :root {
+    --paper:      #EFF1F4;
+    --surface:    #FFFFFF;
+    --ink:        #15181E;
+    --ink-2:      #454C59;
+    --ink-3:      #6B7381;
+    --rule:       #D3D7DE;
+    --rule-soft:  #E3E6EB;
+    --brass:      #9A6B26;
+    --brass-2:    #7C551F;
+    --brass-wash: #F1E7D6;
+    --slate:      #1B202A;
+    --on-slate:   #DFE3EA;
+    --on-slate-2: #98A2B2;
+    --fail:       #8E2C28;
+    --fail-wash:  #F7E7E5;
+    --pass:       #2C6149;
+    --pass-wash:  #E4EFE9;
+    --partial:    #96631A;
+    --partial-wash: #F4EAD6;
+    --shadow:     0 1px 2px rgba(21,24,30,.05), 0 8px 24px rgba(21,24,30,.05);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --paper: #101318; --surface: #191D24; --ink: #E9EBEF; --ink-2: #A9B1BD; --ink-3: #7D8694;
+      --rule: #2B313B; --rule-soft: #222730; --brass: #D6A055; --brass-2: #E9BE80; --brass-wash: #2A2317;
+      --slate: #0B0E12; --on-slate: #DFE3EA; --on-slate-2: #8D97A6;
+      --fail: #E1897E; --fail-wash: #2B1917; --pass: #85C4A5; --pass-wash: #16211C;
+      --partial: #E0B36E; --partial-wash: #2A2116;
+      --shadow: 0 1px 2px rgba(0,0,0,.4), 0 8px 24px rgba(0,0,0,.3);
+    }
+  }
+  :root[data-theme="dark"] {
+    --paper: #101318; --surface: #191D24; --ink: #E9EBEF; --ink-2: #A9B1BD; --ink-3: #7D8694;
+    --rule: #2B313B; --rule-soft: #222730; --brass: #D6A055; --brass-2: #E9BE80; --brass-wash: #2A2317;
+    --slate: #0B0E12; --on-slate: #DFE3EA; --on-slate-2: #8D97A6;
+    --fail: #E1897E; --fail-wash: #2B1917; --pass: #85C4A5; --pass-wash: #16211C;
+    --partial: #E0B36E; --partial-wash: #2A2116;
+    --shadow: 0 1px 2px rgba(0,0,0,.4), 0 8px 24px rgba(0,0,0,.3);
+  }
+
+  *, *::before, *::after { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--paper); color: var(--ink);
+    font-family: "Source Serif 4", Georgia, serif; font-size: 17px; line-height: 1.62;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 64rem; margin: 0 auto; padding: 0 1.5rem 6rem; }
+
+  header.mast { padding: 4rem 0 0; }
+  .doc-kind {
+    font-family: "IBM Plex Mono", monospace; font-size: .72rem; font-weight: 500;
+    letter-spacing: .16em; text-transform: uppercase; color: var(--brass); margin: 0 0 1.1rem;
+  }
+  h1 {
+    font-family: Archivo, sans-serif; font-weight: 700; font-size: clamp(2.3rem, 6vw, 3.7rem);
+    line-height: .98; letter-spacing: -.026em; margin: 0 0 1.4rem; text-wrap: balance;
+  }
+  .standfirst { font-size: clamp(1.05rem, 2vw, 1.24rem); line-height: 1.5; color: var(--ink-2); max-width: 46ch; margin: 0 0 2.4rem; }
+  .meta {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(9.5rem, 1fr)); gap: 1rem 1.5rem;
+    border-top: 1px solid var(--ink); border-bottom: 1px solid var(--rule); padding: 1.1rem 0 1.2rem; margin-bottom: 3rem;
+  }
+  .meta div { display: flex; flex-direction: column; gap: .3rem; }
+  .meta .k { font-family: "IBM Plex Mono", monospace; font-size: .66rem; letter-spacing: .13em; text-transform: uppercase; color: var(--ink-3); }
+  .meta .v { font-family: Archivo, sans-serif; font-weight: 600; font-size: .93rem; color: var(--ink); font-variant-numeric: tabular-nums; }
+
+  section { margin-bottom: 4rem; }
+  .eyebrow { font-family: "IBM Plex Mono", monospace; font-size: .7rem; font-weight: 500; letter-spacing: .16em; text-transform: uppercase; color: var(--brass); margin: 0 0 .7rem; }
+  h2 { font-family: Archivo, sans-serif; font-weight: 700; font-size: clamp(1.5rem, 3.2vw, 2rem); letter-spacing: -.02em; line-height: 1.14; margin: 0 0 1rem; text-wrap: balance; }
+  .lede { color: var(--ink-2); max-width: 62ch; margin: -.4rem 0 1.8rem; }
+  p { max-width: 66ch; }
+  a { color: var(--brass-2); }
+  code {
+    font-family: "IBM Plex Mono", monospace; font-size: .86em; background: var(--brass-wash); color: var(--brass-2);
+    padding: .1em .35em; border-radius: 2px;
+  }
+
+  /* ---- verdict pill ---------------------------------------------------- */
+  .pill {
+    display: inline-flex; align-items: center; gap: .4rem;
+    font-family: "IBM Plex Mono", monospace; font-size: .68rem; font-weight: 600;
+    letter-spacing: .1em; text-transform: uppercase; padding: .3rem .65rem .32rem; border-radius: 3px;
+    white-space: nowrap;
+  }
+  .pill::before { content: ""; width: .45rem; height: .45rem; border-radius: 50%; display: inline-block; }
+  .pill.fail    { background: var(--fail-wash);    color: var(--fail); }
+  .pill.fail::before    { background: var(--fail); }
+  .pill.pass    { background: var(--pass-wash);    color: var(--pass); }
+  .pill.pass::before    { background: var(--pass); }
+  .pill.partial { background: var(--partial-wash); color: var(--partial); }
+  .pill.partial::before { background: var(--partial); }
+
+  /* ---- scorecard grid ---------------------------------------------------- */
+  .scorecard {
+    display: grid; grid-template-columns: repeat(auto-fill, minmax(15.5rem, 1fr)); gap: .9rem;
+    margin-bottom: 1rem;
+  }
+  .score {
+    background: var(--surface); border: 1px solid var(--rule); box-shadow: var(--shadow);
+    padding: 1.15rem 1.25rem 1.3rem; display: flex; flex-direction: column; gap: .6rem;
+  }
+  .score .row { display: flex; align-items: center; justify-content: space-between; gap: .5rem; }
+  .score .id { font-family: "IBM Plex Mono", monospace; font-size: .74rem; font-weight: 600; color: var(--brass); }
+  .score h4 { font-family: Archivo, sans-serif; font-weight: 600; font-size: 1rem; margin: 0; letter-spacing: -.008em; line-height: 1.25; }
+  .score p { font-size: .87rem; color: var(--ink-2); margin: 0; max-width: none; }
+  .tally {
+    display: flex; gap: 1.6rem; flex-wrap: wrap; margin: 1.6rem 0 2.2rem;
+    font-family: "IBM Plex Mono", monospace; font-size: .82rem;
+  }
+  .tally b { font-family: Archivo, sans-serif; font-size: 1.5rem; display: block; font-weight: 700; letter-spacing: -.02em; }
+  .tally .fail b { color: var(--fail); } .tally .pass b { color: var(--pass); } .tally .partial b { color: var(--partial); }
+
+  /* ---- critical callout --------------------------------------------------- */
+  .critical {
+    background: var(--slate); border-left: 3px solid var(--fail); padding: 1.7rem 1.8rem; margin: 0 0 3rem;
+  }
+  .critical .k { font-family: "IBM Plex Mono", monospace; font-size: .68rem; letter-spacing: .16em; text-transform: uppercase; color: var(--fail); display: block; margin-bottom: .6rem; }
+  .critical h3 { font-family: Archivo, sans-serif; font-weight: 700; font-size: 1.3rem; color: #fff; margin: 0 0 .8rem; letter-spacing: -.012em; }
+  :root[data-theme="dark"] .critical h3, :root:not([data-theme="light"]) .critical h3 { color: var(--on-slate); }
+  .critical p { color: var(--on-slate-2); max-width: 68ch; margin: 0 0 .8rem; font-size: .97rem; }
+  .critical p:last-child { margin-bottom: 0; }
+  .critical .path { color: var(--brass); font-family: "IBM Plex Mono", monospace; font-size: .84rem; }
+
+  /* ---- finding entries ---------------------------------------------------- */
+  .finding { border-top: 1px solid var(--rule); padding: 2rem 0 2.2rem; }
+  .finding:first-of-type { border-top-color: var(--ink); }
+  .finding .head { display: flex; align-items: baseline; gap: .8rem; flex-wrap: wrap; margin-bottom: 1rem; }
+  .finding .tag { font-family: "IBM Plex Mono", monospace; font-size: .78rem; font-weight: 600; color: var(--brass); }
+  .finding h3 { font-family: Archivo, sans-serif; font-weight: 600; font-size: 1.22rem; letter-spacing: -.01em; margin: 0; flex: 1 1 auto; min-width: 12rem; }
+  .finding .charter-line { font-size: .95rem; color: var(--ink-2); border-left: 2px solid var(--rule); padding-left: 1rem; margin: 0 0 1.2rem; }
+  .evidence {
+    background: var(--surface); border: 1px solid var(--rule); box-shadow: var(--shadow);
+    padding: 1.1rem 1.3rem; margin-bottom: 1rem; font-size: .92rem;
+  }
+  .evidence .src {
+    font-family: "IBM Plex Mono", monospace; font-size: .74rem; color: var(--ink-3);
+    letter-spacing: .02em; margin-bottom: .5rem; display: block;
+  }
+  .evidence p { margin: 0; max-width: none; color: var(--ink); }
+  .evidence p + p { margin-top: .6rem; }
+  .verdict-line { font-size: .96rem; margin: 0; }
+  .verdict-line b { font-family: Archivo, sans-serif; }
+
+  /* ---- tables -------------------------------------------------------------- */
+  .scroll { overflow-x: auto; border: 1px solid var(--rule); background: var(--surface); box-shadow: var(--shadow); }
+  table { border-collapse: collapse; width: 100%; min-width: 40rem; font-size: .91rem; }
+  th, td { text-align: left; padding: .75rem .95rem; border-bottom: 1px solid var(--rule-soft); vertical-align: top; }
+  thead th {
+    font-family: "IBM Plex Mono", monospace; font-size: .63rem; letter-spacing: .1em; text-transform: uppercase;
+    color: var(--ink-3); background: var(--paper); border-bottom: 1px solid var(--rule);
+  }
+  tbody tr:last-child td { border-bottom: 0; }
+  td.id { font-family: "IBM Plex Mono", monospace; font-variant-numeric: tabular-nums; white-space: nowrap; font-size: .82rem; color: var(--brass); }
+  td.num { font-family: "IBM Plex Mono", monospace; font-variant-numeric: tabular-nums; white-space: nowrap; }
+
+  /* ---- punch list ---------------------------------------------------------- */
+  .punch { display: flex; flex-direction: column; gap: .7rem; }
+  .punch-item {
+    display: grid; grid-template-columns: 2.2rem 1fr; gap: 0 1rem;
+    background: var(--surface); border: 1px solid var(--rule); box-shadow: var(--shadow); padding: 1rem 1.2rem;
+  }
+  .punch-item .rank { font-family: Archivo, sans-serif; font-weight: 700; font-size: 1.3rem; color: var(--rule); line-height: 1.5; }
+  .punch-item strong { font-family: Archivo, sans-serif; font-weight: 600; font-size: .98rem; }
+  .punch-item p { margin: .3rem 0 0; font-size: .88rem; color: var(--ink-2); }
+  .punch-item .also { font-family: "IBM Plex Mono", monospace; font-size: .7rem; color: var(--ink-3); margin-top: .4rem; }
+
+  ul.plain { padding-left: 1.1rem; max-width: 66ch; }
+  ul.plain li { margin-bottom: .4rem; }
+
+  footer.close { border-top: 1px solid var(--ink); margin-top: 3rem; padding-top: 1.6rem; color: var(--ink-3); font-size: .9rem; }
+
+  @media (max-width: 640px) {
+    .finding .head { flex-direction: column; align-items: flex-start; gap: .4rem; }
+  }
+</style>
+
+<div class="wrap">
+
+  <header class="mast">
+    <p class="doc-kind">Orb / Flight Radar / Compliance audit</p>
+    <h1>Does it meet the charter?</h1>
+    <p class="standfirst">
+      The Flight Radar, checked line by line and on the running device against every
+      principle, state and timing budget in the Flight Radar Charter, version 1.0.
+    </p>
+    <div class="meta">
+      <div><span class="k">Audited</span><span class="v">24 Aug 2026</span></div>
+      <div><span class="k">Against</span><span class="v">Charter v1.0</span></div>
+      <div><span class="k">Method</span><span class="v">Source + live device</span></div>
+      <div><span class="k">Firmware</span><span class="v">1.4.2 / caps 8</span></div>
+      <div><span class="k">Repos</span><span class="v">capsule-radar, buildtheorb</span></div>
+    </div>
+  </header>
+
+  <section>
+    <p class="eyebrow">Result</p>
+    <h2>Three of nine principles pass outright</h2>
+    <p class="lede">
+      Two fail on the running device right now, one of them severely. Two more are
+      built and working but stop short of what the charter actually requires. Two are
+      solid. Details and evidence for every line below.
+    </p>
+    <div class="tally">
+      <div class="fail"><b>3</b>fail</div>
+      <div class="partial"><b>2</b>partial</div>
+      <div class="pass"><b>4</b>pass</div>
+    </div>
+
+    <div class="scorecard">
+      <div class="score"><div class="row"><span class="id">P1</span><span class="pill fail">Fail</span></div><h4>Evenness before rate</h4><p>Sweep interval on the running device averages 239 ms with 78% spread. The budget is 120 ms and 15%.</p></div>
+      <div class="score"><div class="row"><span class="id">P2</span><span class="pill pass">Pass</span></div><h4>Never blames itself</h4><p>Every status string traces to a directly observed fact. The confident-wrong-diagnosis bug is gone and stays gone by design.</p></div>
+      <div class="score"><div class="row"><span class="id">P3</span><span class="pill fail">Fail</span></div><h4>Silence is a claim</h4><p>There is no per-contact staleness dimming. The field meant to carry it is written and never read.</p></div>
+      <div class="score"><div class="row"><span class="id">P4</span><span class="pill pass">Pass</span></div><h4>One voice, never an alarm</h4><p>Exactly one advisory surface exists on the flight radar screen, and it is mutually exclusive with the loading state.</p></div>
+      <div class="score"><div class="row"><span class="id">P5</span><span class="pill pass">Pass</span></div><h4>Empty sky is valid</h4><p>An empty-but-healthy poll does not trip the advisory. The gate that makes this true is deliberate and well built.</p></div>
+      <div class="score"><div class="row"><span class="id">P6</span><span class="pill pass">Pass</span></div><h4>Studio can't overpromise</h4><p>Capability mismatches hard-disable the install button. Refuse, not warn, is real code, not just a comment.</p></div>
+      <div class="score"><div class="row"><span class="id">P7</span><span class="pill partial">Partial</span></div><h4>Cost carried at authoring time</h4><p>The backend fix is real and tested. The panel still never tells the user what anything costs.</p></div>
+      <div class="score"><div class="row"><span class="id">P8</span><span class="pill pass">Pass</span></div><h4>Design says, device does</h4><p>Layer order and aircraft cap both verified live, matching Studio exactly, down to the number.</p></div>
+      <div class="score"><div class="row"><span class="id">P9</span><span class="pill fail">Fail</span></div><h4>Nothing invented</h4><p>A labeled Studio control ships fabricated aircraft to the physical device with no on-screen disclosure. The feed itself is also single-sourced.</p></div>
+    </div>
+  </section>
+
+  <div class="critical">
+    <span class="k">Most severe finding</span>
+    <h3>A Studio control can make the real Orb show fake airplanes, and nothing on the dial says so</h3>
+    <p>
+      The Flight Tracker panel has a plain, labeled toggle: <b>Traffic: Live / Test</b>.
+      Switching it to Test and installing puts eight fabricated aircraft
+      (<code>SIM000</code> through <code>SIM007</code>) on the physical device, drawn
+      through the exact same code path as real contacts. The toggle's own hint text
+      calls this "useful for judging a design... without waiting to see what happens to
+      be overhead," which reads as a preview-time convenience. It is not preview-time.
+      It installs.
+    </p>
+    <p>
+      There is no build guard. <span class="path">main.cpp</span>'s
+      <code>simulated</code> branch compiles into the real firmware unconditionally
+      (platformio.ini excludes only four desktop-only files by name, and main.cpp is
+      not one of them), and <span class="path">theme_style.cpp:482</span> parses the
+      flag with no restriction. Once installed, the dial gives no indication anywhere
+      that what it is showing is not real. This is the one finding in this audit that
+      contradicts the Orb's entire premise, not just a principle within it.
+    </p>
+  </div>
+
+  <section>
+    <p class="eyebrow">Detail</p>
+    <h2>Findings, principle by principle</h2>
+    <p class="lede">Each finding cites the file and line it was verified against, and whether the number came from reading the source or from the device running live.</p>
+
+    <article class="finding" id="f1">
+      <div class="head"><span class="tag">P1</span><h3>Evenness before rate</h3><span class="pill fail">Fail</span></div>
+      <p class="charter-line">Charter requirement: interval spread &le; 15% of mean (T1), mean &le; 120 ms (T2).</p>
+      <div class="evidence">
+        <span class="src">Live device, Steam Punk theme, Flight Tracker, 24 Aug 2026, 75 s / 5 windows</span>
+        <p><code>mean 239 ms</code> (budget 120 ms) &middot; <code>spread 78% of mean</code> (budget 15%) &middot; worst single interval 408 ms.</p>
+        <p>The EMA smoothing itself is sound: measured at boot, before aircraft populate the scope, the same device holds <code>100/102/105 ms, spread 5 ms</code>, comfortably inside both budgets. The failure is not the pacing algorithm. It is the per-frame compositing cost once the full scene is live: a 489&times;489 sweep sprite whose actual ink is an 86&times;272 hand, rotated in full every frame.</p>
+        <p>A fix for exactly this (trimming the sprite to its ink, carrying the pivot with it) was built and unit-tested this session, and its geometry was confirmed correct in the desktop simulator at 0&deg; and 90&deg;. It is not yet validated on the device: an earlier attempt to push it over the serial cable silently failed because the firmware serves themes from a baked flash partition ahead of the SD card, and the improvement briefly reported from that attempt was invalid for the same reason (see Covenant C6 in the charter, which this incident is the receipt for). A live layer-cost pass run before that discovery also found that switching aircraft, glass, and static art off individually did not reduce the frame cost, which means a second, still-unidentified driver is contributing roughly as much as the sprite was.</p>
+      </div>
+      <p class="verdict-line"><b>Fails today.</b> A real fix is in flight but unconfirmed, and it will not close the gap alone.</p>
+    </article>
+
+    <article class="finding" id="f2">
+      <div class="head"><span class="tag">P2</span><h3>The instrument never blames itself for the world</h3><span class="pill pass">Pass</span></div>
+      <p class="charter-line">Charter requirement: every status string maps to one observed fact.</p>
+      <div class="evidence">
+        <span class="src">radar_view.cpp:2754-2793, setFeedStatus()</span>
+        <p>The banner shows <code>"No aircraft data"</code> gated purely on elapsed time since the last successful poll, nothing else. The function's own comment documents the incident this replaced: a banner that said <em>"WiFi is fine, the service is not answering"</em> while the service in fact answered a laptop in 1.3 s and the Orb was unreachable. The fix is now load-bearing in the code itself: <code>"STATE ONLY, NEVER A CAUSE."</code></p>
+        <p>The one HTTP-refusal message that does name a cause (<span class="src" style="display:inline">main.cpp:414</span>, "the service is refusing requests") is gated on an actually-observed 4xx status code, not inferred, so it holds to the same standard.</p>
+      </div>
+      <p class="verdict-line"><b>Passes.</b> This is the principle the team paid most dearly to learn, and it shows.</p>
+    </article>
+
+    <article class="finding" id="f3">
+      <div class="head"><span class="tag">P3</span><h3>Silence is a claim</h3><span class="pill fail">Fail</span></div>
+      <p class="charter-line">Charter requirement: contacts dim at 60 s, outline at 120 s, earn an advisory at 180 s (T4).</p>
+      <div class="evidence">
+        <span class="src">aircraft.h:26, adsb_client.cpp:351, main.cpp:361</span>
+        <p><code>Aircraft.lastUpdateMs</code> is declared <code>// millis() when we last saw it (for trails/expiry)</code> and is written on every ingest. It is never read anywhere outside ingest. There is no expiry logic and no staleness-driven dimming for individual contacts.</p>
+        <p>An aircraft's presence on the dial today is binary: it is drawn at full fidelity if this poll's response contained it, and it vanishes without any transition the instant one poll misses it. ADS-B position reports gap routinely, so this reads as flicker rather than as the graduated staleness the charter specifies.</p>
+      </div>
+      <p class="verdict-line"><b>Fails.</b> The field the mechanism needs already exists and is already populated. Nothing reads it.</p>
+    </article>
+
+    <article class="finding" id="f4">
+      <div class="head"><span class="tag">P4</span><h3>One voice, never an alarm</h3><span class="pill pass">Pass</span></div>
+      <p class="charter-line">Charter requirement: at most one advisory, lowest in the hierarchy, never modal.</p>
+      <div class="evidence">
+        <span class="src">radar_view.cpp, s_feedWarn (banner) and s_loading (loading screen)</span>
+        <p>Exactly one banner-class element exists on the flight radar screen. It and the loading screen are explicitly mutually exclusive (<code>if (s_loadingPending) { show(s_feedWarn, false); return; }</code>). Nothing modal, nothing that blocks the dial.</p>
+        <p>Worth noting for completeness: the HUD signal-bars icon (<span class="src" style="display:inline">ui.cpp:297</span>) also turns amber on a stale feed, ambient chrome rather than an advisory, comparable to a battery icon, so it does not count as a second voice under the charter's own definition. It does mean the same fact is expressed twice at once, once as icon color and once as banner text, which is harmless but worth being deliberate about.</p>
+      </div>
+      <p class="verdict-line"><b>Passes.</b></p>
+    </article>
+
+    <article class="finding" id="f5">
+      <div class="head"><span class="tag">P5</span><h3>An empty sky is a valid reading</h3><span class="pill pass">Pass</span></div>
+      <p class="charter-line">Charter requirement: zero aircraft in range must look like a healthy instrument.</p>
+      <div class="evidence">
+        <span class="src">main.cpp:374, snapshot_gate.h</span>
+        <p><code>g_lastFeedOkMs</code>, the clock the advisory banner reads, updates on <em>any</em> successful poll, including one that returns zero aircraft. A steady-state empty sky with a healthy feed never trips <code>"No aircraft data"</code>: the message is genuinely about feed silence, not sky silence.</p>
+        <p>One edge case sits outside this: on a true cold boot into a durably empty sky, <code>AircraftSnapshotGate</code> withholds the very first empty result (to prevent one flickered blank poll from clearing real contacts) and only publishes once <code>AC_STALE_MS</code> (15 s) has passed since the first empty poll, which at a 10 s poll interval takes roughly two cycles. Worst case the loading screen can sit for 20-30 s before showing a correctly empty, healthy dial. The charter has no timing budget covering this specific case, which is a gap in the charter as written, not only in the code.</p>
+      </div>
+      <p class="verdict-line"><b>Passes</b> in steady state. The charter should get a budget for first-boot-into-empty-sky; see the punch list.</p>
+    </article>
+
+    <article class="finding" id="f6">
+      <div class="head"><span class="tag">P6</span><h3>The tool cannot promise what the device cannot deliver</h3><span class="pill pass">Pass</span></div>
+      <p class="charter-line">Charter requirement: refuse an install on a capability mismatch, never warn and proceed.</p>
+      <div class="evidence">
+        <span class="src">orb-caps.ts:1-15, studio.tsx:3366</span>
+        <p>The design rule is stated in the code's own comment (<code>"The rule Studio follows is refuse, not warn. A warning that is dismissed leaves exactly the state we are trying to make impossible"</code>) and it is genuinely enforced: <code>disabled={installing || !isSupported()}</code> hard-disables the install button, not a dismissible banner beside an active one.</p>
+        <p>One gap in the evidence, not the behavior: the charter's proof clause calls for "preview parity captures rendered from the same theme through both paths." That capability exists (<code>--themeshot</code>, used manually in this session) but is not wired into any automated check. Parity is provable on demand, not continuously proven.</p>
+      </div>
+      <p class="verdict-line"><b>Passes.</b> The one gap is in how the guarantee is verified over time, not in whether it holds today.</p>
+    </article>
+
+    <article class="finding" id="f7">
+      <div class="head"><span class="tag">P7</span><h3>A design choice carries its cost at authoring time</h3><span class="pill partial">Partial</span></div>
+      <p class="charter-line">Charter requirement: Studio states a cost, in the user's units, while the choice is being made.</p>
+      <div class="evidence">
+        <span class="src">theme-forge.ts:2058-2135 (planSweepTrim, bakeSweepSprite); studio.tsx:2230</span>
+        <p>The backend half is real: every rotating sweep sprite is now trimmed to its opaque bounds at bake time, with a regression test asserting the pivot travels with the crop so no pixel moves. This is a genuine, tested fix for the exact defect that cost two days this week.</p>
+        <p>The front-end half the charter calls for does not exist. <code>bakeSweepSprite</code>'s result (how much was trimmed, what it will now cost) is consumed only inside the export pipeline and never reaches the panel. The single cost-adjacent line in the entire Flight Tracker panel is a hint on trail steps that explicitly punts the estimate to the user: <em>"watch the dial rather than the number."</em> A user uploading an oversized sweep image today gets a silently-corrected result with no visibility into what happened or why.</p>
+      </div>
+      <p class="verdict-line"><b>Partial.</b> The device is protected from the mistake. The person authoring it is never told the mistake was there.</p>
+    </article>
+
+    <article class="finding" id="f8">
+      <div class="head"><span class="tag">P8</span><h3>What the design says, the device does exactly</h3><span class="pill pass">Pass</span></div>
+      <p class="charter-line">Charter requirement: authored values are promises, honored literally or refused.</p>
+      <div class="evidence">
+        <span class="src">radar_view.cpp:1299-1345 (applyRadarLayerOrder); live device, 24 Aug 2026</span>
+        <p>Layer-kind numbering matches exactly between firmware and Studio (0 sweep, 1 aircraft, 2 info card, 3/4 static art, 5 wash, confirmed on both sides). The card fix from earlier this week (plate, card, and text now move as one unit) ships a self-check that reads LVGL's actual sibling order back and prints it, rather than trusting the order array alone.</p>
+        <p>Cap fidelity was confirmed live in the same session as this audit: <code>[acdbg] feed=12 inRange=10 flying=10 drawn=7 cap=7</code>. The authored cap and the device's own report of what it drew match exactly, and the ceiling both sides clamp against (<code>MAX_AIRCRAFT</code> in Studio, <code>ADSB_MAX_AIRCRAFT</code> in firmware) is the identical value, 12, on both sides, so there is no silent divergence possible through the normal UI.</p>
+      </div>
+      <p class="verdict-line"><b>Passes,</b> with live confirmation, not just code review.</p>
+    </article>
+
+    <article class="finding" id="f9">
+      <div class="head"><span class="tag">P9</span><h3>Nothing on the dial is invented</h3><span class="pill fail">Fail</span></div>
+      <p class="charter-line">Charter requirement: every contact is real; no demo data in shipping firmware; no dependence on a single feed provider.</p>
+      <div class="evidence">
+        <span class="src">studio.tsx:2995-3003; main.cpp:314-364; theme_style.cpp:482; platformio.ini build_src_filter</span>
+        <p>Covered in full above. The Traffic Live/Test toggle is a plain, labeled, always-available control, not a hidden or legacy field, and the device-side code that honors it compiles into every production build with no guard.</p>
+        <span class="src">config.h:84-91</span>
+        <p>Separately: the code openly documents that it is <code>"genuinely single-sourced."</code> adsb.lol is the only reachable provider because the board cannot do TLS at all and every alternative provider is either HTTPS-only or actively refusing requests. This is a disclosed, understood constraint with a real cause, not an oversight, but it still means a whole category of aircraft can disappear if that one provider has a bad day, which is exactly what the charter's forbid clause names.</p>
+      </div>
+      <p class="verdict-line"><b>Fails, on both counts.</b> The synthetic-traffic path is the more serious of the two and should be treated as urgent.</p>
+    </article>
+  </section>
+
+  <section>
+    <p class="eyebrow">Cross-check</p>
+    <h2>States and timing budgets</h2>
+    <div class="scroll">
+      <table>
+        <thead><tr><th>State</th><th>Charter says</th><th>Verdict</th></tr></thead>
+        <tbody>
+          <tr><td class="id">S1</td><td>One determinate line naming the step, never open-ended "loading"</td><td><span class="pill fail">Fail</span>. Default text is <code>"Loading aircraft&#10;and location data"</code>, unchanged whether 3 s or 3 min have passed. This is the exact pattern the charter names as forbidden, and the exact thing a real user asked about mid-session tonight.</td></tr>
+          <tr><td class="id">S2 / S3</td><td>Sweep keeps turning, contacts age on schedule, one low advisory</td><td><span class="pill partial">Partial</span>. The single advisory holds (P2, P4 pass), but the "contacts age on schedule" half needs P3, which does not exist.</td></tr>
+          <tr><td class="id">S4</td><td>Full fidelity, capped as authored</td><td><span class="pill pass">Pass</span>, confirmed live (P8).</td></tr>
+          <tr><td class="id">S5</td><td>Identical to S4 minus the contacts, no messaging</td><td><span class="pill pass">Pass</span> in steady state (P5); see the first-boot edge case under P5 above.</td></tr>
+          <tr><td class="id">S6</td><td>Outlined rather than filled past T4</td><td><span class="pill fail">Fail</span>. There is no outlined state; this is the same gap as P3.</td></tr>
+          <tr><td class="id">S7</td><td>Determinate progress, sweep suspended</td><td>Not re-audited here; out of scope for this pass.</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="scroll" style="margin-top:1.2rem">
+      <table>
+        <thead><tr><th>ID</th><th>Budget</th><th>Threshold</th><th>Measured</th><th>Verdict</th></tr></thead>
+        <tbody>
+          <tr><td class="id">T1</td><td>Sweep spread / mean</td><td class="num">&le; 15%</td><td class="num">78%</td><td><span class="pill fail">Fail</span></td></tr>
+          <tr><td class="id">T2</td><td>Sweep mean interval</td><td class="num">&le; 120 ms</td><td class="num">239 ms</td><td><span class="pill fail">Fail</span></td></tr>
+          <tr><td class="id">T3</td><td>Boot to first real contact</td><td class="num">&le; 25 s</td><td class="num">not remeasured</td><td>Deferred</td></tr>
+          <tr><td class="id">T4</td><td>Dim / outline / advisory schedule</td><td class="num">60 / 120 / 180 s</td><td class="num">mechanism absent</td><td><span class="pill fail">Fail</span></td></tr>
+          <tr><td class="id">T5</td><td>Cached identity shown</td><td class="num">&le; 400 ms</td><td class="num">not timed; architecturally near-instant</td><td><span class="pill pass">Likely pass</span></td></tr>
+          <tr><td class="id">T6</td><td>Card persists through an in-flight lookup</td><td class="num">&ge; 5 s</td><td class="num">20 s baseline, extends on new data</td><td><span class="pill pass">Pass</span></td></tr>
+          <tr><td class="id">T7</td><td>Determinate progress on any &gt;2 s install step</td><td class="num">&le; 2 s silent</td><td class="num">not re-audited</td><td>Deferred</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section>
+    <p class="eyebrow">Action</p>
+    <h2>What to fix, in order</h2>
+    <div class="punch">
+      <div class="punch-item">
+        <span class="rank">1</span>
+        <div><strong>Close or gate the Test traffic path before it ships to anyone else.</strong>
+        <p>Either remove synthetic traffic from the device build entirely and keep it simulator-only, or force an unmissable, permanent on-screen mark whenever <code>simulate</code> is active. This is the one finding that breaks the Orb's core promise.</p>
+        <p class="also">P9 &middot; main.cpp:314, studio.tsx:2995</p></div>
+      </div>
+      <div class="punch-item">
+        <span class="rank">2</span>
+        <div><strong>Reinstall Steam Punk to actually load the sweep trim, then find the second cost driver.</strong>
+        <p>The trim is built and geometrically verified but not yet confirmed on-device. Even if it lands cleanly, the layer-pricing pass showed something else is costing roughly as much per frame and it was never identified.</p>
+        <p class="also">P1 / T1 / T2 &middot; radar_view.cpp sweep_timer_cb</p></div>
+      </div>
+      <div class="punch-item">
+        <span class="rank">3</span>
+        <div><strong>Build per-contact staleness dimming.</strong>
+        <p>The data the mechanism needs already exists and is already correct. This is wiring, not discovery: read <code>lastUpdateMs</code> against three thresholds and scale opacity or switch to an outline style.</p>
+        <p class="also">P3 / T4 &middot; aircraft.h:26</p></div>
+      </div>
+      <div class="punch-item">
+        <span class="rank">4</span>
+        <div><strong>Replace the static "Loading aircraft and location data" text with a determinate line.</strong>
+        <p>Name the actual step (waiting on position fix, waiting on first poll, elapsed time), so a slow boot reads as progress rather than as a hang. This is the literal complaint raised earlier tonight.</p>
+        <p class="also">S1 &middot; radar_view.cpp:1445</p></div>
+      </div>
+      <div class="punch-item">
+        <span class="rank">5</span>
+        <div><strong>Surface the sweep trim's result in the panel.</strong>
+        <p>Even a single line, "trimmed an oversized sweep image, no visual change," turns a silent correction into the authoring-time signal P7 actually asks for.</p>
+        <p class="also">P7 &middot; theme-forge.ts:2129</p></div>
+      </div>
+      <div class="punch-item">
+        <span class="rank">6</span>
+        <div><strong>Scope a plain-HTTP aggregator gateway.</strong>
+        <p>The device cannot do TLS, full stop, so real multi-source failover has to live off-device. This is infrastructure, not firmware, and is already precisely diagnosed in the code's own comments.</p>
+        <p class="also">P9 &middot; config.h:84</p></div>
+      </div>
+    </div>
+  </section>
+
+  <footer class="close">
+    Method note: P2, P3, P4, P6, P7, P8, P9 and the state/timing cross-check were verified by
+    reading the shipping source in both repositories. P1, P5, and the P8 cap check were also
+    confirmed live against the physical device on 24 Aug 2026. T3 and T7 were not re-measured
+    in this pass. Nothing here was assumed from memory of earlier sessions without being
+    checked against the code as it stands today, per the charter's own Covenant C6.
+  </footer>
+
+</div>

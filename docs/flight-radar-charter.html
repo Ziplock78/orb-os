@@ -1,0 +1,908 @@
+<title>Flight Radar Charter</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500;600&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&display=swap">
+
+<style>
+  /* Light is the base palette. Neutrals are biased cool, toward the slate the
+     covenants are set on, so the brass accent has something to sit against that
+     is not a default grey. */
+  :root {
+    --paper:      #EFF1F4;
+    --surface:    #FFFFFF;
+    --ink:        #15181E;
+    --ink-2:      #454C59;
+    --ink-3:      #6B7381;
+    --rule:       #D3D7DE;
+    --rule-soft:  #E3E6EB;
+    --brass:      #9A6B26;
+    --brass-2:    #7C551F;
+    --brass-wash: #F1E7D6;
+    --slate:      #1B202A;
+    --on-slate:   #DFE3EA;
+    --on-slate-2: #98A2B2;
+    --forbid:     #8E2C28;
+    --verify:     #2C6149;
+    --shadow:     0 1px 2px rgba(21,24,30,.05), 0 8px 24px rgba(21,24,30,.05);
+  }
+  /* System dark. Guarded so an explicit light choice still wins on a dark OS. */
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --paper:      #101318;
+      --surface:    #191D24;
+      --ink:        #E9EBEF;
+      --ink-2:      #A9B1BD;
+      --ink-3:      #7D8694;
+      --rule:       #2B313B;
+      --rule-soft:  #222730;
+      --brass:      #D6A055;
+      --brass-2:    #E9BE80;
+      --brass-wash: #2A2317;
+      --slate:      #0B0E12;
+      --on-slate:   #DFE3EA;
+      --on-slate-2: #8D97A6;
+      --forbid:     #DE8E84;
+      --verify:     #85C4A5;
+      --shadow:     0 1px 2px rgba(0,0,0,.4), 0 8px 24px rgba(0,0,0,.3);
+    }
+  }
+  /* Explicit dark choice wins in the other direction. */
+  :root[data-theme="dark"] {
+    --paper:      #101318;
+    --surface:    #191D24;
+    --ink:        #E9EBEF;
+    --ink-2:      #A9B1BD;
+    --ink-3:      #7D8694;
+    --rule:       #2B313B;
+    --rule-soft:  #222730;
+    --brass:      #D6A055;
+    --brass-2:    #E9BE80;
+    --brass-wash: #2A2317;
+    --slate:      #0B0E12;
+    --on-slate:   #DFE3EA;
+    --on-slate-2: #8D97A6;
+    --forbid:     #DE8E84;
+    --verify:     #85C4A5;
+    --shadow:     0 1px 2px rgba(0,0,0,.4), 0 8px 24px rgba(0,0,0,.3);
+  }
+
+  *, *::before, *::after { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    background: var(--paper);
+    color: var(--ink);
+    font-family: "Source Serif 4", Georgia, "Times New Roman", serif;
+    font-size: 17px;
+    line-height: 1.62;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .wrap { max-width: 62rem; margin: 0 auto; padding: 0 1.5rem 6rem; }
+
+  /* ---- masthead: a spec sheet, not a hero ---------------------------------- */
+  header.mast { padding: 4.5rem 0 0; }
+  .doc-kind {
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+    font-size: .72rem; font-weight: 500; letter-spacing: .16em;
+    text-transform: uppercase; color: var(--brass); margin: 0 0 1.1rem;
+  }
+  h1 {
+    font-family: Archivo, "Helvetica Neue", Arial, sans-serif;
+    font-weight: 700; font-size: clamp(2.6rem, 7vw, 4.4rem);
+    line-height: .98; letter-spacing: -.028em;
+    margin: 0 0 1.6rem; text-wrap: balance;
+  }
+  .standfirst {
+    font-size: clamp(1.1rem, 2.2vw, 1.32rem); line-height: 1.5;
+    color: var(--ink-2); max-width: 42ch; margin: 0 0 2.6rem;
+  }
+  .meta {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(9.5rem, 1fr));
+    gap: 1rem 1.5rem;
+    border-top: 1px solid var(--ink); border-bottom: 1px solid var(--rule);
+    padding: 1.1rem 0 1.2rem; margin-bottom: 4rem;
+  }
+  .meta div { display: flex; flex-direction: column; gap: .3rem; }
+  .meta dt, .meta .k {
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+    font-size: .66rem; letter-spacing: .13em; text-transform: uppercase;
+    color: var(--ink-3);
+  }
+  .meta .v {
+    font-family: Archivo, sans-serif; font-weight: 600; font-size: .93rem;
+    color: var(--ink); font-variant-numeric: tabular-nums;
+  }
+
+  /* ---- sections ------------------------------------------------------------ */
+  section { margin-bottom: 4.5rem; }
+  .eyebrow {
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+    font-size: .7rem; font-weight: 500; letter-spacing: .16em;
+    text-transform: uppercase; color: var(--brass);
+    margin: 0 0 .7rem;
+  }
+  h2 {
+    font-family: Archivo, sans-serif; font-weight: 700;
+    font-size: clamp(1.6rem, 3.6vw, 2.15rem); letter-spacing: -.02em;
+    line-height: 1.12; margin: 0 0 1.4rem; text-wrap: balance;
+  }
+  h2 + .lede { color: var(--ink-2); max-width: 60ch; margin: -.6rem 0 2rem; }
+  p { max-width: 66ch; }
+  a { color: var(--brass-2); }
+
+  /* ---- principle entries: margin ID + body, a spec-sheet convention -------- */
+  .p {
+    display: grid; grid-template-columns: 5.5rem 1fr; gap: 0 1.75rem;
+    border-top: 1px solid var(--rule);
+    padding: 2rem 0 2.2rem;
+  }
+  .p:first-of-type { border-top-color: var(--ink); }
+  .tag {
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+    font-size: .78rem; font-weight: 600; letter-spacing: .06em;
+    color: var(--brass); display: block; padding-top: .35rem;
+  }
+  .p h3 {
+    font-family: Archivo, sans-serif; font-weight: 600;
+    font-size: 1.3rem; letter-spacing: -.012em; line-height: 1.22;
+    margin: 0 0 .8rem; text-wrap: balance;
+  }
+  .stmt {
+    font-size: 1.06rem; color: var(--ink); margin: 0 0 1.25rem;
+    border-left: 2px solid var(--brass); padding-left: 1rem;
+  }
+  dl.facets { margin: 0; display: flex; flex-direction: column; gap: .95rem; }
+  dl.facets > div { display: grid; grid-template-columns: 6.5rem 1fr; gap: 0 1rem; }
+  dl.facets dt {
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+    font-size: .66rem; letter-spacing: .11em; text-transform: uppercase;
+    padding-top: .42rem;
+  }
+  dl.facets dd { margin: 0; color: var(--ink-2); font-size: .96rem; }
+  .f-why dt     { color: var(--ink-3); }
+  .f-forbid dt  { color: var(--forbid); }
+  .f-proof dt   { color: var(--verify); }
+
+  /* ---- tables -------------------------------------------------------------- */
+  .scroll { overflow-x: auto; border: 1px solid var(--rule); background: var(--surface); box-shadow: var(--shadow); }
+  table { border-collapse: collapse; width: 100%; min-width: 42rem; font-size: .93rem; }
+  th, td { text-align: left; padding: .8rem 1rem; border-bottom: 1px solid var(--rule-soft); vertical-align: top; }
+  thead th {
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+    font-size: .64rem; letter-spacing: .12em; text-transform: uppercase;
+    color: var(--ink-3); background: var(--paper); border-bottom: 1px solid var(--rule);
+    position: sticky; top: 0;
+  }
+  tbody tr:last-child td { border-bottom: 0; }
+  td.id, td.num {
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+    font-variant-numeric: tabular-nums; white-space: nowrap;
+    font-size: .84rem; color: var(--brass);
+  }
+  td.num { color: var(--ink); }
+  td strong { font-family: Archivo, sans-serif; font-weight: 600; font-size: .92rem; }
+
+  /* ---- covenants: set on slate, because they bind us and not the user ------ */
+  .covenant {
+    background: var(--slate); color: var(--on-slate);
+    border-left: 2px solid var(--brass);
+    padding: 1.6rem 1.7rem; margin-bottom: 1.1rem;
+  }
+  .covenant h3 {
+    font-family: Archivo, sans-serif; font-weight: 600; font-size: 1.12rem;
+    margin: 0 0 .6rem; color: #fff; letter-spacing: -.01em;
+  }
+  :root[data-theme="dark"] .covenant h3, :root:not([data-theme="light"]) .covenant h3 { color: var(--on-slate); }
+  .covenant .cid {
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+    font-size: .68rem; letter-spacing: .13em; color: var(--brass);
+    display: block; margin-bottom: .5rem;
+  }
+  .covenant p { color: var(--on-slate-2); margin: 0 0 .8rem; font-size: .95rem; max-width: 68ch; }
+  .covenant p:last-child { margin-bottom: 0; }
+  .covenant .rule-line { color: var(--on-slate); }
+  .covenant .paid {
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+    font-size: .78rem; line-height: 1.55; color: var(--on-slate-2);
+    border-top: 1px solid rgba(255,255,255,.12); padding-top: .8rem; margin-top: 1rem;
+  }
+  .covenant .paid b { color: var(--brass); font-weight: 500; }
+
+  /* ---- pull quote ---------------------------------------------------------- */
+  blockquote {
+    margin: 2.5rem 0; padding: 0; border: 0;
+    font-family: Archivo, sans-serif; font-weight: 600;
+    font-size: clamp(1.35rem, 3.4vw, 1.85rem); line-height: 1.28;
+    letter-spacing: -.018em; color: var(--ink); max-width: 30ch; text-wrap: balance;
+  }
+  blockquote .attrib {
+    display: block; margin-top: .9rem;
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+    font-size: .68rem; font-weight: 400; letter-spacing: .12em;
+    text-transform: uppercase; color: var(--ink-3);
+  }
+
+  ul.plain { padding-left: 1.1rem; max-width: 66ch; }
+  ul.plain li { margin-bottom: .45rem; }
+
+  code {
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+    font-size: .86em; background: var(--brass-wash); color: var(--brass-2);
+    padding: .1em .35em; border-radius: 2px;
+  }
+  :root[data-theme="dark"] code, :root:not([data-theme="light"]) code { color: var(--brass-2); }
+
+  footer.close {
+    border-top: 1px solid var(--ink); margin-top: 4rem; padding-top: 1.6rem;
+    color: var(--ink-3); font-size: .9rem;
+  }
+
+  @media (max-width: 720px) {
+    .p { grid-template-columns: 1fr; gap: .4rem; }
+    .tag { padding-top: 0; }
+    dl.facets > div { grid-template-columns: 1fr; gap: .15rem; }
+    dl.facets dt { padding-top: 0; }
+  }
+
+  @media (prefers-reduced-motion: no-preference) {
+    html { scroll-behavior: smooth; }
+  }
+</style>
+
+<div class="wrap">
+
+  <header class="mast">
+    <p class="doc-kind">Orb / Flight Radar / Experience charter</p>
+    <h1>Flight Radar Charter</h1>
+    <p class="standfirst">
+      What the Flight Radar must feel like, what that forbids us from building, and
+      how every requirement is proven before we call it done.
+    </p>
+    <div class="meta">
+      <div><span class="k">Version</span><span class="v">1.0</span></div>
+      <div><span class="k">Status</span><span class="v">Binding</span></div>
+      <div><span class="k">Scope</span><span class="v">Firmware + Orb Studio</span></div>
+      <div><span class="k">Adopted</span><span class="v">23 Aug 2026</span></div>
+      <div><span class="k">Supersedes</span><span class="v">Nothing</span></div>
+    </div>
+  </header>
+
+  <section>
+    <p class="eyebrow">Preamble</p>
+    <h2>The Orb is an instrument, not an application</h2>
+    <p>
+      It sits on a desk inside peripheral vision and is looked at far more often than it is
+      used. The typical interaction is a glance of under two seconds from across a room, and
+      the question behind that glance is almost never "what is that aircraft." It is
+      "is anything happening, and is my instrument alive."
+    </p>
+    <p>
+      Everything below follows from one finding that cost us two weeks and one visibly broken
+      device to learn properly:
+    </p>
+
+    <blockquote>
+      An instrument earns trust through rhythm, and loses it through hesitation.
+      <span class="attrib">The finding this charter is built on</span>
+    </blockquote>
+
+    <p>
+      Our users do not measure frame rate. They measure whether the thing looks like it is
+      working. Those are different quantities, they are optimised by different decisions, and
+      for two weeks we optimised the wrong one.
+    </p>
+    <p>
+      This document is binding. Every software requirement for the Flight Radar, in firmware
+      and in Orb Studio, must trace to a principle here. A requirement that traces to nothing
+      is out of scope. A principle a requirement cannot satisfy is an escalation, not a
+      negotiation. Nothing in this charter is aspirational. Every line was paid for, and the
+      receipts are in Part VI.
+    </p>
+  </section>
+
+  <section>
+    <p class="eyebrow">Part I</p>
+    <h2>The glance contract</h2>
+    <p class="lede">
+      Three commitments that define the surface everything else is designed onto.
+    </p>
+    <ul class="plain">
+      <li>
+        <strong>Legible in under two seconds, from two metres, in peripheral vision.</strong>
+        If a state needs to be read to be understood, it is designed for the wrong distance.
+      </li>
+      <li>
+        <strong>Never demands attention it cannot repay.</strong> An ambient object that
+        interrupts gets turned around to face the wall. Interruption is the most expensive
+        act available to us and is spent at most once.
+      </li>
+      <li>
+        <strong>Trustworthy without interrogation.</strong> The moment a user has to check
+        whether the dial is current, the instrument has already failed at its only job.
+      </li>
+    </ul>
+  </section>
+
+  <section>
+    <p class="eyebrow">Part II</p>
+    <h2>Experience principles</h2>
+    <p class="lede">
+      Nine principles. Each states what must be true, why humans read it that way, what it
+      forbids, and the evidence that settles a dispute about it.
+    </p>
+
+    <article class="p" id="p1">
+      <div><span class="tag">P1</span></div>
+      <div>
+        <h3>Evenness before rate</h3>
+        <p class="stmt">
+          The sweep's frame to frame interval must be even before it is fast. Where the two
+          conflict, evenness wins, every time.
+        </p>
+        <dl class="facets">
+          <div class="f-why"><dt>Why</dt><dd>
+            Human motion perception is tuned far more finely to constant velocity than to
+            temporal resolution. Nobody can tell 8 frames per second from 12. Everybody reads
+            a step that arrives late as the mechanism <em>straining</em>, and a straining
+            mechanism is one that is about to fail. Identical nominal frame rates, delivered
+            evenly and unevenly, produce opposite judgements of whether the product is any
+            good.
+          </dd></div>
+          <div class="f-forbid"><dt>Forbids</dt><dd>
+            Treating frames per second as a success metric. Deriving the sweep's angular step
+            from a raw frame time rather than a smoothed one. Any per frame cost that varies
+            with the sweep's own angle.
+          </dd></div>
+          <div class="f-proof"><dt>Proven by</dt><dd>
+            Interval spread across a rolling window, never the average. See <code>T1</code>.
+          </dd></div>
+        </dl>
+      </div>
+    </article>
+
+    <article class="p" id="p2">
+      <div><span class="tag">P2</span></div>
+      <div>
+        <h3>The instrument never blames itself for the world</h3>
+        <p class="stmt">
+          When data stops arriving, the dial must distinguish "I am broken" from "the sky is
+          quiet" from "the source is not answering," and must never assert a cause it has not
+          directly observed.
+        </p>
+        <dl class="facets">
+          <div class="f-why"><dt>Why</dt><dd>
+            People attribute failure to the nearest visible agent. An Orb that goes blank
+            because a third party feed started refusing requests is, to its owner, a broken
+            Orb. A confident wrong explanation is worse than none: it spends trust on a claim
+            the user can disprove in ten seconds with the phone in their hand.
+          </dd></div>
+          <div class="f-forbid"><dt>Forbids</dt><dd>
+            Any status text asserting a cause that is not directly measured. Radio association
+            is not internet reachability. Reachability is not service health. We have shipped
+            a banner that said the network was fine while the device could not reach anything.
+          </dd></div>
+          <div class="f-proof"><dt>Proven by</dt><dd>
+            Every user visible status string maps to one observed fact, enumerated in the
+            status ledger. A string with no fact behind it does not ship.
+          </dd></div>
+        </dl>
+      </div>
+    </article>
+
+    <article class="p" id="p3">
+      <div><span class="tag">P3</span></div>
+      <div>
+        <h3>Silence is a claim</h3>
+        <p class="stmt">
+          A dial showing old contacts without saying they are old is lying. Staleness must be
+          expressed in the instrument's own visual language before it is ever expressed in
+          words.
+        </p>
+        <dl class="facets">
+          <div class="f-why"><dt>Why</dt><dd>
+            An ambient display's whole value is being trustable at a glance. But text is the
+            most expensive element on a glanceable surface, because reading is not glancing.
+            Dimming a contact costs nothing and says the same thing.
+          </dd></div>
+          <div class="f-forbid"><dt>Forbids</dt><dd>
+            Rendering contacts past the staleness threshold at full fidelity. Using words as
+            the first expression of degradation.
+          </dd></div>
+          <div class="f-proof"><dt>Proven by</dt><dd>
+            The state table in Part III, which defines the dial's appearance in every world
+            state including the ones we would rather not think about.
+          </dd></div>
+        </dl>
+      </div>
+    </article>
+
+    <article class="p" id="p4">
+      <div><span class="tag">P4</span></div>
+      <div>
+        <h3>One voice, never an alarm</h3>
+        <p class="stmt">
+          At most one advisory may be present at a time. It is the lowest element in the
+          visual hierarchy. It is never modal, never animated, never repeated, and never
+          covers the dial.
+        </p>
+        <dl class="facets">
+          <div class="f-why"><dt>Why</dt><dd>
+            Alarm fatigue is the best documented failure mode in clinical monitoring: a device
+            that warns often teaches its users to stop reading warnings, including the one
+            that mattered. On a desk object the penalty arrives faster, because the user can
+            simply stop looking at it.
+          </dd></div>
+          <div class="f-forbid"><dt>Forbids</dt><dd>
+            Modal errors. Toasts. Blinking. More than one advisory. Any advisory at all for a
+            condition the user cannot act on.
+          </dd></div>
+          <div class="f-proof"><dt>Proven by</dt><dd>
+            Advisory audit: count and hierarchy position recorded for every state in Part III.
+          </dd></div>
+        </dl>
+      </div>
+    </article>
+
+    <article class="p" id="p5">
+      <div><span class="tag">P5</span></div>
+      <div>
+        <h3>An empty sky is a valid reading</h3>
+        <p class="stmt">
+          Zero aircraft in range must look exactly like a healthy instrument, because that is
+          what it is.
+        </p>
+        <dl class="facets">
+          <div class="f-why"><dt>Why</dt><dd>
+            A user who set a 30 km range and a five contact cap will, at three in the morning,
+            see nothing. If nothing looks like failure, we have taught them that our
+            instrument fails every night. The sweep turning over a correctly dressed empty
+            dial is the entire signal: the machine is alive and the sky is quiet.
+          </dd></div>
+          <div class="f-forbid"><dt>Forbids</dt><dd>
+            Any "no data" messaging triggered by an empty but healthy result. Any visual
+            difference between "no aircraft" and "no aircraft yet."
+          </dd></div>
+          <div class="f-proof"><dt>Proven by</dt><dd>
+            State <code>S5</code>, captured and compared against <code>S6</code>.
+          </dd></div>
+        </dl>
+      </div>
+    </article>
+
+    <article class="p" id="p6">
+      <div><span class="tag">P6</span></div>
+      <div>
+        <h3>The tool cannot promise what the device cannot deliver</h3>
+        <p class="stmt">
+          Orb Studio's preview is a contract. Anything it renders, the Orb renders. Where the
+          device cannot, Studio refuses the design. It does not warn and proceed.
+        </p>
+        <dl class="facets">
+          <div class="f-why"><dt>Why</dt><dd>
+            A preview that overstates the device turns every install into a small
+            disappointment, and teaches the user to distrust the preview, which was the only
+            reason to open the tool. Refusal is honest and instantly understood. A warning
+            that is followed by a worse result is neither.
+          </dd></div>
+          <div class="f-forbid"><dt>Forbids</dt><dd>
+            Warn and continue on a capability mismatch. Previewing at a fidelity, size, or
+            smoothness the device cannot reach.
+          </dd></div>
+          <div class="f-proof"><dt>Proven by</dt><dd>
+            Capability level checked at install, and preview parity captures rendered from the
+            same theme through both paths.
+          </dd></div>
+        </dl>
+      </div>
+    </article>
+
+    <article class="p" id="p7">
+      <div><span class="tag">P7</span></div>
+      <div>
+        <h3>A design choice carries its cost at authoring time</h3>
+        <p class="stmt">
+          Where a decision costs smoothness, Studio says so while the user is making it, in
+          the units the user cares about, not ours.
+        </p>
+        <dl class="facets">
+          <div class="f-why"><dt>Why</dt><dd>
+            This is the principle we learned most expensively. A sweep hand was authored on a
+            489 by 489 canvas whose visible ink was 86 by 272: ninety seven per cent of what
+            the Orb rotated ten times a second was empty. Nothing in the tool mentioned it.
+            The user experienced it as choppy firmware, and we spent days inside the firmware.
+            The user made a reasonable choice with no information, so the failure was ours.
+          </dd></div>
+          <div class="f-forbid"><dt>Forbids</dt><dd>
+            Shipping an authored asset without first normalising it to its true cost.
+            Accepting a design the tool can predict will stutter without saying anything.
+          </dd></div>
+          <div class="f-proof"><dt>Proven by</dt><dd>
+            The bake trims every rotating sprite to its ink and carries the pivot with it,
+            asserted by test. The panel reports a smoothness estimate for the sweep.
+          </dd></div>
+        </dl>
+      </div>
+    </article>
+
+    <article class="p" id="p8">
+      <div><span class="tag">P8</span></div>
+      <div>
+        <h3>What the design says, the device does exactly</h3>
+        <p class="stmt">
+          Range, contact cap, layer order and every other authored value are promises. The
+          device honours them literally or refuses the theme.
+        </p>
+        <dl class="facets">
+          <div class="f-why"><dt>Why</dt><dd>
+            The user's entire mental model is "it shows me what I told it to show." A cap
+            quietly exceeded or a layer quietly reordered breaks the only model they have, and
+            it breaks it invisibly, which means they lose confidence without ever learning
+            why. We shipped a theme whose info card sat above the aircraft in Studio and below
+            them on the device: one theme, two different truths.
+          </dd></div>
+          <div class="f-forbid"><dt>Forbids</dt><dd>
+            Silently clamping an authored value. Any device side reordering that cannot be
+            expressed in Studio.
+          </dd></div>
+          <div class="f-proof"><dt>Proven by</dt><dd>
+            Authored value compared against the device's own reported state, per theme.
+          </dd></div>
+        </dl>
+      </div>
+    </article>
+
+    <article class="p" id="p9">
+      <div><span class="tag">P9</span></div>
+      <div>
+        <h3>Nothing on the dial is invented</h3>
+        <p class="stmt">
+          Every contact is a real aircraft. Every coastline, road and airport is real
+          geography. When we have nothing, we show nothing and say so. We never show something
+          plausible.
+        </p>
+        <dl class="facets">
+          <div class="f-why"><dt>Why</dt><dd>
+            The instrument's claim is that it is a window onto the actual sky. One fabricated
+            contact, discovered once, retroactively invalidates every reading the user has
+            ever taken from it. There is no recovering from that, and no amount of polish
+            elsewhere compensates.
+          </dd></div>
+          <div class="f-forbid"><dt>Forbids</dt><dd>
+            Demo data in shipping firmware. Interpolated or predicted contacts presented as
+            observed. Decorative map geometry presented as real. Dependence on a single feed
+            provider, which is how a whole category of aircraft quietly disappears.
+          </dd></div>
+          <div class="f-proof"><dt>Proven by</dt><dd>
+            Declared source list with explicit precedence and failover, and a shipping build
+            that contains no synthetic contact path.
+          </dd></div>
+        </dl>
+      </div>
+    </article>
+  </section>
+
+  <section>
+    <p class="eyebrow">Part III</p>
+    <h2>What the dial looks like in every world state</h2>
+    <p class="lede">
+      The states are not error handling. They are the product. Most of a user's hours with the
+      Orb are spent in states 4 and 5, so those are designed first, not last.
+    </p>
+    <div class="scroll">
+      <table>
+        <thead>
+          <tr><th>ID</th><th>World state</th><th>Sweep</th><th>Contacts</th><th>Words on screen</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="id">S1</td>
+            <td><strong>Booting, no position fix</strong></td>
+            <td>Held still, dial fully dressed</td>
+            <td>None</td>
+            <td>One determinate line naming the step, never an open ended "loading"</td>
+          </tr>
+          <tr>
+            <td class="id">S2</td>
+            <td><strong>No network</strong></td>
+            <td>Turning normally</td>
+            <td>Aging, dimming on schedule</td>
+            <td>One advisory, lowest hierarchy, naming what is missing and not why</td>
+          </tr>
+          <tr>
+            <td class="id">S3</td>
+            <td><strong>Network up, source refusing</strong></td>
+            <td>Turning normally</td>
+            <td>Aging, dimming on schedule</td>
+            <td>Same treatment as S2. We do not diagnose what we cannot observe</td>
+          </tr>
+          <tr>
+            <td class="id">S4</td>
+            <td><strong>Live, contacts present</strong></td>
+            <td>Turning normally</td>
+            <td>Full fidelity, capped as authored</td>
+            <td>None</td>
+          </tr>
+          <tr>
+            <td class="id">S5</td>
+            <td><strong>Live, empty sky</strong></td>
+            <td>Turning normally</td>
+            <td>None</td>
+            <td><strong>None.</strong> Identical to S4 minus the contacts</td>
+          </tr>
+          <tr>
+            <td class="id">S6</td>
+            <td><strong>Stale beyond threshold</strong></td>
+            <td>Turning normally</td>
+            <td>Outlined rather than filled</td>
+            <td>One advisory, only past T4</td>
+          </tr>
+          <tr>
+            <td class="id">S7</td>
+            <td><strong>Installing a theme</strong></td>
+            <td>Suspended</td>
+            <td>None</td>
+            <td>Determinate progress. Every step over two seconds is accounted for on screen</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section>
+    <p class="eyebrow">Part IV</p>
+    <h2>Timing budgets</h2>
+    <p class="lede">
+      These are acceptance thresholds, not targets. A build that misses one does not ship
+      pending a written exception recorded against the principle it violates.
+    </p>
+    <div class="scroll">
+      <table>
+        <thead>
+          <tr><th>ID</th><th>Budget</th><th>Threshold</th><th>Enforces</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="id">T1</td>
+            <td>Sweep interval spread across any rolling 15 second window</td>
+            <td class="num">&le; 15% of mean</td>
+            <td class="id">P1</td>
+          </tr>
+          <tr>
+            <td class="id">T2</td>
+            <td>Sweep mean interval</td>
+            <td class="num">&le; 120 ms</td>
+            <td class="id">P1</td>
+          </tr>
+          <tr>
+            <td class="id">T3</td>
+            <td>Power on to first real contact drawn</td>
+            <td class="num">&le; 25 s</td>
+            <td class="id">P5</td>
+          </tr>
+          <tr>
+            <td class="id">T4</td>
+            <td>Contacts dim / outline / earn an advisory</td>
+            <td class="num">60 s / 120 s / 180 s</td>
+            <td class="id">P3, P4</td>
+          </tr>
+          <tr>
+            <td class="id">T5</td>
+            <td>Selection card shows identity from cache</td>
+            <td class="num">&le; 400 ms</td>
+            <td class="id">P8</td>
+          </tr>
+          <tr>
+            <td class="id">T6</td>
+            <td>Selection card persists after its last field arrives, and never dismisses
+                while a lookup it started is still in flight</td>
+            <td class="num">&ge; 5 s</td>
+            <td class="id">P8</td>
+          </tr>
+          <tr>
+            <td class="id">T7</td>
+            <td>Any install step without visible determinate progress</td>
+            <td class="num">&le; 2 s</td>
+            <td class="id">P2</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section>
+    <p class="eyebrow">Part V</p>
+    <h2>Engineering covenants</h2>
+    <p class="lede">
+      Part II binds the product. This part binds us. Every covenant below exists because we
+      broke it once and the user paid for it, so each one carries its receipt.
+    </p>
+
+    <div class="covenant">
+      <span class="cid">C1</span>
+      <h3>Instrument the scarce resource, in its own units</h3>
+      <p class="rule-line">
+        For every constrained resource there must be a diagnostic reporting <em>that</em>
+        resource. A diagnostic reporting its abundant sibling is worse than none, because it
+        manufactures confidence.
+      </p>
+      <p class="paid">
+        <b>Paid for:</b> every memory diagnostic printed PSRAM, megabytes free, while the pool
+        that actually ran out was internal RAM at 7 KB. Two days went into fixing real but
+        irrelevant problems downstream of it. Adding one line that printed the right number
+        answered the whole question on the next boot.
+      </p>
+    </div>
+
+    <div class="covenant">
+      <span class="cid">C2</span>
+      <h3>Measure the distribution, never the average</h3>
+      <p class="rule-line">
+        Any metric describing something a human perceives over time reports minimum, mean,
+        maximum and spread. An average alone is not admissible evidence.
+      </p>
+      <p class="paid">
+        <b>Paid for:</b> a 263 ms mean concealed a 240 to 458 ms swing, and the swing was the
+        entire complaint. The average was stable while the product was visibly deteriorating.
+      </p>
+    </div>
+
+    <div class="covenant">
+      <span class="cid">C3</span>
+      <h3>No hidden authority</h3>
+      <p class="rule-line">
+        Any cache, bake or overlay that shadows a source must announce which source served
+        each asset, expose its fingerprint, and provide an explicit invalidation path.
+      </p>
+      <p class="paid">
+        <b>Paid for:</b> themes are baked into a flash partition, and the asset loader reads
+        flash before the SD card. Files pushed to the card were silently ignored while the log
+        said "already baked and unchanged." A performance improvement was measured, believed
+        and reported against an artefact that was never loaded.
+      </p>
+    </div>
+
+    <div class="covenant">
+      <span class="cid">C4</span>
+      <h3>Test off the default value</h3>
+      <p class="rule-line">
+        Every parameter with a default gets at least one test at a non default value. Every
+        transform gets at least one capture away from identity.
+      </p>
+      <p class="paid">
+        <b>Paid for:</b> the sweep pivot was only ever exercised at the sprite's centre, which
+        is also the graphics library's default. A pivot that never applied would have looked
+        perfect. Every screenshot anyone had taken was at zero degrees, the one angle at which
+        the library skips the rotation entirely.
+      </p>
+    </div>
+
+    <div class="covenant">
+      <span class="cid">C5</span>
+      <h3>Assert at the boundary the device reads</h3>
+      <p class="rule-line">
+        Tests run against the artefact the device actually consumes, the shipped bytes, not
+        against the intermediate the code happened to produce.
+      </p>
+      <p class="paid">
+        <b>Paid for:</b> a preview drew the sweep art into a dial sized box while the bake
+        shipped it at natural size. Both were self consistent. Neither matched the other.
+      </p>
+    </div>
+
+    <div class="covenant">
+      <span class="cid">C6</span>
+      <h3>An improvement is not real until the changed artefact is proven to be the one that ran</h3>
+      <p class="rule-line">
+        Before reporting a gain, fingerprint what executed. If the fingerprint is unchanged,
+        the measurement is void regardless of how good the number looks.
+      </p>
+      <p class="paid">
+        <b>Paid for:</b> a 1.7x improvement was measured and reported. It was an artefact of
+        the hand being clipped off the edge of the screen by a mismatched pivot. The change
+        being credited had never loaded.
+      </p>
+    </div>
+
+    <div class="covenant">
+      <span class="cid">C7</span>
+      <h3>Say the action first</h3>
+      <p class="rule-line">
+        Anything the user must do goes at the top, in one block, before any explanation. A
+        retraction goes in the same place, never later in the same paragraph.
+      </p>
+      <p class="paid">
+        <b>Paid for:</b> an instruction was given, then revised further down the same message.
+        The user acted on the first thing they read and lost the work. Prose order is
+        interface design.
+      </p>
+    </div>
+  </section>
+
+  <section>
+    <p class="eyebrow">Part VI</p>
+    <h2>Incident ledger</h2>
+    <p class="lede">
+      The evidence base. Each principle above is the generalisation of a specific thing that
+      went wrong on a real device in front of a real user.
+    </p>
+    <div class="scroll">
+      <table>
+        <thead>
+          <tr><th>What the user saw</th><th>What was actually true</th><th>Now governed by</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>"The sweep is choppy"</td>
+            <td>Frame cost tracked the rotated bounding box of a square sprite, which grows
+                twofold between 0 and 45 degrees. The hand sped up and slowed down once per
+                revolution</td>
+            <td class="id">P1, P7</td>
+          </tr>
+          <tr>
+            <td>"Stuck on loading aircraft and location data"</td>
+            <td>A range change triggered a full reprojection of coastlines, roads and airports
+                on the render thread, freezing it for 2.5 seconds</td>
+            <td class="id">P2, T7</td>
+          </tr>
+          <tr>
+            <td>"Why does my Orb say no WiFi"</td>
+            <td>The banner asserted a cause from radio association state, which reports
+                nothing about whether anything is reachable</td>
+            <td class="id">P2</td>
+          </tr>
+          <tr>
+            <td>"Why would a user use this if warnings keep popping up"</td>
+            <td>Correct. Every warning was individually defensible and collectively fatal</td>
+            <td class="id">P4</td>
+          </tr>
+          <tr>
+            <td>"The info card is under the aircraft on the Orb and on top in Studio"</td>
+            <td>Layer order was expressed twice, in two places, and the two disagreed</td>
+            <td class="id">P8</td>
+          </tr>
+          <tr>
+            <td>"The airport info does not arrive before the card disappears"</td>
+            <td>The dismissal timer was independent of the lookups the selection had started</td>
+            <td class="id">T5, T6</td>
+          </tr>
+          <tr>
+            <td>"The hand rotates around the dial instead of its fulcrum"</td>
+            <td>A new pivot was applied to an old sprite, because the flash bake shadowed the
+                card and nothing said so</td>
+            <td class="id">C3, C6</td>
+          </tr>
+          <tr>
+            <td>"Aircraft stopped arriving"</td>
+            <td>The network stack had roughly 7 KB of working memory. Every fix upstream of
+                that was real and none of them held</td>
+            <td class="id">C1</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section>
+    <p class="eyebrow">Part VII</p>
+    <h2>Amendment</h2>
+    <p>
+      This charter changes by evidence, not by opinion or by convenience. A principle is
+      amended when an observation contradicts it, and the amendment records the observation
+      that forced it. A principle is never relaxed because a requirement is hard to meet: that
+      case is an exception, written down, dated, and attached to the principle it violates, so
+      the debt is visible rather than absorbed.
+    </p>
+    <p>
+      Anyone may propose an amendment. The evidence standard is the same for everyone, and it
+      is the standard in Part V: measured at the boundary the device reads, with the artefact
+      fingerprinted, reporting distribution rather than average.
+    </p>
+
+    <footer class="close">
+      Flight Radar Charter, version 1.0. Binding on Orb firmware and Orb Studio.
+      Source of truth: <code>docs/flight-radar-charter.html</code> in the firmware repository.
+    </footer>
+  </section>
+
+</div>
