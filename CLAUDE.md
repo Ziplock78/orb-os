@@ -2,6 +2,13 @@
 
 Master context for Claude Code. Read this first, then `docs/` for detail.
 
+> **Adding or extending a screen? Read `docs/adding-a-screen.md` first.**
+> A screen is a firmware feature plus a design surface in Orb Studio, and it is only
+> finished when both halves agree. That file is the checklist of the standard parts every
+> screen has — background, glass, per-slot typefaces, the full set of text controls,
+> margins, version keys, capability level — written after the Headlines screen shipped
+> without five of them and had to be repaired one complaint at a time.
+
 ## What we're building
 A live ADS-B aircraft radar for the **Waveshare ESP32-S3-Touch-AMOLED-1.75** (round 466×466 AMOLED, capacitive touch). It's an evolution of the classic 240×240 GC9A01 "plane radar": same idea (pull nearby aircraft from an online ADS-B feed over WiFi, plot them on a radar scope centered on the user), but redesigned for a full-color high-res round AMOLED with touch, IMU, RTC and a speaker.
 
@@ -64,6 +71,7 @@ plane-radar-2.0/
 │  ├─ radar_view.h       ← scope rendering API (to implement)
 │  └─ main.cpp           ← task setup + glue (skeleton with TODOs)
 ├─ docs/
+│  ├─ adding-a-screen.md  ← READ BEFORE BUILDING A SCREEN: the standard parts checklist
 │  ├─ HARDWARE.md
 │  ├─ DATA_SOURCE.md
 │  ├─ FEATURES.md
