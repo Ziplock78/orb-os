@@ -3,6 +3,7 @@
 //   THEME_ORB   : Orb scope: green gradient, square grid, the 7 nearest
 //                    aircraft as yellow balls (emitting waves) + off-range arrows.
 #include "radar_view.h"
+#include "curved_text.h"
 #include "app_theme.h"
 #include "app_shell.h"       // knob capture: default view releases it, selection mode grabs it
 #include "config.h"
@@ -33,7 +34,7 @@
 #else
 // Desktop simulator: no ESP heap caps and no Serial. The flatten/etch code below is
 // shared (the sim benefits from the same architecture), so shim the two device-isms
-// rather than fork the logic. Matches the pattern location_view.cpp already uses.
+// rather than fork the logic. Same pattern wx_radar_client.cpp already uses.
 #include <cstdarg>
 static void *heap_caps_malloc(size_t sz, int) { return malloc(sz); }
 static void heap_caps_free(void *p) { free(p); }
@@ -2491,147 +2492,29 @@ static void radar_range_fmt(char *out, size_t outSz, const char *fmt) {
     RadarTok toks[] = { { "range", rangeS } };
     radar_fmt_toks(out, outSz, fmt, toks, 1);
 }
-// Selection banners render into their own transparent canvas (s_textCanvas),
-// not LVGL labels — that's what lets a banner curve along an arc (LVGL has no
-// curved-text primitive) and glow (canvas shadowBlur isn't a firmware effect
-// either), the same way clock_view.cpp's draw_baked_arc_text/draw_baked_text
-// work on the clock's own raster. Read a 4-bpp (16-level) glyph alpha bitmap
-// (as lv_font_conv --bpp 4 --no-compress emits it, same as the builtin fonts):
-// continuous bitstream, MSB-first, box_w px per row, no row padding.
-static inline float rtext_glyph_alpha4(const uint8_t *bmp, int bw, int x, int y) {
-    const int bit = (y * bw + x) * 4;
-    const uint8_t byte = bmp[bit >> 3];
-    const uint8_t nib = (bit & 4) ? (byte & 0x0F) : (byte >> 4);
-    return nib * 17.0f;
-}
-// Rotate one glyph's alpha bitmap around its own centre by angleDeg and blend it
-// into s_textCanvas's raw buffer (RGB565+alpha, 3 B/px, same layout custom_sprite/
-// office_sprite already use) in a solid colour, box centred at (destCx,destCy).
-// Composites by "higher opacity wins" per pixel rather than true alpha-over
-// (lv_color_mix against the canvas's own prior content) — cheap, and correct
-// for back-to-front painter's order: glow rings (drawn first, lower opacity)
-// never dim a sharper pass already there, and the crisp glyph fill (drawn last,
-// full opacity) always dominates its own footprint.
-static void rtext_blit_glyph(const uint8_t *bmp, int bw, int bh, float destCx, float destCy,
-                             float angleDeg, lv_color_t col, lv_opa_t maxOpa) {
-    if (!bmp || bw <= 0 || bh <= 0 || !s_textBuf) return;
-    uint8_t *buf = (uint8_t *)s_textBuf;
-    const float th = angleDeg * (float)M_PI / 180.0f, ct = cosf(th), st = sinf(th);
-    const float pivotX = bw * 0.5f, pivotY = bh * 0.5f;
-    const float reach = sqrtf(pivotX * pivotX + pivotY * pivotY) + 1.0f;
-    const int x0 = (int)fmaxf(0.0f, destCx - reach), x1 = (int)fminf((float)SCREEN_W - 1, destCx + reach);
-    const int y0 = (int)fmaxf(0.0f, destCy - reach), y1 = (int)fminf((float)SCREEN_H - 1, destCy + reach);
-    for (int dy = y0; dy <= y1; ++dy) {
-        const float oy = dy - destCy;
-        for (int dx = x0; dx <= x1; ++dx) {
-            const float ox = dx - destCx;
-            const float sxf = ox * ct + oy * st + pivotX;
-            const float syf = -ox * st + oy * ct + pivotY;
-            const int ix = (int)floorf(sxf), iy = (int)floorf(syf);
-            if (ix < -1 || iy < -1 || ix >= bw || iy >= bh) continue;
-            const float fx = sxf - ix, fy = syf - iy;
-            const float a00 = (ix >= 0 && iy >= 0 && ix < bw && iy < bh) ? rtext_glyph_alpha4(bmp, bw, ix, iy) : 0.0f;
-            const float a10 = (ix + 1 >= 0 && iy >= 0 && ix + 1 < bw && iy < bh) ? rtext_glyph_alpha4(bmp, bw, ix + 1, iy) : 0.0f;
-            const float a01 = (ix >= 0 && iy + 1 >= 0 && ix < bw && iy + 1 < bh) ? rtext_glyph_alpha4(bmp, bw, ix, iy + 1) : 0.0f;
-            const float a11 = (ix + 1 >= 0 && iy + 1 >= 0 && ix + 1 < bw && iy + 1 < bh) ? rtext_glyph_alpha4(bmp, bw, ix + 1, iy + 1) : 0.0f;
-            float a = a00 * (1 - fx) * (1 - fy) + a10 * fx * (1 - fy) + a01 * (1 - fx) * fy + a11 * fx * fy;
-            a = a * (float)maxOpa / 255.0f;
-            if (a < 8.0f) continue;
-            const int px = (dy * SCREEN_W + dx) * 3;
-            if ((uint8_t)a <= buf[px + 2]) continue;
-            buf[px] = (uint8_t)(col.full & 0xFF);
-            buf[px + 1] = (uint8_t)(col.full >> 8);
-            buf[px + 2] = (uint8_t)a;
-        }
-    }
-}
-// Glow: the same glyph blitted at a ring of offset positions (relative to the
-// already-rotated destCx/destCy) at falling opacity — the same 3-ring/8-direction
-// technique clock_view.cpp's draw_baked_text glow uses for its straight banners.
-static void rtext_blit_glyph_glow(const uint8_t *bmp, int bw, int bh, float destCx, float destCy,
-                                  float angleDeg, lv_color_t glowCol, int glow) {
-    if (glow <= 0) return;
-    static const float dirs[8][2] = { {1,0},{-1,0},{0,1},{0,-1},{0.707f,0.707f},{-0.707f,0.707f},{0.707f,-0.707f},{-0.707f,-0.707f} };
-    const int rings = 3;
-    for (int ri = 1; ri <= rings; ++ri) {
-        const int r = (int)lroundf((float)glow * ri / rings);
-        if (r <= 0) continue;
-        const lv_opa_t opa = (lv_opa_t)(90 / ri);
-        for (int di = 0; di < 8; ++di)
-            rtext_blit_glyph(bmp, bw, bh, destCx + dirs[di][0] * r, destCy + dirs[di][1] * r, angleDeg, glowCol, opa);
-    }
-}
-// Straight layout: glyphs left-to-right from an aligned start X (a digit that's
-// narrower/wider than its predecessor only pushes the tail end right, so a live
-// value never wobbles), baseline vertically centred on `by` — mirrors the
-// editor's textBaseline "middle". align: 0 left (bx is the start), 1 center,
-// 2 right. Mirrors clock_view.cpp's draw_baked_text geometry.
-static void rtext_draw_straight(const lv_font_t *font, const char *str, float bx, float by,
-                                lv_color_t col, int glow, lv_color_t glowCol, int align) {
-    if (!font || !str || !str[0]) return;
-    const int n = (int)strlen(str), cap = n < 80 ? n : 80;
-    float w[80], total = 0.0f;
-    for (int i = 0; i < cap; ++i) {
-        lv_font_glyph_dsc_t g;
-        w[i] = lv_font_get_glyph_dsc(font, &g, (uint32_t)(uint8_t)str[i], 0) ? (float)g.adv_w : 0.0f;
-        total += w[i];
-    }
-    const float startX = (align == 1) ? (bx - total / 2.0f) : (align == 2) ? (bx - total) : bx;
-    const float lineH = (float)lv_font_get_line_height(font), desc = (float)font->base_line;
-    const float halfMid = (lineH - 2.0f * desc) * 0.5f;
-    float x = startX;
-    for (int i = 0; i < cap; ++i) {
-        lv_font_glyph_dsc_t g;
-        if (lv_font_get_glyph_dsc(font, &g, (uint32_t)(uint8_t)str[i], 0)) {
-            const uint8_t *bmp = lv_font_get_glyph_bitmap(font, (uint32_t)(uint8_t)str[i]);
-            if (bmp && g.box_w && g.box_h) {
-                const float destCx = x + (float)g.ofs_x + (float)g.box_w * 0.5f;
-                const float destCy = by + halfMid - (float)g.ofs_y - (float)g.box_h * 0.5f;
-                rtext_blit_glyph_glow(bmp, g.box_w, g.box_h, destCx, destCy, 0.0f, glowCol, glow);
-                rtext_blit_glyph(bmp, g.box_w, g.box_h, destCx, destCy, 0.0f, col, 255);
-            }
-        }
-        x += w[i];
-    }
-}
-// Curved layout: lay each glyph along an arc of radius R centred on arcDeg (a
-// clock angle, 0 = 12 o'clock), advancing by the glyph's own width AND tilting
-// each glyph tangent to the arc — the exact geometry as the editor's
-// drawCurvedText and clock_view.cpp's draw_baked_arc_text.
+// Selection banners render into their own transparent canvas (s_textCanvas), not LVGL
+// labels — that is what lets a banner curve along an arc (LVGL has no curved-text
+// primitive) and glow (canvas shadowBlur is not a firmware effect either).
+//
+// Both are drawn by the shared curved_text primitive.
+//
+// This file used to carry its own copy of the glyph-rotation and arc-layout maths, which
+// was itself copied out of clock_view.cpp. The Headlines screen wanting the same thing made
+// that two copies about to become three, so it moved to curved_text.cpp and this is now the
+// call site rather than a third implementation. The arithmetic there is byte for byte what
+// was here: these banners are tuned against designs that already exist.
 static void rtext_draw_curved(const lv_font_t *font, const char *str, float R, float arcDeg,
                               lv_color_t col, int glow, lv_color_t glowCol) {
-    if (!font || !str || !str[0] || R < 1.0f) return;
-    const int n = (int)strlen(str), cap = n < 80 ? n : 80;
-    float w[80], total = 0.0f;
-    for (int i = 0; i < cap; ++i) {
-        char c[2] = { str[i], 0 }; lv_point_t s;
-        lv_txt_get_size(&s, c, font, 0, 0, LV_COORD_MAX, 0);
-        w[i] = (float)s.x; total += s.x;
-    }
-    const float norm = fmodf(fmodf(arcDeg, 360.0f) + 360.0f, 360.0f);
-    const bool bottom = (norm > 90.0f && norm < 270.0f);
-    const float dir = bottom ? -1.0f : 1.0f;
-    const float base = arcDeg * (float)M_PI / 180.0f;
-    const float lineH = (float)lv_font_get_line_height(font), desc = (float)font->base_line;
-    const float halfMid = (lineH - 2.0f * desc) * 0.5f;
-    float cursor = -total / 2.0f;
-    for (int i = 0; i < cap; ++i) {
-        const float mid = cursor + w[i] / 2.0f, ang = base + dir * mid / R;
-        const float ax = (float)s_cx + sinf(ang) * R, ay = (float)s_cy - cosf(ang) * R;
-        const float rot = ang + (bottom ? (float)M_PI : 0.0f);
-        cursor += w[i];
-        lv_font_glyph_dsc_t g;
-        if (!lv_font_get_glyph_dsc(font, &g, (uint32_t)(uint8_t)str[i], 0)) continue;
-        const uint8_t *bmp = lv_font_get_glyph_bitmap(font, (uint32_t)(uint8_t)str[i]);
-        if (!bmp || g.box_w == 0 || g.box_h == 0) continue;
-        const float offY = halfMid - (float)g.ofs_y - (float)g.box_h * 0.5f;
-        const float cr = cosf(rot), sr = sinf(rot);
-        const float destCx = ax - offY * sr, destCy = ay + offY * cr;
-        const float rotDeg = rot * 180.0f / (float)M_PI;
-        rtext_blit_glyph_glow(bmp, g.box_w, g.box_h, destCx, destCy, rotDeg, glowCol, glow);
-        rtext_blit_glyph(bmp, g.box_w, g.box_h, destCx, destCy, rotDeg, col, 255);
-    }
+    const curved_text::Target dst = { (uint8_t *)s_textBuf, SCREEN_W, SCREEN_H };
+    curved_text::draw_arc(dst, font, str, (float)s_cx, (float)s_cy, R, arcDeg, col, glow, glowCol);
 }
+
+static void rtext_draw_straight(const lv_font_t *font, const char *str, float bx, float by,
+                                lv_color_t col, int glow, lv_color_t glowCol, int align) {
+    const curved_text::Target dst = { (uint8_t *)s_textBuf, SCREEN_W, SCREEN_H };
+    curved_text::draw_straight(dst, font, str, bx, by, col, glow, glowCol, align);
+}
+
 // Refresh the 4 selection banners for whatever's currently selected — the
 // canvas is cleared fully transparent when nothing is, so a design with no
 // aircraft picked shows a clean scope, matching the editor's own show/hide.
