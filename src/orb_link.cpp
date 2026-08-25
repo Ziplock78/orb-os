@@ -1,6 +1,7 @@
 #include "orb_link.h"
 
 #include <Arduino.h>
+#include <WiFi.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <string.h>
@@ -122,6 +123,37 @@ void cmd_hello() {
             (unsigned long)CUSTOM_WELD_HASH,
             (unsigned long)theme_style::assetsFingerprint(),
             (unsigned long)(millis() / 1000UL));
+    out_send();
+}
+
+// Where the Orb lives on the network, so a tool can tell someone the address to open.
+//
+// This exists because of the cable-free theme route. Themes reach the card either over this
+// serial link or over the Orb's OWN web page, and the second one is better in every way
+// except that you have to know where the Orb is. mDNS gives capsuleradar.local, which some
+// networks quietly refuse to resolve, so the raw address has to be obtainable too.
+//
+// `up` is the whole answer to "did WiFi setup actually work". Before this, a tool could
+// only ask the person, and a mistyped password looked exactly like success until the
+// Flight Tracker came up empty an hour later.
+void cmd_wifi() {
+    out_reset();
+#ifdef ARDUINO
+    const bool up = (WiFi.status() == WL_CONNECTED);
+    out_fmt("{\"ok\":true,\"up\":%s", up ? "true" : "false");
+    if (up) {
+        out_str(",\"ssid\":");
+        out_json_string(WiFi.SSID().c_str());
+        out_str(",\"ip\":");
+        out_json_string(WiFi.localIP().toString().c_str());
+        out_fmt(",\"rssi\":%d", (int)WiFi.RSSI());
+        out_str(",\"host\":");
+        out_json_string("capsuleradar.local");
+    }
+    out_str("}");
+#else
+    out_str("{\"ok\":true,\"up\":false}");
+#endif
     out_send();
 }
 
@@ -499,6 +531,7 @@ void dispatch(char *line) {
 
     if      (!strcmp(line, "hello"))     cmd_hello();
     else if (!strcmp(line, "themes"))    cmd_themes();
+    else if (!strcmp(line, "wifi"))      cmd_wifi();
     else if (!strcmp(line, "theme"))     cmd_theme(arg);
     else if (!strcmp(line, "delete"))    cmd_delete(arg);
     else if (!strcmp(line, "apps"))      cmd_apps();

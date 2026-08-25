@@ -87,6 +87,12 @@ ceiling. Default them to 0 meaning "work it out", and let a stated value win.
 Where a screen stacks layers, it gets the same layer ordering the Flight Tracker has, with
 the background pinned at the bottom and the glass pinned at the top.
 
+**The controls column is the stack, read downwards.** Top of the column is the layer
+nearest the glass; bottom of the column is the background. Bracket it with the same
+`StackEnd` markers the Flight Tracker uses so the order explains itself. Intel shipped with
+its glass card sitting second from the bottom, directly contradicting the comment attached
+to it, and it read as the glass having stopped being the top layer.
+
 ### Screens fed by live data
 
 - Poll interval as theme data, not a `#define`.
