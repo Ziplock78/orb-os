@@ -122,7 +122,25 @@ namespace theme_style {
 //      knob is actually scrolling. An Orb below this level cannot draw the larger faces at
 //      all (they are compiled glyph bitmaps, not scalable outlines), which is why this is
 //      a level rather than a graceful fallback.
-constexpr int THEME_CAPS = 12;
+//  13  the Headlines screen's typography: leading between a headline's own two lines
+//      (lineGap), an overrun marked by fading the RIGHT END of the last line rather than
+//      its underside, and the age line as a format string with a {t} token so a theme can
+//      write "Last updated: 5 min ago" or "5 min ago, last checked" instead of the bare
+//      phrase. The underside fade was the wrong shape for the job: it read as the second
+//      line failing to render rather than as the sentence continuing.
+//  14  the Headlines screen's own artwork: a background picture (intel_plate.png) and the
+//      shared glass/CRT overlay (intel_overlay.png), decoded by intel_sprite.cpp with the
+//      same flash-then-SD order every other screen uses. It was colour-only before this
+//      because no decoder for it existed, and offering the picker in Studio anyway would
+//      have installed a setting the device silently ignored. A theme that ships neither
+//      file still gets the flat background colour, so nothing older changes.
+//  15  the Headlines screen's typography and framing finished: its own typeface per text
+//      slot (title, headline, source, age) shipped as theme fonts like every other screen
+//      already had, an arc option for the age line, top and bottom margins for the
+//      headline band, up to twenty headlines held rather than five, and an explicit
+//      how-many-on-screen separate from how-many-fetched. An Orb below this draws the
+//      compiled face, keeps the line straight, and holds five.
+constexpr int THEME_CAPS = 15;
 
 struct ClockText {
     bool     show   = false;
@@ -188,7 +206,6 @@ struct Apps {
     bool clock        = true;
     bool flight       = true;
     bool weather      = true;
-    bool intel        = true;
     bool surveillance = true;
     bool headlines    = true;   // world headlines, fetched through the gateway
 };
@@ -209,9 +226,14 @@ struct Names {
     char clock[20]        = "Clock";
     char flight[20]       = "Flight Tracker";
     char weather[20]      = "Weather Radar";
-    char intel[20]        = "Intel";
     char surveillance[20] = "Surveillance";
-    char headlines[20]    = "Headlines";
+    // The KEY stays `headlines` and the LABEL is "Intel", which looks like a mismatch and
+    // is not one. There used to be a second app whose key was `intel`: a city/temperature/
+    // pressure screen that carried a wiki fun fact captioned "INTEL" and so took the name.
+    // That screen is gone, and this one inherits the word people actually mean by it. The
+    // key cannot follow, because it is a field in every theme.json already written to a
+    // card and renaming it would silently switch this app off on every one of them.
+    char headlines[20]    = "Intel";        // key `headlines` -> intel_view.cpp (the news)
     char settings[20]     = "Settings";      // renameable, but never hideable
 };
 
@@ -464,20 +486,27 @@ struct Settings {
     int      defaultSel   = 0;
 };
 
-// The Headlines screen. Solid background only for now, not the color-or-image control
-// Clock and Flight Tracker get: an image background needs the same bake-and-decode
-// pipeline those two already have (a named PNG, theme_art::find_active, PSRAM decode),
-// and none of that exists for this screen yet. Offering an image picker in Studio that
-// silently did nothing on the device would be exactly the kind of gap the charter's P6
-// forbids, so this stays color-only until the decode path is actually built.
+// The Headlines screen. The background can be a colour or a picture, and the picture
+// arrives the same way every other screen's does: intel_plate.png, decoded by
+// intel_sprite.cpp, tried in flash before the card. This was colour-only until THEME_CAPS
+// 14 for exactly the reason the charter's P6 gives — the decode path did not exist, and a
+// picker in Studio that installed a setting the device ignored would have been worse than
+// no picker. The pipeline exists now, so the control does too.
 struct Intel {
     uint32_t bg          = 0x000000;
     uint32_t titleColor  = 0x7E8794;
     uint32_t textColor   = 0xE8ECF1;
     uint32_t sourceColor = 0x5F6874;
     uint32_t staleColor  = 0xC8922E;
-    // 1..5, clamped on the way in (INTEL_MAX_ITEMS is the hard ceiling, config.h).
+    // How many headlines to FETCH, 1..INTEL_MAX_ITEMS (20). Not the same question as how
+    // many are on screen: the surplus is what the knob scrolls through.
     int      count       = 3;
+    // How many to SHOW at once. 0 means "as many as fit", which is what this screen did
+    // before the two numbers were separable and is still the right answer for most
+    // designs. Above 0 it is a ceiling, not a promise: a count that cannot fit the dial
+    // at the chosen size is still reduced to what actually fits, because the alternative
+    // is drawing text off the edge of the glass.
+    int      onScreen    = 0;
     // Both plain lowercase words the gateway itself defines (see INTEL_FEEDS,
     // buildtheorb/app/src/server.ts) — general/world/sports/science/tech/business/space,
     // and bbc/guardian. A topic with no feed for the requested source (space has no BBC or
@@ -525,6 +554,12 @@ struct Intel {
     // the same two numbers. The curved boundary, when on, intersects with this box.
     int      marginLeft   = 68;
     int      marginRight  = 68;
+    // The band the headline block is allowed to occupy, px in from the top and bottom of
+    // the dial. 0 means "work it out", which keeps the old behaviour: the block is bounded
+    // by the title above and the age line below. Above 0 these win, so a design can hold
+    // the headlines clear of artwork the automatic bounds know nothing about.
+    int      marginTop    = 0;
+    int      marginBottom = 0;
     // Minutes between fetches. 10 is what INTEL_POLL_MS welded in before this field.
     // Clamped to [5, 120]: the feeds themselves refresh on the order of minutes, so
     // anything faster than 5 is pure gateway traffic for identical bytes.
@@ -536,6 +571,11 @@ struct Intel {
     // be re-tuned every time the count or the type size changed. 0 is dead centre of
     // whatever the layout worked out, so an untouched theme is unmoved. Clamped [-160, 160].
     int      blockOffsetY = 0;
+    // Extra leading between the two lines of one headline, px. LVGL's own line height is
+    // tight by design (16 px of face gets 18 px of line), which is right for a paragraph
+    // and cramped for two lines read across a room. 0 keeps exactly what shipped before.
+    // Clamped [0, 24].
+    int      lineGap      = 0;
     // The "just now" age line, a full text field like every other one in Studio: its own
     // colour, compiled type size, position and glow. ageColor's default is the exact grey
     // the line borrowed from sourceColor before it had a colour of its own, so an untouched
@@ -544,10 +584,28 @@ struct Intel {
     bool     ageShow      = true;
     int      ageX         = 233;
     int      ageY         = 409;   // 233 + 176, the fixed layout's exact spot
+    // What the age line SAYS, with {t} standing in for the phrase the Orb works out
+    // ("just now", "5 min ago", "2 hr ago"). The default is the bare token, which is
+    // exactly what this line has always printed. A theme can write "Last updated: {t}" or
+    // "{t}, last checked" and the words are its own. Any text outside the token is
+    // reproduced verbatim; a format with no token at all is a fixed caption, which is
+    // allowed on the grounds that someone may genuinely want one.
+    // The credit under each headline ("BBC", "NASA"). It had no size of its own and was
+    // welded to 12 px, which is fine beside 16 px text and invisible beside 40 px.
+    int      sourceSize   = 12;
+    char     ageFmt[40]   = "{t}";
     uint32_t ageColor     = 0x5F6874;
     int      ageSize      = 12;    // one of the compiled Montserrat sizes
     int      ageGlow      = 0;     // px of halo, 0 = none, clamped to [0, 20]
     uint32_t ageGlowColor = 0x5F6874;
+    // Bend the line along an arc, the way the clock's banners and the scope's readouts can.
+    // When set, ageX/ageY stop being read: an arc is placed by its radius and the clock
+    // angle it is centred on, not by a corner. 176/180 puts it exactly where the straight
+    // line sat by default, at the bottom of the dial, so switching it on moves nothing
+    // until the radius is changed.
+    bool     ageCurved    = false;
+    int      ageCurveR    = 176;    // px from the dial centre
+    float    ageArcDeg    = 180.0f; // clock angle the text is centred on; 180 = six o'clock
 };
 
 // Reads /themes/<slug>/{clock,radar,settings,menu,intel}_style.json (theme_select::activeSlug())

@@ -42,6 +42,15 @@ const lv_font_t *menu_prev();
 const lv_font_t *menu_next();
 const lv_font_t *settings_item();
 const lv_font_t *radar_text(int idx);      // idx 0..3, clamped
+// The Headlines screen's four text slots. Each returns nullptr-free: the theme's face when
+// one loaded, LV_FONT_DEFAULT otherwise. A caller that also has a SIZE to honour should
+// check `intel_has_font()` first — a loaded face is baked at one size and ignores any
+// slider, which is the same contract every other themed text slot on the device has.
+const lv_font_t *intel_title();
+const lv_font_t *intel_text();
+const lv_font_t *intel_source();
+const lv_font_t *intel_age();
+bool intel_has_font(int slot);   // 0 title, 1 text, 2 source, 3 age
 
 // How many of this theme's fonts actually loaded from flash. 0 means everything is
 // running on compiled fallbacks, which is the honest "nothing changed yet" state rather

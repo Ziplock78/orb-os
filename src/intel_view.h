@@ -12,8 +12,11 @@ namespace intelview {
     void      onPress();
     // A detent while this screen owns the knob (scroll mode only): step the window.
     void      onTurn(int delta);
-    // Entering from the switcher: back to the top, scroll mode released.
+    // Entering from the switcher: back to the top, scroll mode released, artwork attached.
     void      onEnter();
+    // Leaving: give the decoded plate and glass back. A 466x466 plate is 424 KB of PSRAM
+    // and the glass another 651 KB, which should not be held while another app is up.
+    void      onExit();
 
     // Network step, driven from adsb_task (core 0). Does NO LVGL work.
     // Returns true when a fresh set landed, so the caller can ask for a redraw.

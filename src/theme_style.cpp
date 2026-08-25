@@ -7,7 +7,7 @@
 #if !defined(ESP_PLATFORM)
 // Desktop simulator: no Serial. This file logs exactly one line (a hand-written theme with
 // a second inverted zone), and that line is worth keeping in the sim too, so shim it the
-// same way radar_view.cpp and location_view.cpp already do.
+// same way radar_view.cpp already does.
 static struct { void println(const char *s) const { puts(s); } } Serial;
 #endif
 
@@ -115,7 +115,6 @@ void seed_defaults() {
     s_apps.clock        = (bool)CUSTOM_APP_CLOCK;
     s_apps.flight       = (bool)CUSTOM_APP_FLIGHT;
     s_apps.weather      = (bool)CUSTOM_APP_WEATHER;
-    s_apps.intel        = (bool)CUSTOM_APP_INTEL;
     s_apps.surveillance = (bool)CUSTOM_APP_SURVEILLANCE;
     s_apps.headlines    = (bool)CUSTOM_APP_HEADLINES;
 
@@ -577,6 +576,10 @@ void load() {
                 const int c = doc["count"].as<int>();
                 s_intel.count = c < 1 ? 1 : (c > INTEL_MAX_ITEMS ? INTEL_MAX_ITEMS : c);
             }
+            if (doc["onScreen"].is<int>()) {
+                const int v = doc["onScreen"].as<int>();
+                s_intel.onScreen = v < 0 ? 0 : (v > INTEL_MAX_ROWS ? INTEL_MAX_ROWS : v);
+            }
             if (doc["topic"].is<const char *>())
                 snprintf(s_intel.topic, sizeof(s_intel.topic), "%s", doc["topic"].as<const char *>());
             if (doc["source"].is<const char *>())
@@ -615,10 +618,20 @@ void load() {
             auto clampMargin = [](int v) { return v < 0 ? 0 : (v > 200 ? 200 : v); };
             if (doc["marginLeft"].is<int>())  s_intel.marginLeft  = clampMargin(doc["marginLeft"].as<int>());
             if (doc["marginRight"].is<int>()) s_intel.marginRight = clampMargin(doc["marginRight"].as<int>());
+            if (doc["marginTop"].is<int>())    s_intel.marginTop    = clampMargin(doc["marginTop"].as<int>());
+            if (doc["marginBottom"].is<int>()) s_intel.marginBottom = clampMargin(doc["marginBottom"].as<int>());
             if (doc["pollMinutes"].is<int>()) {
                 const int m = doc["pollMinutes"].as<int>();
                 s_intel.pollMinutes = m < 5 ? 5 : (m > 120 ? 120 : m);
             }
+            if (doc["lineGap"].is<int>()) {
+                const int g = doc["lineGap"].as<int>();
+                s_intel.lineGap = g < 0 ? 0 : (g > 24 ? 24 : g);
+            }
+            if (doc["sourceSize"].is<int>() && fontSizeOk(doc["sourceSize"].as<int>()))
+                s_intel.sourceSize = doc["sourceSize"].as<int>();
+            if (doc["ageFmt"].is<const char *>())
+                snprintf(s_intel.ageFmt, sizeof(s_intel.ageFmt), "%s", doc["ageFmt"].as<const char *>());
             if (doc["blockOffsetY"].is<int>()) {
                 const int o = doc["blockOffsetY"].as<int>();
                 s_intel.blockOffsetY = o < -160 ? -160 : (o > 160 ? 160 : o);
@@ -634,6 +647,12 @@ void load() {
                 s_intel.ageGlow = g < 0 ? 0 : (g > 20 ? 20 : g);
             }
             if (doc["ageGlowColor"].is<uint32_t>()) s_intel.ageGlowColor = doc["ageGlowColor"].as<uint32_t>();
+            if (doc["ageCurved"].is<bool>()) s_intel.ageCurved = doc["ageCurved"].as<bool>();
+            if (doc["ageCurveR"].is<int>()) {
+                const int r = doc["ageCurveR"].as<int>();
+                s_intel.ageCurveR = r < 40 ? 40 : (r > 233 ? 233 : r);
+            }
+            if (doc["ageArcDeg"].is<float>()) s_intel.ageArcDeg = doc["ageArcDeg"].as<float>();
         }
     }
     {
@@ -658,7 +677,6 @@ void load() {
                 if (a["clock"].is<bool>())        s_apps.clock        = a["clock"].as<bool>();
                 if (a["flight"].is<bool>())       s_apps.flight       = a["flight"].as<bool>();
                 if (a["weather"].is<bool>())      s_apps.weather      = a["weather"].as<bool>();
-                if (a["intel"].is<bool>())        s_apps.intel        = a["intel"].as<bool>();
                 if (a["surveillance"].is<bool>()) s_apps.surveillance = a["surveillance"].as<bool>();
                 if (a["headlines"].is<bool>())    s_apps.headlines    = a["headlines"].as<bool>();
             }
@@ -672,7 +690,6 @@ void load() {
                     { "clock",        s_names.clock,        sizeof(s_names.clock)        },
                     { "flight",       s_names.flight,       sizeof(s_names.flight)       },
                     { "weather",      s_names.weather,      sizeof(s_names.weather)      },
-                    { "intel",        s_names.intel,        sizeof(s_names.intel)        },
                     { "surveillance", s_names.surveillance, sizeof(s_names.surveillance) },
                     { "headlines",    s_names.headlines,    sizeof(s_names.headlines)    },
                     { "settings",     s_names.settings,     sizeof(s_names.settings)     },

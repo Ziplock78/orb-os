@@ -6,7 +6,7 @@
 #include <HTTPClient.h>
 #else
 // The desktop simulator has no WiFi stack, so the transport goes through libcurl exactly
-// as location_view's does. Everything below the fetch is shared, which is the point: the
+// as the weather client's does. Everything below the fetch is shared, which is the point: the
 // simulator parses the same payload the Orb does and shows the same headlines.
 #include "native_http.h"
 #include <cstdio>

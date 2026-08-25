@@ -71,7 +71,8 @@ int         s_loaded = 0;
 
 // One slot per place a theme can style text. Order matches the accessors below.
 enum Slot { S_CLOCK1, S_CLOCK2, S_MENU_CUR, S_MENU_PREV, S_MENU_NEXT, S_SETTINGS,
-            S_RADAR1, S_RADAR2, S_RADAR3, S_RADAR4, S_COUNT };
+            S_RADAR1, S_RADAR2, S_RADAR3, S_RADAR4,
+            S_INTEL_TITLE, S_INTEL_TEXT, S_INTEL_SOURCE, S_INTEL_AGE, S_COUNT };
 
 // Asset names Launch Kit ships. Kept here rather than derived, so the contract between
 // the two programs is one readable list instead of a naming convention nobody can see.
@@ -80,6 +81,7 @@ const char *SLOT_FILE[S_COUNT] = {
     "font_menu_current.bin", "font_menu_prev.bin", "font_menu_next.bin",
     "font_settings.bin",
     "font_radar1.bin", "font_radar2.bin", "font_radar3.bin", "font_radar4.bin",
+    "font_intel_title.bin", "font_intel_text.bin", "font_intel_source.bin", "font_intel_age.bin",
 };
 
 const lv_font_t *s_font[S_COUNT] = { nullptr };
@@ -170,6 +172,29 @@ const lv_font_t *menu_current()  { return get(S_MENU_CUR); }
 const lv_font_t *menu_prev()     { return get(S_MENU_PREV); }
 const lv_font_t *menu_next()     { return get(S_MENU_NEXT); }
 const lv_font_t *settings_item() { return get(S_SETTINGS); }
+// The Headlines screen had no slots at all until THEME_CAPS 15 and drew compiled
+// Montserrat throughout, which made it the one screen whose type a design could not touch.
+// Its compiled fallback is deliberately LV_FONT_DEFAULT rather than a CUSTOM_* macro: no
+// firmware ever baked a face for this screen, so there is no legacy value to honour.
+// Whether the THEME supplied this face, as opposed to the fallback. The Headlines screen
+// needs the distinction that no other caller does: it owns a size slider, and a loaded
+// font is baked at one size and cannot honour it. Knowing which it has is what lets that
+// screen apply the slider to the compiled face and stand down for a themed one.
+bool intel_has_font(int slot) {
+    switch (slot) {
+        case 0: return s_font[S_INTEL_TITLE]  != nullptr;
+        case 1: return s_font[S_INTEL_TEXT]   != nullptr;
+        case 2: return s_font[S_INTEL_SOURCE] != nullptr;
+        case 3: return s_font[S_INTEL_AGE]    != nullptr;
+        default: return false;
+    }
+}
+
+const lv_font_t *intel_title()  { return get(S_INTEL_TITLE); }
+const lv_font_t *intel_text()   { return get(S_INTEL_TEXT); }
+const lv_font_t *intel_source() { return get(S_INTEL_SOURCE); }
+const lv_font_t *intel_age()    { return get(S_INTEL_AGE); }
+
 const lv_font_t *radar_text(int idx) {
     if (idx < 0) idx = 0;
     if (idx > 3) idx = 3;
