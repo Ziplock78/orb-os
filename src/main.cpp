@@ -50,7 +50,6 @@
 #include "settings_view.h"          // settings app (menu; captures the knob)
 #include "custom_boot_target.h"       // CUSTOM_BOOT_TARGET — set by whichever Launch Kit push (clock/splash/radar) ran last
 #include "custom_apps.h"              // CUSTOM_APP_* — which apps a theme flash includes in the menu
-#include "location_view.h"          // location info app (Aviator dial)
 #include "spycam_view.h"             // Spy Cam: looping "security camera" flip-book
 #include "intel_view.h"              // world headlines, read through the gateway
 #include <set>                       // audio: track which contacts are in range
@@ -226,7 +225,6 @@ static void adsb_task(void*) {
     uint32_t nextWxRadarAt = UINT32_MAX;
     int      wxFillIdx = WX_RADAR_FRAMES;      // which animation frame to fetch next (== FRAMES: idle)
     uint32_t wxGen = 0;                        // refresh generation, bumped each full loop
-    uint32_t nextLocInfoAt = UINT32_MAX;
     uint32_t lastFeedOk = millis();          // self-heal: time of last good (or no-WiFi) poll
     // Has the feed EVER answered since this boot? The restart below is a recovery, and a
     // recovery needs something to recover to. If no poll has ever succeeded, restarting
@@ -290,7 +288,6 @@ static void adsb_task(void*) {
             Serial.println("[web] config: http://capsuleradar.local/  (or the IP above)");
             nextWeatherAt = millis() + 5000UL; // let the first ADS-B poll complete before weather TLS
             nextWxRadarAt = millis() + 12000UL;
-            nextLocInfoAt = millis() + 9000UL;
             // mDNS + OTA are started on core 1 (loop) to keep all mDNS use on one core
         }
         wasConnected = conn;
@@ -499,17 +496,8 @@ static void adsb_task(void*) {
             // a periodic fetch + PSRAM cache on. nextCloudImageAt stays permanently
             // un-armed (UINT32_MAX) since it's never referenced now. cloud_image_fetch()
             // itself is untouched if this ever needs to come back on some other input.
-            // Location Info app: reverse-geocode + weather + a Wikipedia fact. One HTTPS
-            // call per cycle (pump); a new cycle starts on demand or on the refresh timer.
-            if (locationview::takeRefresh() || (int32_t)(nowMs - nextLocInfoAt) >= 0) {
-                Serial.println("[locinfo] fetching...");
-                locationview::startRefresh();
-                nextLocInfoAt = millis() + (locationview::hasData() ? 300000UL : 30000UL);
-            }
-            locationview::pump(g_settings.homeLat, g_settings.homeLon);
-            // Headlines. One plain-HTTP request against a cached gateway response, well
-            // under a kilobyte, so unlike the location pump there is nothing to spread over
-            // several cycles. fetchStep() owns its own timing and returns immediately when
+            // Intel. One plain-HTTP request against a cached gateway response, well under
+            // a kilobyte, so there is nothing to spread over several cycles. fetchStep() owns its own timing and returns immediately when
             // nothing is due, which is almost every pass through this loop.
             if (intelview::fetchStep()) g_intelDirty = true;
             // Then the on-demand lookups for the selected aircraft. Their timeouts are kept
@@ -2207,10 +2195,6 @@ void setup() {
     app_shell::add(clockview::screen(), theme_style::names().clock, clockview::onPress, nullptr, false, nullptr, clockview::onExit, !theme_style::apps().clock);  // push flips analog/digital; onExit frees a custom face's decoded PSRAM
     app_shell::add(radarScreen, theme_style::names().flight, radar_press_custom_or_theme, radar_turn_select, false, radar_show_home_custom, radar_exit_release_style, !theme_style::apps().flight);
     app_shell::add(radarScreen, theme_style::names().weather,  weather_press_cycle, nullptr, false, radar_show_weather, nullptr, !theme_style::apps().weather);
-    locationview::init();
-    psram_mark("after locationview");
-    app_shell::add(locationview::screen(), theme_style::names().intel,
-                   locationview::onPress, nullptr, false, locationview::onEnter, nullptr, !theme_style::apps().intel);  // push refreshes
     spycamview::init();
     psram_mark("after spycamview");
     app_shell::add(spycamview::screen(), theme_style::names().surveillance, spycamview::onPress, nullptr, false, nullptr, nullptr, !theme_style::apps().surveillance);  // push cycles cams; clip loads lazily on commit
@@ -2220,18 +2204,18 @@ void setup() {
                    settingsview::onPress, settingsview::onTurn,
                    true, settingsview::onEnter, settingsview::onExit, false);  // captures the knob on entry; onEnter resets to the menu and takes the text canvas, onExit gives it back
     // Appended AFTER Settings on purpose. Several boot paths and the simulator's selftests
-    // address apps by hardcoded index (Settings is 5, Flight Tracker is 1); inserting this
+    // address apps by hardcoded index (Settings is 4, Flight Tracker is 1); inserting this
     // anywhere earlier would move both and send a factory-reset boot into the wrong screen.
     // The cost is that Settings is no longer last in the wrap-around, which is cosmetic.
     intelview::init();
     psram_mark("after intelview");
     app_shell::add(intelview::screen(), theme_style::names().headlines,
-                   intelview::onPress, intelview::onTurn, false, intelview::onEnter, nullptr, !theme_style::apps().headlines);  // push fetches now, or toggles scroll mode when the type size overflows; onEnter resets to the top
+                   intelview::onPress, intelview::onTurn, false, intelview::onEnter, intelview::onExit, !theme_style::apps().headlines);  // push fetches now, or toggles scroll mode when the type size overflows; onEnter resets to the top
     app_shell::begin();                // start on the clock (index 0 — see comment above)
     psram_mark("after app_shell::begin");
 
     // Fresh out of the box, or right after Settings > Reset: skip the clock and walk
-    // straight into WiFi setup instead — see host_factory_reset(). Index 5 is still
+    // straight into WiFi setup instead — see host_factory_reset(). Index 4 is now
     // Settings: Clock was inserted at the front, Intel/Surveillance/Settings didn't move.
     bool wantWifiSetup = false;
     {
@@ -2250,7 +2234,7 @@ void setup() {
         // which holds the same splash art up indefinitely (push the knob to leave)
         // instead of the ordinary 2s-hold-then-fade, so it stays put to look at.
         else {
-            app_shell::selectApp(5);
+            app_shell::selectApp(4);
             app_shell::setCaptured(true);
             settingsview::openAboutPage();
         }
@@ -2353,7 +2337,7 @@ void setup() {
     // up on "The Orb Setup" for anyone who would rather type on a phone.
     if (!wifiUp) wantWifiSetup = true;
     if (wantWifiSetup) {
-        app_shell::selectApp(5);        // Settings
+        app_shell::selectApp(4);        // Settings
         app_shell::setCaptured(true);   // Settings captures the knob on entry; match that
         settingsview::openWifiSetupPrompt();
     }

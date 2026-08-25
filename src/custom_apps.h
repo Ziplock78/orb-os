@@ -3,6 +3,5 @@
 #define CUSTOM_APP_CLOCK        1
 #define CUSTOM_APP_FLIGHT       1
 #define CUSTOM_APP_WEATHER      0
-#define CUSTOM_APP_INTEL        0
 #define CUSTOM_APP_SURVEILLANCE 0
 #define CUSTOM_APP_SETTINGS     1

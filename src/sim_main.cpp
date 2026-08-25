@@ -27,7 +27,6 @@
 #include "cloud_image.h"
 #include "aircraft.h"
 #include "clock_view.h"
-#include "location_view.h"
 #include "intel_view.h"
 #include "app_shell.h"
 #include "app_theme.h"
@@ -531,22 +530,13 @@ static void sim_refresh_weather(double lat, double lon) {
     }
 }
 
-// Real Intel reading: runs the SAME geocode -> weather -> trivia cycle location_view.cpp
-// uses on-device (bigdatacloud / open-meteo / wikivoyage), just over the desktop's own
-// network stack. See locationview::pumpUntilDone().
-static void sim_refresh_intel(double lat, double lon) {
-    printf("[sim] fetching live location intel for %.4f, %.4f...\n", lat, lon);
-    locationview::pumpUntilDone(lat, lon);
-}
-
 // Fired when Settings' recents/search list is tapped (host_set_location_named) — moves
-// the mock radar's home, and re-fetches live weather + Intel for the new spot.
+// the mock radar's home, and re-fetches live weather for the new spot.
 static void sim_apply_home_location(const char *name, double lat, double lon) {
     g_set.homeLat = lat; g_set.homeLon = lon;
     radar::update(g_mockAcs, g_set);
     printf("[sim] location set: %s (%.4f, %.4f)\n", (name && name[0]) ? name : "(unnamed)", lat, lon);
     sim_refresh_weather(lat, lon);
-    sim_refresh_intel(lat, lon);
 }
 
 // Register the real app lineup for interactive use, in the SAME order as the device
@@ -557,11 +547,6 @@ static void sim_apply_home_location(const char *name, double lat, double lon) {
 static void sim_register_apps(lv_obj_t *radarScreen) {
     clockview::init();
     settingsview::init();
-    locationview::init();
-    sim_refresh_intel(SIM_HOME_LAT, SIM_HOME_LON);
-    locationview::takeRefresh();   // consume the refresh request pumpUntilDone above already satisfied
-                                    // (s_want defaults true) so the 1Hz loop doesn't immediately re-fetch
-
     lv_obj_t *survScreen = lv_obj_create(NULL);
     lv_obj_set_style_bg_color(survScreen, lv_color_black(), 0);
     lv_obj_set_style_bg_opa(survScreen, LV_OPA_COVER, 0);
@@ -584,8 +569,6 @@ static void sim_register_apps(lv_obj_t *radarScreen) {
     app_shell::add(radarScreen, theme_style::names().weather,
                    []() { static bool fc = false; fc = !fc; ui_set_weather_forecast(fc); },  // push toggles WX/forecast
                    nullptr, false, []() { ui_show_view(1); }, nullptr, !theme_style::apps().weather);
-    app_shell::add(locationview::screen(), theme_style::names().intel,
-                   locationview::onPress, nullptr, false, locationview::onEnter, nullptr, !theme_style::apps().intel);   // push = mock refresh (same wiring as main.cpp)
     app_shell::add(survScreen,  theme_style::names().surveillance, nullptr, nullptr, false, nullptr, nullptr, !theme_style::apps().surveillance);
     app_shell::add(settingsview::screen(), theme_style::names().settings,
                    settingsview::onPress, settingsview::onTurn, true, settingsview::onEnter, settingsview::onExit, false);
@@ -598,7 +581,7 @@ static void sim_register_apps(lv_obj_t *radarScreen) {
     // headless screenshot of an empty screen would tell nobody anything.
     if (intelview::fetchStep()) intelview::onHeadlinesReady();
     app_shell::add(intelview::screen(), theme_style::names().headlines,
-                   intelview::onPress, intelview::onTurn, false, intelview::onEnter, nullptr, !theme_style::apps().headlines);
+                   intelview::onPress, intelview::onTurn, false, intelview::onEnter, intelview::onExit, !theme_style::apps().headlines);
     app_shell::begin();   // start on Clock (index 0), matching the device
 }
 
@@ -811,7 +794,7 @@ int main(int argc, char **argv) {
     // (same splash art, held indefinitely, push the knob to leave) instead of
     // the normal boot sequence's 2s-hold-then-fade, matching the device build.
     if (interactive) {
-        app_shell::selectApp(5);
+        app_shell::selectApp(4);
         app_shell::setCaptured(true);
         settingsview::openAboutPage();
     }
@@ -920,9 +903,9 @@ int main(int argc, char **argv) {
         app_shell::selectApp(0);
         lv_timer_handler();
 
-        printf("[selftest] roster from theme '%s': clock=%d flight=%d weather=%d intel=%d surv=%d\n",
+        printf("[selftest] roster from theme '%s': clock=%d flight=%d weather=%d surv=%d\n",
                theme_select::activeSlug(), theme_style::apps().clock, theme_style::apps().flight,
-               theme_style::apps().weather, theme_style::apps().intel, theme_style::apps().surveillance);
+               theme_style::apps().weather, theme_style::apps().surveillance);
         {   // Hand geometry now travels per theme too (clock_style.json "hands"), so a
             // theme switch no longer leaves the previous theme's hands on the new face.
             const theme_style::Clock &cs = theme_style::clock();
@@ -968,7 +951,7 @@ int main(int argc, char **argv) {
         // captured(), so leaving the overlay up sends every turn to the app switcher
         // and Settings never sees it. The previous step deliberately left it open.
         if (app_shell::browsing()) press();
-        app_shell::selectApp(5); pump();          // Settings; onEnter resets to the menu
+        app_shell::selectApp(4); pump();          // Settings; onEnter resets to the menu
         settingsview::onEnter(); pump();
         printf("[selftest] Settings enter: app=%s captured=%d browsing=%d (expect 1, 0)\n",
                app_shell::name(), app_shell::captured(), app_shell::browsing());
@@ -988,7 +971,7 @@ int main(int argc, char **argv) {
         // NOT capture — both behaviours are asserted, whichever this theme exhibits.
         app_shell::setCaptured(false);
         if (app_shell::browsing()) press();
-        app_shell::selectApp(6); pump();          // Headlines; onEnter resets to the top
+        app_shell::selectApp(5); pump();          // Intel (the news screen); onEnter resets to the top
         int iFirst, iVis, iCount;
         intelview::scrollState(iFirst, iVis, iCount);
         const bool iScrollable = iCount > iVis;
@@ -1089,9 +1072,6 @@ int main(int argc, char **argv) {
             ui_set_battery(78, false, true);   // mock battery
             ui_set_date("08 Jun 2026");        // mock date
             settingsview::setNetInfo("Configure at\ncapsuleradar.local\n192.168.1.42");  // mock net info
-        }
-        if (locationview::takeRefresh()) {   // manual refresh: onEnter/push on the Intel screen
-            sim_refresh_intel(g_set.homeLat, g_set.homeLon);
         }
         // fulfil route lookups with a mock (the sim has no network)
         char wc[12];
@@ -1267,7 +1247,7 @@ int main(int argc, char **argv) {
             app_shell::begin();
 
             // Settings: jump straight there, no slide, and grab the base menu list.
-            app_shell::selectApp(5);
+            app_shell::selectApp(4);
             lv_timer_handler();
             lv_refr_now(NULL);
             SDL_RenderClear(s_ren);
