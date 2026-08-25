@@ -1,7 +1,13 @@
 #pragma once
 // Capsule Radar — build & user configuration.
 
-#define FW_VERSION "1.4.2"   // shown on the web config page + Stats screen; bump on release
+// Bump this whenever a build goes out that a device could be BEHIND. That is not only
+// releases: 1.4.2 sat still through the Intel screen being rebuilt, an app being deleted,
+// another renamed, and a serial command being added, so Studio compared "1.4.2" against
+// "1.4.2", said "up to date", and left an Orb missing everything in that list. THEME_CAPS
+// exists because this stopped moving; it covers theme settings and nothing else, so a new
+// command or a deleted screen is invisible to it. Move this too.
+#define FW_VERSION "1.5.0"   // shown on the web config page + Stats screen
 // Edit pins below: replace every -1 with the value from the Waveshare factory demo
 // (see docs/HARDWARE.md and docs/SETUP.md). Do NOT guess them.
 
