@@ -955,6 +955,33 @@ static void draw_custom(const struct tm *ti) {
             const theme_style::Hand &hd = cs.hand[k];
             if (!hd.show) continue;
             CustomSprite sh = custom_shadow(k);
+            // Say so when a shadow was asked for and did not arrive.
+            //
+            // This has now silently gone missing twice, both times right after a theme
+            // install, and both times a reboot cured it before anything could be learned:
+            // the sprites are decoded lazily into PSRAM and the hour and minute shadows are
+            // the two largest allocations on the dial (294 KB and 539 KB), so they are the
+            // first things to fail when an install has just left memory tight. The loader
+            // reports its own failures, but only at the moment they happen, and by the time
+            // anyone notices a missing shadow that line is long gone.
+            //
+            // Latched, not per frame: this runs sixty times a second and the interesting
+            // event is the transition, not the state.
+            static bool s_warned[3] = { false, false, false };
+            if (k >= 0 && k < 3) {
+                if (!sh.data && !s_warned[k]) {
+                    s_warned[k] = true;
+#if defined(ESP_PLATFORM)
+                    Serial.printf("[clock] shadow %d wanted but not loaded - PSRAM free %u KB\n",
+                                  k, (unsigned)(ESP.getFreePsram() / 1024));
+#endif
+                } else if (sh.data && s_warned[k]) {
+                    s_warned[k] = false;
+#if defined(ESP_PLATFORM)
+                    Serial.printf("[clock] shadow %d is back\n", k);
+#endif
+                }
+            }
             // Same art, same angle, same pivot as the hand — only the centre moves, and it
             // moves in SCREEN space, which is the whole reason the light appears to stay put
             // while the hand goes round.
