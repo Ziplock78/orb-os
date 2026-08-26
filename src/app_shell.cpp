@@ -102,14 +102,28 @@ namespace {
 #endif
     }
 
+    // Runs on EVERY detent, so everything in here has to be free when nothing has changed.
+    //
+    // It was not. The last line reordered the glass unconditionally, and
+    // lv_obj_move_foreground invalidates the object it moves. The glass is a full-screen
+    // 466x466 image, so every detent marked the entire panel dirty and the menu repaid it
+    // with a 150 ms full-frame push over QSPI. Narrowing the text canvas's own invalidate
+    // did nothing at all while this was still here: measured at "repainted 100% of the
+    // screen" before and after that change.
+    //
+    // The reorder is only needed when the stack actually changed: when one of these two
+    // images was just created, or when the text canvas has appeared or gone since the last
+    // time. Both are rare. The two log lines moved behind the same condition for the same
+    // reason: at 115200 baud a line of serial per detent is not free either.
     void overlay_art_acquire() {
-        Serial.printf("[menu] art acquire: %u KB PSRAM free before\n", psram_free_kb());
+        bool created = false;
         if (!s_overlayPlate) {
             if (const lv_img_dsc_t *plate = menu_custom_plate()) {
                 s_overlayPlate = lv_img_create(s_overlay);
                 lv_img_set_src(s_overlayPlate, plate);
                 lv_obj_center(s_overlayPlate);
                 lv_obj_move_background(s_overlayPlate);   // behind the text canvas
+                created = true;
             }
         }
         if (!s_overlayGlass) {
@@ -117,11 +131,20 @@ namespace {
                 s_overlayGlass = lv_img_create(s_overlay);
                 lv_img_set_src(s_overlayGlass, ov);
                 lv_obj_center(s_overlayGlass);
+                created = true;
             }
         }
+        // The canvas can appear later than the art if its first allocation failed, and it
+        // must never end up above the glass, so a change in either direction reorders.
+        static bool s_sawCanvas = false;
+        const bool hasCanvas = menu_text::available();
+        if (hasCanvas != s_sawCanvas) { s_sawCanvas = hasCanvas; created = true; }
+
+        if (!created) return;
         if (s_overlayGlass) lv_obj_move_foreground(s_overlayGlass);   // CRT/glass on top
-        Serial.printf("[menu] art acquire: %u KB PSRAM free after (plate=%d glass=%d)\n",
-                      psram_free_kb(), s_overlayPlate ? 1 : 0, s_overlayGlass ? 1 : 0);
+        Serial.printf("[menu] art: plate=%d glass=%d canvas=%d, %u KB PSRAM free\n",
+                      s_overlayPlate ? 1 : 0, s_overlayGlass ? 1 : 0, hasCanvas ? 1 : 0,
+                      psram_free_kb());
     }
 
     void overlay_art_release() {
@@ -147,7 +170,8 @@ namespace {
             const char *prevName = s_count ? s_apps[next_visible(s_browseIdx, -1)].name : "";
             const char *nextName = s_count ? s_apps[next_visible(s_browseIdx, +1)].name : "";
             menu_text::refresh(prevName, name, nextName);
-            if (s_overlayLabel) lv_obj_add_flag(s_overlayLabel, LV_OBJ_FLAG_HIDDEN);
+            if (s_overlayLabel && !lv_obj_has_flag(s_overlayLabel, LV_OBJ_FLAG_HIDDEN))
+                lv_obj_add_flag(s_overlayLabel, LV_OBJ_FLAG_HIDDEN);
         } else if (s_overlayLabel) {
             // No canvas, which for a custom design normally means "this theme uses no
             // glow" (menu_text::acquire skips the 651 KB buffer then). The canvas was
@@ -184,7 +208,12 @@ namespace {
 #else
         lv_label_set_text(s_overlayLabel, name);
 #endif
-        lv_obj_clear_flag(s_overlay, LV_OBJ_FLAG_HIDDEN);
+        // Only when it is actually hidden. This runs on every detent, on the full-screen
+        // overlay container, and whether a redundant clear invalidates is an LVGL internal
+        // nobody should have to know. Not asking is free; being wrong about it costs a
+        // full-frame repaint per detent.
+        if (lv_obj_has_flag(s_overlay, LV_OBJ_FLAG_HIDDEN))
+            lv_obj_clear_flag(s_overlay, LV_OBJ_FLAG_HIDDEN);
         s_browseTouch = millis();          // any turn/open restarts the settle countdown
     }
     void hide_overlay() {

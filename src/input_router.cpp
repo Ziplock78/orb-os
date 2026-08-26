@@ -1,7 +1,9 @@
 #include "input_router.h"
 #include "update_ui.h"
 #include <lvgl.h>       // lv_tick_get — a millisecond clock both targets have
+#if defined(ESP_PLATFORM)
 #include "display.h"   // markInput — input-to-glass timing
+#endif
 #include "app_shell.h"
 #include "knob.h"
 
@@ -83,9 +85,14 @@ void input_router::dispatch(int delta, bool pressed) {
     // worth being able to ask of any screen. The first attempt timed only the switcher, on
     // the assumption that the switcher was the problem, which is the assumption being
     // tested. Cleared by whichever frame lands next; see display::markInput.
-    // lv_tick_get rather than millis(): this file is shared with the simulator and has no
-    // Arduino header, and LVGL's tick is the same millisecond clock on both.
+    // Device only. The simulator draws through its own SDL path and has no display.cpp, and
+    // "how long until the panel shows it" is not a question a desktop window can answer
+    // anyway. lv_tick_get rather than millis() because this file has no Arduino header;
+    // lv_conf.h maps LVGL's tick straight onto millis() on the device, so it is the same
+    // counter the flush reads.
+#if defined(ESP_PLATFORM)
     if (delta != 0 || pressed) display::markInput(lv_tick_get());
+#endif
 
     // The switcher owns everything while it is up: turning cycles apps, pressing commits.
     // Leaving it is the 2 s settle or a press, never the gesture, so a rock performed while
