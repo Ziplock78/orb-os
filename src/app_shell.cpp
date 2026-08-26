@@ -54,6 +54,26 @@ namespace {
     lv_obj_t *s_overlayPlate  = nullptr;   // a custom menu's baked background image, if any
     lv_obj_t *s_overlayGlass  = nullptr;   // a custom menu's baked CRT+glass, if any
     uint32_t  s_browseTouch   = 0;         // millis() of the last browse interaction
+    // How many detents move the menu on by one app.
+    //
+    // Two, because this knob is light enough that one detent is easier to produce than to
+    // avoid, and a menu that jumps a screen every time your fingers brush the knob is worse
+    // than one that asks for a deliberate turn. Change this number and nothing else moves.
+    constexpr int BROWSE_DETENTS_PER_ITEM = 2;
+
+    // Detents seen but not yet spent. This is the whole fix for "I have to click two or three
+    // times before it switches".
+    //
+    // takeDelta() returns NET movement since the last poll, so a quick turn arrives as delta=3
+    // rather than as three separate calls. The old code read only the SIGN of that and moved
+    // exactly one app, silently discarding the other two. Turning slowly gave every detent its
+    // own poll and felt perfect; turning at any speed, or turning while a frame was slow, threw
+    // input away. Same shape as the Rock bug in knob.cpp: the magnitude was there and the
+    // consumer looked only at the direction.
+    //
+    // Accumulating instead means no detent is ever lost. It also makes the two-per-item rule
+    // above free, rather than a second place where input gets dropped on purpose.
+    static int s_browseAccum = 0;
     constexpr uint32_t BROWSE_SETTLE_MS = 2000;   // auto-enter the shown app after this idle
 
     int next_visible(int from, int dir);   // forward decl — defined below, needed by show_overlay above it
@@ -171,6 +191,9 @@ namespace {
 
     void commit_current() {                // enter the app the overlay is showing
         hide_overlay();
+        // Half a turn left over from browsing must not be waiting to move the menu the next
+        // time it opens.
+        s_browseAccum = 0;
         // The one place the switcher actually loads an app. load() handles the outgoing
         // onExit, the screen swap, capture state, and the incoming onEnter, so exactly
         // one app's artwork is decoded per selection rather than one per detent.
@@ -308,21 +331,30 @@ void app_shell::browseTurn(int delta) {
         // moment to come back" behaviour. The memory came from somewhere better instead:
         // three of the four overlays were 100% transparent and are no longer shipped at
         // all, freeing 636 KB per screen. The app keeps its artwork while you browse.
+        s_browseAccum = 0;   // the turn that opened it does not also move it
         show_overlay(s_apps[s_browseIdx].name);
         return;
     }
     // Move the cursor only. No load(), so no onExit/onEnter, so no SD read and no PNG
-    // decode: a detent is now just a text redraw on the overlay.
+    // decode: a detent is just a text redraw on the overlay.
     //
-    // "Just a text redraw" is the claim being measured here. The menu was reported as
-    // sluggish to move through, and this is the only work a detent does, so either it is
-    // cheap and the sluggishness is elsewhere, or it is not cheap and this comment has been
-    // wrong. The glow path redraws a 651 KB canvas per detent, which is the suspect.
-    const uint32_t t0 = millis();
-    s_browseIdx = next_visible(s_browseIdx, delta > 0 ? 1 : -1);   // skip hidden apps
+    // That claim was measured rather than assumed, after the menu was reported as sluggish:
+    // "[shell] detent -> Intel took 1ms". So the redraw was never the problem. What made it
+    // feel slow was this function discarding detents, which the accumulator now fixes.
+    s_browseAccum += delta;
+    int moved = 0;
+    while (s_browseAccum >= BROWSE_DETENTS_PER_ITEM) {
+        s_browseAccum -= BROWSE_DETENTS_PER_ITEM;
+        s_browseIdx = next_visible(s_browseIdx, +1);   // skip hidden apps
+        ++moved;
+    }
+    while (s_browseAccum <= -BROWSE_DETENTS_PER_ITEM) {
+        s_browseAccum += BROWSE_DETENTS_PER_ITEM;
+        s_browseIdx = next_visible(s_browseIdx, -1);
+        ++moved;
+    }
+    if (!moved) return;    // a half turn: kept, not thrown away, and spent on the next one
     show_overlay(s_apps[s_browseIdx].name);
-    Serial.printf("[shell] detent -> %s took %lums\n",
-                  s_apps[s_browseIdx].name, (unsigned long)(millis() - t0));
 }
 
 // Push commits the shown app (hides the overlay); if not browsing, it's an app action.
@@ -337,6 +369,9 @@ void app_shell::openSwitcher() {
     s_browseIdx = s_cur;
     if (!s_count) return;
     s_browsing = true;
+    // A rock is a left detent and a right one. Those must not be left in the accumulator to
+    // nudge the menu the moment it opens.
+    s_browseAccum = 0;
     show_overlay(s_apps[s_cur].name);
 }
 
