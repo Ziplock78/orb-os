@@ -1,5 +1,7 @@
 #include "input_router.h"
 #include "update_ui.h"
+#include <lvgl.h>       // lv_tick_get — a millisecond clock both targets have
+#include "display.h"   // markInput — input-to-glass timing
 #include "app_shell.h"
 #include "knob.h"
 
@@ -77,6 +79,13 @@ void input_router::dispatch(int delta, bool pressed) {
         if (pressed) update_ui::ackReady();
         return;
     }
+    // Stamped here rather than in the menu, because "how long until I see it" is a question
+    // worth being able to ask of any screen. The first attempt timed only the switcher, on
+    // the assumption that the switcher was the problem, which is the assumption being
+    // tested. Cleared by whichever frame lands next; see display::markInput.
+    // lv_tick_get rather than millis(): this file is shared with the simulator and has no
+    // Arduino header, and LVGL's tick is the same millisecond clock on both.
+    if (delta != 0 || pressed) display::markInput(lv_tick_get());
 
     // The switcher owns everything while it is up: turning cycles apps, pressing commits.
     // Leaving it is the 2 s settle or a press, never the gesture, so a rock performed while

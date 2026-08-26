@@ -288,6 +288,13 @@ void cmd_flashing() {
 // takes to reach the glass, and answering it needs the turn and the stopwatch on the same
 // side of the cable. Goes through input_router, not straight into app_shell, so it takes
 // exactly the path a real detent takes, Rock detection and all.
+void cmd_menu() {
+    app_shell::openSwitcher();
+    out_reset();
+    out_str("{\"ok\":true,\"menu\":true}");
+    out_send();
+}
+
 void cmd_turn(const char *arg) {
     const int n = arg && *arg ? atoi(arg) : 1;
     input_router::dispatch(n, false);
@@ -569,6 +576,7 @@ void dispatch(char *line) {
     else if (!strcmp(line, "apps"))      cmd_apps();
     else if (!strcmp(line, "app"))       cmd_app(arg);
     else if (!strcmp(line, "flashing"))  cmd_flashing();
+    else if (!strcmp(line, "menu"))      cmd_menu();
     else if (!strcmp(line, "turn"))      cmd_turn(arg);
     else if (!strcmp(line, "press"))     cmd_press();
     else if (!strcmp(line, "poll"))      cmd_poll(arg);
