@@ -51,7 +51,22 @@ namespace {
 // read a turn at all the worst outcome is that scrolling Intel back and forth opens the
 // menu. If that ever becomes the complaint, this number is the dial, and the measurement is
 // still in the firmware to re-run it.
-constexpr uint32_t ROCK_WINDOW_MS = 800;
+//
+// 800 was not enough either, and the reason is worth writing down because it will happen
+// again to whoever measures this next. The 620-660 cluster was captured while the gesture
+// was FAILING, and a person whose rock has just been ignored rocks the next one harder and
+// faster. Measured again once it worked, on an unrelated errand, the same hand produced:
+//
+//     1096, 95, 1045, 5196 ms
+//
+// A natural rock is around a second; the fast ones are retries. Measuring a gesture at the
+// moment it is broken measures the frustration, not the gesture. 1400 covers the natural
+// motion and still rejects the 5196, which was a change of mind rather than a rock.
+//
+// This is also what "it works on Aviator but not on Steam Punk" turned out to be. Nothing
+// in this path knows what theme is loaded: the detection is in the knob ISR and the
+// dispatch is here. The rocks on that day were simply slower than the window.
+constexpr uint32_t ROCK_WINDOW_MS = 1400;
 
 // The reversal this router has already acted on, so one gesture cannot fire twice. Stored
 // as the timestamp rather than a flag: a second rock produces a new one, so it fires again
