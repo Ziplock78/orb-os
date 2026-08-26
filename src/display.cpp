@@ -38,6 +38,7 @@ uint32_t display_frames() { return s_frameCount; }
 static volatile uint32_t s_lvglUs  = 0;   // cumulative us inside lv_timer_handler()
 static volatile uint32_t s_flushUs = 0;   // cumulative us inside flush_cb (a subset)
 static volatile uint32_t s_inputAtMs = 0;  // see display::markInput
+static volatile uint32_t s_inputPx0  = 0;  // pixels flushed when that input arrived
 static volatile uint32_t s_flushedPx = 0; // cumulative pixels pushed (dirty-area size)
 uint32_t display_flushed_px() { return s_flushedPx; }
 // Defined at file scope, matching display_frames() above: display.h declares these
@@ -209,7 +210,16 @@ static void flush_cb(lv_disp_drv_t *drv, const lv_area_t *area, lv_color_t *px) 
         // The end of the frame IS the moment the pixels are on the panel: draw_block writes
         // over QSPI and blocks, so nothing is queued behind this.
         if (s_inputAtMs) {
-            Serial.printf("[display] input -> glass: %lums\n", (unsigned long)(millis() - s_inputAtMs));
+            // The AREA repainted, as well as the time. 146 ms for a text swap only makes
+            // sense if the whole 466x466 is being pushed, and this says whether it is:
+            // 100% means one full screen, 200% means two. If it is a full screen then the
+            // cost is the menu's text canvas being full-screen with alpha, so any change
+            // to a word invalidates the entire display, and the fix is to make the canvas
+            // the size of the text rather than the size of the panel.
+            const uint32_t px = s_flushedPx - s_inputPx0;
+            Serial.printf("[display] input -> glass: %lums, repainted %lu%% of the screen\n",
+                          (unsigned long)(millis() - s_inputAtMs),
+                          (unsigned long)(px * 100UL / ((uint32_t)SCREEN_W * SCREEN_H)));
             s_inputAtMs = 0;
         }
     }
@@ -320,7 +330,7 @@ void loop() {
     s_lvglUs += micros() - t0;
 }
 
-void markInput(uint32_t ms) { s_inputAtMs = ms ? ms : 1; }
+void markInput(uint32_t ms) { s_inputAtMs = ms ? ms : 1; s_inputPx0 = s_flushedPx; }
 
 void setBrightness(uint8_t v) { if (s_gfx) s_gfx->setBrightness(v); }
 
