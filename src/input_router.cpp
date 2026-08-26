@@ -29,7 +29,24 @@ namespace {
 // How long after a leftward detent a rightward one still counts as the same gesture. Short
 // enough that a deliberate reversal has to be quick; long enough to be performable. Tuned
 // on hardware, not derived — if this needs to move, this is the number.
-constexpr uint32_t ROCK_WINDOW_MS = 320;
+// Measured, not guessed. 320 was a guess and it was wrong by half.
+//
+// Nine rocks captured off the real knob on 2026-08-26, gap between the last left detent and
+// the first right one:
+//
+//     96, 150, 624, 624, 625, 654, 655, 644, 625 ms
+//
+// The two fast ones are what a deliberate, already-failed-once attempt looks like. The
+// natural motion is the cluster at 620-660, every one of which the old 320 window threw
+// away, which is exactly the reported "works sometimes". 800 clears the cluster with about
+// 20% of headroom and is still far short of anything a person would call a pause.
+//
+// The cost of being generous is small and bounded: while the switcher is up this check is
+// skipped entirely, so a false positive can only happen INSIDE an app, and of the apps that
+// read a turn at all the worst outcome is that scrolling Intel back and forth opens the
+// menu. If that ever becomes the complaint, this number is the dial, and the measurement is
+// still in the firmware to re-run it.
+constexpr uint32_t ROCK_WINDOW_MS = 800;
 
 // The reversal this router has already acted on, so one gesture cannot fire twice. Stored
 // as the timestamp rather than a flag: a second rock produces a new one, so it fires again

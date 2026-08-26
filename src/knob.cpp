@@ -120,6 +120,21 @@ void knob::poll() {
             s_rockGapMs = now - s_lastDirMs;
             s_rockMs    = now ? now : 1;   // never 0, which means "never happened"
         }
+        // EVERY reversal, with the gap that decides whether it counts as a Rock.
+        //
+        // ROCK_WINDOW_MS was a guess, and a guess is exactly the wrong kind of number for
+        // this: too tight and a real rock is ignored, too loose and ordinary browsing opens
+        // the menu by accident. Both failures were reported. This prints the measurement so
+        // the threshold can be set from what this owner's hand and this knob actually do,
+        // rather than from what felt plausible in an editor.
+        //
+        // Only on a reversal, so it is quiet during ordinary turning in one direction.
+        if (s_lastDir != 0 && dir != s_lastDir) {
+            Serial.printf("[knob] REVERSAL %s->%s gap=%lums%s\n",
+                          s_lastDir > 0 ? "R" : "L", dir > 0 ? "R" : "L",
+                          (unsigned long)(now - s_lastDirMs),
+                          (s_lastDir == -1 && dir == 1) ? "  (counts as a rock candidate)" : "");
+        }
         s_lastDir   = dir;
         s_lastDirMs = now;
         Serial.printf("[knob] turned %s  (pos=%ld)\n",

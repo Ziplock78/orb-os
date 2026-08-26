@@ -313,8 +313,16 @@ void app_shell::browseTurn(int delta) {
     }
     // Move the cursor only. No load(), so no onExit/onEnter, so no SD read and no PNG
     // decode: a detent is now just a text redraw on the overlay.
+    //
+    // "Just a text redraw" is the claim being measured here. The menu was reported as
+    // sluggish to move through, and this is the only work a detent does, so either it is
+    // cheap and the sluggishness is elsewhere, or it is not cheap and this comment has been
+    // wrong. The glow path redraws a 651 KB canvas per detent, which is the suspect.
+    const uint32_t t0 = millis();
     s_browseIdx = next_visible(s_browseIdx, delta > 0 ? 1 : -1);   // skip hidden apps
     show_overlay(s_apps[s_browseIdx].name);
+    Serial.printf("[shell] detent -> %s took %lums\n",
+                  s_apps[s_browseIdx].name, (unsigned long)(millis() - t0));
 }
 
 // Push commits the shown app (hides the overlay); if not browsing, it's an app action.
