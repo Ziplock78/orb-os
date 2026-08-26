@@ -18,6 +18,33 @@ namespace {
 lv_obj_t   *s_canvas = nullptr;
 lv_color_t *s_buf    = nullptr;
 
+// The rectangle this frame actually wrote into, and the one the last frame did.
+//
+// The canvas is the whole panel, and refresh() marked the whole panel dirty, so changing
+// one word repainted all 217,156 pixels. Measured on the hardware: every menu detent
+// reported "repainted 100% of the screen" and took 146-244 ms to reach the glass, on a
+// screen that is three short lines of text over a background that never changes.
+//
+// LVGL is perfectly willing to repaint a small rectangle; it was being told not to. So the
+// two functions that write pixels record where they wrote, and refresh() invalidates the
+// union of this frame and the last one. The last one matters as much as this one: the text
+// that is going away has to be repainted to erase it.
+//
+// Tracked at WRITE time rather than derived from the layout, because the layout already has
+// wrapping, alignment, rotation and a glow reach folded into it, and a bounding box
+// calculated a second way is a bounding box that can be subtly wrong in exactly the cases
+// that matter.
+int s_dx0 = 0, s_dy0 = 0, s_dx1 = -1, s_dy1 = -1;         // this frame, empty when x1 < x0
+int s_pdx0 = 0, s_pdy0 = 0, s_pdx1 = -1, s_pdy1 = -1;     // the frame before
+
+inline void mark_px(int x, int y) {
+    if (s_dx1 < s_dx0) { s_dx0 = s_dx1 = x; s_dy0 = s_dy1 = y; return; }
+    if (x < s_dx0) s_dx0 = x;
+    if (x > s_dx1) s_dx1 = x;
+    if (y < s_dy0) s_dy0 = y;
+    if (y > s_dy1) s_dy1 = y;
+}
+
 // Substitute every "{name}" in fmt with name, into a fixed buffer — mirrors
 // radar_view.cpp's radar_fmt token substitution, single token here.
 void format_name(const char *fmt, const char *name, char *out, size_t outSz) {
@@ -78,6 +105,7 @@ void blit_glyph(const uint8_t *bmp, int bw, int bh, float destCx, float destCy,
             buf[px] = (uint8_t)(col.full & 0xFF);
             buf[px + 1] = (uint8_t)(col.full >> 8);
             buf[px + 2] = (uint8_t)a;
+            mark_px(dx, dy);
         }
     }
 }
@@ -219,6 +247,7 @@ void stencil_composite(lv_color_t glowCol, int strength) {
             const int px = (dy * SCREEN_W + dx) * 3;
             if ((uint8_t)a <= buf[px + 2]) continue;
             buf[px] = lo; buf[px + 1] = hi; buf[px + 2] = (uint8_t)a;
+            mark_px(dx, dy);
         }
     }
 }
@@ -440,7 +469,13 @@ void refresh(const char *prevName, const char *curName, const char *nextName) {
     // TRUE_COLOR_ALPHA, 3 bytes per pixel, and "transparent black" is all zero bytes, so
     // a straight wipe produces an identical result at memory speed.
     memset(s_buf, 0, LV_CANVAS_BUF_SIZE_TRUE_COLOR_ALPHA(SCREEN_W, SCREEN_H));
-    lv_obj_invalidate(s_canvas);   // fill_bg used to mark it dirty; do that ourselves now
+    // The extent of the text now being erased. It has to be repainted too, or the previous
+    // word stays on the glass, so it is carried into the invalidate at the end.
+    s_pdx0 = s_dx0; s_pdy0 = s_dy0; s_pdx1 = s_dx1; s_pdy1 = s_dy1;
+    s_dx0 = 0; s_dy0 = 0; s_dx1 = -1; s_dy1 = -1;   // empty; the draw below fills it
+    // NOT lv_obj_invalidate here. That marked the entire panel dirty and is what made a
+    // one-word change repaint 217,156 pixels. The invalidate happens at the end, over the
+    // area that actually changed.
 #ifdef ARDUINO
     const uint32_t t1 = micros();
 #endif
@@ -480,7 +515,33 @@ void refresh(const char *prevName, const char *curName, const char *nextName) {
                      t.wrapWidth, t.lineGap, t.lineStep);
     }
 #endif
-    lv_obj_invalidate(s_canvas);
+    // Only what changed: what was just drawn, plus what was just erased.
+    //
+    // Padded by one pixel because the canvas is composited with alpha and LVGL's own
+    // rounder can widen a flush area; a rectangle that is one pixel tight leaves a seam
+    // that is very hard to see and impossible to explain.
+    {
+        int x0 = s_dx0, y0 = s_dy0, x1 = s_dx1, y1 = s_dy1;
+        if (s_pdx1 >= s_pdx0) {                       // union with the outgoing text
+            if (x1 < x0) { x0 = s_pdx0; y0 = s_pdy0; x1 = s_pdx1; y1 = s_pdy1; }
+            else {
+                if (s_pdx0 < x0) x0 = s_pdx0;
+                if (s_pdy0 < y0) y0 = s_pdy0;
+                if (s_pdx1 > x1) x1 = s_pdx1;
+                if (s_pdy1 > y1) y1 = s_pdy1;
+            }
+        }
+        if (x1 < x0) {
+            lv_obj_invalidate(s_canvas);              // nothing tracked: fall back to all of it
+        } else {
+            lv_area_t a;
+            a.x1 = (lv_coord_t)(x0 > 0 ? x0 - 1 : 0);
+            a.y1 = (lv_coord_t)(y0 > 0 ? y0 - 1 : 0);
+            a.x2 = (lv_coord_t)(x1 < SCREEN_W - 1 ? x1 + 1 : SCREEN_W - 1);
+            a.y2 = (lv_coord_t)(y1 < SCREEN_H - 1 ? y1 + 1 : SCREEN_H - 1);
+            lv_obj_invalidate_area(s_canvas, &a);
+        }
+    }
 #ifdef ARDUINO
     const uint32_t t2 = micros();
     Serial.printf("[perf] menu refresh: clear %lu us, draw %lu us, total %lu us (%lu ms)\n",
