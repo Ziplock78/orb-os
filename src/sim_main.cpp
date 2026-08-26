@@ -554,7 +554,7 @@ static void sim_register_apps(lv_obj_t *radarScreen) {
     // Same lineup + same hidden-app subset as the device (custom_apps.h): every app
     // is registered so indices line up, but the ones a theme flash turns off are
     // skipped when the knob cycles the menu.
-    app_shell::add(clockview::screen(), theme_style::names().clock, clockview::onPress, nullptr, false, nullptr, nullptr, !theme_style::apps().clock);   // push flips clock face
+    app_shell::add(clockview::screen(), theme_style::names().clock, nullptr, nullptr, false, nullptr, nullptr, !theme_style::apps().clock);   // the clock answers neither a turn nor a press
     // Exact same knob state machine as the device (main.cpp) — both wire the
     // shared radar::knob* handlers, so the simulator and Orb behave identically:
     // default view (knob released, a turn opens the switcher), push to enter
@@ -915,32 +915,62 @@ int main(int argc, char **argv) {
                    cs.hand[2].show, cs.orderN);
         }
         printf("[selftest] boot app: %s (idx %d)\n", app_shell::name(), app_shell::index());
-        simknob::injectTurn(+1); pump();   // first turn opens the switcher overlay
-        printf("[selftest] turn+1 -> %s (idx %d, browsing=%d)\n", app_shell::name(), app_shell::index(), app_shell::browsing());
-        simknob::injectTurn(+1); pump();   // cycle forward
-        printf("[selftest] turn+1 -> %s (idx %d, browsing=%d)\n", app_shell::name(), app_shell::index(), app_shell::browsing());
-        simknob::injectTurn(+1); pump();   // cycle forward
-        printf("[selftest] turn+1 -> %s (idx %d, browsing=%d)\n", app_shell::name(), app_shell::index(), app_shell::browsing());
-        simknob::injectPress(true, SDL_GetTicks());
-        simknob::injectPress(false, SDL_GetTicks());
-        pump();                            // push commits into the shown app
-        printf("[selftest] press -> committed to %s (idx %d, browsing=%d)\n", app_shell::name(), app_shell::index(), app_shell::browsing());
-
-        // Flight Tracker encoder state machine: default view (knob released) ->
-        // push enters selection (captured) -> turn cycles (still captured) ->
-        // push leaves selection (released again). Only meaningful with a custom
-        // push active (CUSTOM_HAS_RADAR); stock builds never capture here.
         auto press = [&]() { simknob::injectPress(true, SDL_GetTicks()); simknob::injectPress(false, SDL_GetTicks()); pump(); };
-        app_shell::selectApp(1); pump();   // land on Flight Tracker -> onEnter -> default view
+        auto rock  = [&]() { simknob::injectTurn(-1); pump(); simknob::injectTurn(+1); pump(); };
+        // Everything in this block happens in the space of a few milliseconds, which is not
+        // how a knob is used: a leftward turn from one test phase would still be inside the
+        // Rock window when the next phase turns right, and read as a gesture nobody made.
+        // Waiting past the window between phases is what makes these assertions mean
+        // anything about real use.
+        auto settle = [&]() { SDL_Delay(420); pump(); };
+
+        // THE ROCK. An ordinary turn belongs to the app on screen; only a quick left-then-
+        // right opens the switcher. These two assertions are the whole contract, and they
+        // used to say the opposite: a single turn opened the menu, which is what made the
+        // knob unusable for anything else.
+        settle();
+        simknob::injectTurn(+1); pump();
+        const bool plainTurnStayed = !app_shell::browsing();
+        printf("[selftest] plain turn: browsing=%d (expect 0 = stays in the app)\n", app_shell::browsing());
+
+        settle();
+        rock();
+        const bool rockOpened = app_shell::browsing();
+        printf("[selftest] rock: browsing=%d (expect 1 = switcher opened)\n", app_shell::browsing());
+        printf("[selftest] rock opens the menu: %s\n", (plainTurnStayed && rockOpened) ? "PASS" : "FAIL");
+
+        // Right-then-left must NOT open it. Requiring one order is what keeps ordinary
+        // direction changes from being read as the gesture.
+        if (app_shell::browsing()) press();          // commit out of the switcher first
+        settle();
+        simknob::injectTurn(+1); pump();
+        simknob::injectTurn(-1); pump();
+        printf("[selftest] reverse rock: browsing=%d (expect 0 = wrong order, ignored)\n", app_shell::browsing());
+        printf("[selftest] rock is directional: %s\n", !app_shell::browsing() ? "PASS" : "FAIL");
+
+        // Browsing: turns cycle apps, a press commits.
+        settle();
+        rock(); pump();
+        const int browseStart = app_shell::index();
+        simknob::injectTurn(+1); pump();
+        simknob::injectTurn(+1); pump();
+        printf("[selftest] browsing turns: %s (idx %d, browsing=%d)\n", app_shell::name(), app_shell::index(), app_shell::browsing());
+        press();
+        printf("[selftest] press -> committed to %s (idx %d, browsing=%d)\n", app_shell::name(), app_shell::index(), app_shell::browsing());
+        printf("[selftest] switcher cycles and commits: %s\n",
+               (!app_shell::browsing() && app_shell::index() != browseStart) ? "PASS" : "FAIL");
+
+        // The Flight Tracker takes a plain turn now. Nothing is captured any more: the knob
+        // is never taken from the shell, because the Rock is what leaves rather than a press.
+        settle();
+        app_shell::selectApp(1); pump();
         printf("[selftest] FT enter: app=%s captured=%d (expect 0)\n", app_shell::name(), app_shell::captured());
-        press();
-        printf("[selftest] FT push: captured=%d (expect 1 = selection mode)\n", app_shell::captured());
+        settle();
         simknob::injectTurn(+1); pump();
-        printf("[selftest] FT turn: captured=%d (expect 1 = still selecting)\n", app_shell::captured());
-        press();
-        printf("[selftest] FT push again: captured=%d (expect 0 = back to default)\n", app_shell::captured());
-        simknob::injectTurn(+1); pump();
-        printf("[selftest] FT turn from default: browsing=%d (expect 1 = switcher opened)\n", app_shell::browsing());
+        printf("[selftest] FT turn: browsing=%d captured=%d (expect 0, 0 = selecting, not browsing)\n",
+               app_shell::browsing(), app_shell::captured());
+        printf("[selftest] FT turn selects rather than browsing: %s\n",
+               (!app_shell::browsing() && !app_shell::captured()) ? "PASS" : "FAIL");
 
         // Settings > Range, added when touch removal killed the on-screen zoom button.
         // Navigation is made deterministic by the main menu's clamping: turning down
@@ -951,6 +981,7 @@ int main(int argc, char **argv) {
         // captured(), so leaving the overlay up sends every turn to the app switcher
         // and Settings never sees it. The previous step deliberately left it open.
         if (app_shell::browsing()) press();
+        settle();
         app_shell::selectApp(4); pump();          // Settings; onEnter resets to the menu
         settingsview::onEnter(); pump();
         printf("[selftest] Settings enter: app=%s captured=%d browsing=%d (expect 1, 0)\n",
@@ -1206,13 +1237,13 @@ int main(int argc, char **argv) {
             }
             radar::setTheme(THEME_AVIATOR);
 
-            // Clock: the three real faces, cycled by the same knob-push handler
-            // the device uses (AVIATOR is the boot default, then IMPERIAL, DIGITAL).
+            // Clock: whichever face the active theme resolves to. This used to walk all
+            // three stock faces by calling the knob-push handler between shots, back when a
+            // press cycled them. Pressing does nothing on this screen now — the face is a
+            // property of the theme, not something to flip through — so there is one shot.
             clockview::init();
             lv_scr_load(clockview::screen());
-            static const char *faceNames[3] = { "clock-aviator", "clock-imperial", "clock-digital" };
-            for (int f = 0; f < 3; ++f) {
-                if (f > 0) clockview::onPress();
+            {
                 lv_timer_handler();
                 lv_refr_now(NULL);
                 SDL_RenderClear(s_ren);
@@ -1221,7 +1252,7 @@ int main(int argc, char **argv) {
                 if (fsurf) {
                     SDL_RenderReadPixels(s_ren, NULL, SDL_PIXELFORMAT_ARGB8888, fsurf->pixels, fsurf->pitch);
                     char path[300];
-                    snprintf(path, sizeof(path), "%s-%s.bmp", shotPath, faceNames[f]);
+                    snprintf(path, sizeof(path), "%s-clock.bmp", shotPath);
                     SDL_SaveBMP(fsurf, path);
                     SDL_FreeSurface(fsurf);
                     printf("[sim] saved %s\n", path);
@@ -1238,7 +1269,7 @@ int main(int argc, char **argv) {
             lv_obj_set_style_bg_color(unavailScreen2, lv_color_black(), 0);
             lv_obj_set_style_bg_opa(unavailScreen2, LV_OPA_COVER, 0);
             settingsview::init();
-            app_shell::add(clockview::screen(), "Clock", clockview::onPress);
+            app_shell::add(clockview::screen(), "Clock");
             app_shell::add(radarScreen, "Flight Tracker", nullptr, nullptr, false, []() { ui_show_view(0); });
             app_shell::add(radarScreen, "Weather Radar", nullptr, nullptr, false, []() { ui_show_view(1); });
             app_shell::add(unavailScreen1, "Intel");

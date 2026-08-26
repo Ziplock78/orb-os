@@ -376,16 +376,6 @@ namespace {
                 ok = false;
                 break;
             }
-            if (knob::pendingPress()) {
-                // Same idea, for a push instead of a turn: don't consume it, just stop
-                // loading. Once this returns, the normal dispatch sees the still-pending
-                // press and calls onPress() itself — which cycles to the next camera and
-                // starts *that* load — so pushing through a SWITCHBOARD screen jumps
-                // straight to the next one instead of waiting out the current load first.
-                cancelled = true;
-                ok = false;
-                break;
-            }
             char path[48];
             snprintf(path, sizeof(path), "/spycam_frames/%s_%03d.jpg", cam.prefix, i);
             File f = SD.open(path, "r");
@@ -484,14 +474,20 @@ namespace {
 }
 
 // Knob push while viewing Spy Cam: switch to the next camera feed.
-void spycamview::onPress() {
-    if (CAM_COUNT <= 1) return;
-    s_camIdx = (s_camIdx + 1) % CAM_COUNT;
+// Cameras move with the knob now rather than with the button. A turn is the obvious way to
+// go through a row of feeds, and it goes both ways, which a press never could.
+void spycamview::onTurn(int delta) {
+    if (CAM_COUNT <= 1 || delta == 0) return;
+    const int dir = delta > 0 ? 1 : -1;
+    s_camIdx = ((s_camIdx + dir) % CAM_COUNT + CAM_COUNT) % CAM_COUNT;
     s_frame  = 0;
     lv_label_set_text(s_camLabel, CAMS[s_camIdx].label);
     if (s_fsOk) load_clip(s_camIdx);
     Serial.printf("[spycam] switched to %s\n", CAMS[s_camIdx].label);
 }
+
+// Nothing. See the header: the turn does this screen's only job.
+void spycamview::onPress() {}
 
 void spycamview::init() {
     s_fsOk = sdcard::mounted();   // sdcard::begin() already ran earlier in setup()

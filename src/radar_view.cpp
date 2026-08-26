@@ -216,7 +216,7 @@ static uint32_t    s_selActivityMs = 0;      // lv_tick_get() of the last knob i
 // time out before its own text arrived. That is now much likelier to succeed at all (the
 // lookup used TLS this board cannot do, see route_client.cpp), but it is still a network
 // round trip, and five seconds was a window you had to race.
-static constexpr uint32_t SELECT_IDLE_MS = 20000;
+static constexpr uint32_t SELECT_IDLE_MS = 5000;
 static void radar_exit_select();             // -> default view (deselect + release knob); defined below
 // Called when late-arriving detail (the route) reaches a card that is already up. Restarts
 // the idle countdown, because the thing worth reading only just appeared: without this the
@@ -2680,20 +2680,30 @@ void knobEnter() {
 // theme-cycle gesture was a hidden, undiscoverable knob-press with no Settings entry
 // at all, confusingly named the same as actual Launch Kit themes. Retired in favor of
 // the real Settings "Design" picker (theme_select) — see its header for why.
-void knobPress() {
-    Serial.printf("[select] press: mode=%d inRange=%d\n", (int)s_selectMode, countInRange());
-    if (s_selectMode) { radar_exit_select(); return; }
-    if (countInRange() <= 0) { Serial.println("[select] nothing in range to select"); return; }
-    selectNext(1);
-    s_selectMode = true;
-    s_selActivityMs = lv_tick_get();
-    app_shell::setCaptured(true);
-}
+// Nothing. Selecting an aircraft is what a TURN does now, so the button has no job on this
+// screen, and giving it a second way to do the same thing would only invite the question of
+// what the difference is. Left as an empty handler rather than unregistered so the shape of
+// the app table stays readable.
+void knobPress() {}
 
-// Turn (only reaches here while captured, i.e. in selection mode): step to the
-// next/previous aircraft and restart the 5s idle countdown.
+// A turn selects. Straight in, with no press to arm it first.
+//
+// This used to be a mode you entered by pressing: press to take the knob, turn to step
+// through aircraft, press again to leave. That put the one thing people most want to do on
+// this screen behind a button that takes real force, and made a turn — the obvious gesture
+// on a dial — do nothing at all until it had been asked permission.
+//
+// The first turn from nothing selected picks the nearest contact rather than stepping from
+// an arbitrary index, so the box lands somewhere sensible. After SELECT_IDLE_MS of stillness
+// it clears itself; the Rock gesture leaves the app entirely and clears it on the way out.
 void knobTurn(int dir) {
-    selectNext(dir > 0 ? 1 : -1);
+    if (!s_selectMode) {
+        if (countInRange() <= 0) return;   // an empty sky has nothing to select
+        s_selectMode = true;
+        selectNext(1);
+    } else {
+        selectNext(dir > 0 ? 1 : -1);
+    }
     s_selActivityMs = lv_tick_get();
 }
 

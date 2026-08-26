@@ -27,6 +27,10 @@ static volatile uint8_t s_prevAB  = 0;
 
 // Pending input for the app shell to consume (written + read on the loop thread).
 static int32_t s_pendingDelta = 0;
+static int      s_lastDir    = 0;    // -1 left, +1 right, 0 = nothing turned yet
+static uint32_t s_lastDirMs  = 0;
+static uint32_t s_rockMs     = 0;    // the rightward detent that completed a left->right
+static uint32_t s_rockGapMs  = 0;
 static volatile bool s_pendingPress = false;
 static volatile bool s_pendingLong  = false;
 
@@ -108,6 +112,16 @@ void knob::poll() {
         int32_t delta = detent - s_lastDetent;
         s_lastDetent = detent;
         s_pendingDelta += delta;
+        // Watch for a left-then-right reversal as it happens. See knob.h for why this is
+        // recorded in sequence rather than reconstructed from timestamps afterwards.
+        const int dir = delta > 0 ? 1 : -1;
+        const uint32_t now = millis();
+        if (s_lastDir == -1 && dir == 1) {
+            s_rockGapMs = now - s_lastDirMs;
+            s_rockMs    = now ? now : 1;   // never 0, which means "never happened"
+        }
+        s_lastDir   = dir;
+        s_lastDirMs = now;
         Serial.printf("[knob] turned %s  (pos=%ld)\n",
                       delta > 0 ? "RIGHT (CW)" : "LEFT (CCW)", (long)detent);
     }
@@ -129,6 +143,9 @@ int32_t knob::takeDelta() {
 }
 
 int32_t knob::rawPosition() { return s_rawPos; }
+
+uint32_t knob::lastRockMs()    { return s_rockMs; }
+uint32_t knob::lastRockGapMs() { return s_rockGapMs; }
 
 bool knob::takePress() {
     bool p = s_pendingPress;

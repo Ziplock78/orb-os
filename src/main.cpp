@@ -2192,12 +2192,12 @@ void setup() {
     psram_mark("after display+radar");
     clockview::init();
     psram_mark("after clockview");
-    app_shell::add(clockview::screen(), theme_style::names().clock, clockview::onPress, nullptr, false, nullptr, clockview::onExit, !theme_style::apps().clock);  // push flips analog/digital; onExit frees a custom face's decoded PSRAM
+    app_shell::add(clockview::screen(), theme_style::names().clock, nullptr, nullptr, false, nullptr, clockview::onExit, !theme_style::apps().clock);  // answers neither a turn nor a press; onExit frees a custom face's decoded PSRAM
     app_shell::add(radarScreen, theme_style::names().flight, radar_press_custom_or_theme, radar_turn_select, false, radar_show_home_custom, radar_exit_release_style, !theme_style::apps().flight);
     app_shell::add(radarScreen, theme_style::names().weather,  weather_press_cycle, nullptr, false, radar_show_weather, nullptr, !theme_style::apps().weather);
     spycamview::init();
     psram_mark("after spycamview");
-    app_shell::add(spycamview::screen(), theme_style::names().surveillance, spycamview::onPress, nullptr, false, nullptr, nullptr, !theme_style::apps().surveillance);  // push cycles cams; clip loads lazily on commit
+    app_shell::add(spycamview::screen(), theme_style::names().surveillance, spycamview::onPress, spycamview::onTurn, false, nullptr, nullptr, !theme_style::apps().surveillance);  // push cycles cams; clip loads lazily on commit
     settingsview::init();
     psram_mark("after settingsview");
     app_shell::add(settingsview::screen(), theme_style::names().settings,

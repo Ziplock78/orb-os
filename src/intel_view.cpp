@@ -297,7 +297,6 @@ const char *empty_reason() {
 void exit_scroll_mode() {
     if (!s_scrollMode) return;
     s_scrollMode = false;
-    app_shell::setCaptured(false);
 }
 
 // Show or hide the two marks for the current window.
@@ -568,21 +567,9 @@ void intelview::onExit() { intelview::sprite_release(); release_age_canvas(); }
 // A knob press: toggle scroll mode when there is anything to scroll, otherwise ask now
 // instead of waiting out the poll. The fetch itself belongs to the network task, so the
 // refresh half only clears the timer that task is watching.
+// A press asks for the headlines again. Nothing else: scrolling is what a TURN does now,
+// so the button is not needed to reach any of it.
 void intelview::onPress() {
-    if (s_scrollMode) {
-        exit_scroll_mode();
-        render();
-        Serial.println("[intel] scroll mode released");
-        return;
-    }
-    if (s_lastCount > s_visible) {
-        s_scrollMode = true;
-        s_scrollActivityMs = millis();
-        app_shell::setCaptured(true);
-        render();
-        Serial.println("[intel] scroll mode: turn to move, press to release");
-        return;
-    }
     s_lastTryMs = 0;
     Serial.println("[intel] refresh requested from the knob");
 }
@@ -590,9 +577,17 @@ void intelview::onPress() {
 // A detent in scroll mode: move the window. Clamped in render(), so spinning past the
 // end just holds the last page rather than wrapping — wrap-around on a five-item list
 // reads as a glitch, not a feature.
+// A turn scrolls, straight in, with no press to arm it first. The window is clamped in
+// render(), so turning past either end simply holds there rather than wrapping — wrap-around
+// on a short list reads as a glitch.
+//
+// s_scrollMode now means only "the marks are showing", not "the knob has been taken". The
+// knob is never taken on this screen: the Rock gesture is what leaves, so there is nothing
+// to hand back.
 void intelview::onTurn(int delta) {
-    if (!s_scrollMode) return;
+    if (s_lastCount <= s_visible) return;   // nothing to scroll
     s_scroll += delta;
+    s_scrollMode = true;
     s_scrollActivityMs = millis();
     render();
 }

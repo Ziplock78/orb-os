@@ -20,7 +20,26 @@ namespace {
 }
 
 // ---- injection from the SDL event loop -------------------------------------
-void simknob::injectTurn(int detents) { s_pendingDelta += detents; }
+// Mirrors knob.cpp exactly, including detecting the reversal in sequence rather than by
+// comparing timestamps, so the Rock behaves identically in the simulator.
+static int      s_lastDir   = 0;
+static uint32_t s_lastDirMs = 0;
+static uint32_t s_rockMs    = 0;
+static uint32_t s_rockGapMs = 0;
+static uint32_t sim_now_ms();
+
+void simknob::injectTurn(int detents) {
+    if (detents == 0) return;
+    s_pendingDelta += detents;
+    const int dir = detents > 0 ? 1 : -1;
+    const uint32_t now = sim_now_ms();
+    if (s_lastDir == -1 && dir == 1) {
+        s_rockGapMs = now - s_lastDirMs;
+        s_rockMs    = now ? now : 1;
+    }
+    s_lastDir   = dir;
+    s_lastDirMs = now;
+}
 
 void simknob::injectPress(bool down, uint32_t now_ms) {
     if (down && !s_down) {                 // falling edge: accept the press immediately
@@ -54,6 +73,16 @@ bool    knob::takePress() { bool p = s_pendingPress;   s_pendingPress = false; r
 bool    knob::takeLongPress() { bool p = s_pendingLong; s_pendingLong = false; return p; }
 
 int32_t  knob::rawPosition()  { return 0; }
+uint32_t knob::lastRockMs()    { return s_rockMs; }
+uint32_t knob::lastRockGapMs() { return s_rockGapMs; }
 bool     knob::pendingPress() { return s_pendingPress; }
 uint32_t knob::heldMs()       { return s_down ? s_heldMs : 0; }
 uint32_t knob::longPressMs()  { return LONG_PRESS_MS; }
+
+// A steady millisecond clock for the injection stamps above. std::chrono rather than SDL so
+// this file keeps no dependency on the windowing layer.
+#include <chrono>
+static uint32_t sim_now_ms() {
+    using namespace std::chrono;
+    return (uint32_t)duration_cast<milliseconds>(steady_clock::now().time_since_epoch()).count();
+}

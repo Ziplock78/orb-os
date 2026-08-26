@@ -7,5 +7,7 @@
 namespace spycamview {
     void      init();      // check the SD card, build the screen + canvas, start the playback timer
     lv_obj_t* screen();    // the app's LVGL screen (hand to app_shell::add)
-    void      onPress();   // knob push: switch to the next camera feed
+    // A turn switches camera. Direction is honoured, so turning back goes back.
+    void      onTurn(int delta);
+    void      onPress();   // nothing: switching cameras is what a turn does
 }

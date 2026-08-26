@@ -77,7 +77,7 @@ static constexpr float AVI_DATE_R    = 184.0f;  // date banner arc radius from t
 static constexpr float AVI_DATE_MID  = 180.0f;  // centred at 6 o'clock
 static constexpr float AVI_DATE_STEP = 4.0f;    // degrees between characters
 
-// FACE_OFFICE isn't in the push-cycle (see clockview::onPress): it's a light-background
+// FACE_OFFICE is a light-background
 // face and the other three are all dark dial/bitmap art, so mixing it in would look broken
 // either way round. The Office app theme (see app_theme.h) always shows it instead, exactly
 // like radar_view.cpp forces its own scope skin when Office is active.
@@ -85,7 +85,6 @@ static constexpr float AVI_DATE_STEP = 4.0f;    // degrees between characters
 // outside the knob push-cycle: when CUSTOM_CLOCK.active it's forced and shown on its own,
 // so the sim always displays exactly the design that was pushed.
 enum Face { FACE_AVIATOR, FACE_IMPERIAL, FACE_DIGITAL, FACE_OFFICE, FACE_CUSTOM, FACE_COUNT };
-static constexpr int DARK_FACE_COUNT = 3;   // Aviator/Imperial/Digital — the push-cycle set
 
 static Face        s_face   = FACE_AVIATOR;   // WWII aviator is the default face
 static lv_obj_t   *s_screen = nullptr;
@@ -1013,15 +1012,6 @@ static void apply_face() {
     }
     struct tm ti;
     if (getLocalTime(&ti, 0)) redraw(&ti);
-}
-
-// Used to cycle the stock Aviator/Imperial/Digital face here — a hidden knob-press
-// gesture with no Settings entry, confusingly named the same as real Launch Kit
-// themes. Retired in favor of the Settings "Design" picker (theme_select); the stock
-// faces themselves stay as the fallback render path (see FACE_* / apply_face()),
-// just fixed rather than interactively cycled. Nothing else currently answers a
-// press on the Clock screen, so this is a no-op for now.
-void clockview::onPress() {
 }
 
 // The custom face's plate/overlay/hand sprites decode once into PSRAM and were
