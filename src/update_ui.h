@@ -53,6 +53,35 @@ void rebooting();
 // the new firmware boots. The watchdog only covers the case where the flash never starts.
 void firmware_incoming();
 
+// Boot, honestly.
+//
+// The Orb draws a correct, good-looking clock and then blocks for 10 to 20+ seconds inside
+// g_wm.autoConnect() trying the saved network. lv_timer_handler() does not run during
+// blocking setup() code, so the knob is not polled either: the device looks finished and is
+// completely deaf, and the owner reasonably concludes it is broken. Rocking the knob during
+// that window does nothing, which is exactly what was reported.
+//
+// booting() puts an honest notice over the clock for the length of that block. It is not a
+// progress bar because there is nothing to count: it says what is happening and that the
+// knob will not answer yet.
+void booting(const char *what);
+
+// Everything is up and the knob is live.
+//
+// After a firmware update this WAITS for a press, because that is the moment the question
+// "is it finished?" actually gets asked, and answering it with a clock that may or may not
+// respond is what made the update feel broken. On an ordinary power-on it clears itself
+// after a moment: a desk clock that demands a button press every time it is plugged in is a
+// worse device than one that occasionally starts a second slower than it looks.
+void ready(bool needsAck);
+
+// True while a ready notice is waiting to be acknowledged. input_router asks, so the press
+// that dismisses the notice is not also delivered to whatever app is underneath it.
+bool awaitingAck();
+
+// The press that clears it.
+void ackReady();
+
 // Boot-time bake progress: converting the received theme into the flash cache. This is
 // the "second restart" leg of a full update and takes ~15 s for a rich theme.
 void bake_begin(int totalAssets);

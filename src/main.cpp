@@ -2287,6 +2287,11 @@ void setup() {
         }
     }
 
+    // Say what is happening, because the next call blocks for up to twenty seconds without
+    // servicing LVGL or the knob. Before this, the Orb showed a correct, live-looking clock
+    // and answered nothing, and the only way to find out it was busy was to wait.
+    update_ui::booting("Connecting to your network.\nThis can take up to twenty seconds.");
+
     // --- WiFi (captive portal, non-blocking) ------------------------------
     // First boot opens the "The Orb Setup" AP to enter WiFi creds. Non-blocking
     // so the radar keeps animating while you configure WiFi from your phone.
@@ -2555,7 +2560,26 @@ void setup() {
 #endif
     g_web.begin();
 
-    Serial.println("setup done");
+    // Everything is up and loop() is about to start polling the knob for the first time.
+    //
+    // Waiting for a press only when the FIRMWARE changed since the last boot. That is the
+    // moment somebody actually asks "is it finished?", and answering it with a clock that
+    // may or may not respond is what made an update feel broken. On an ordinary power-on
+    // the notice clears itself: a desk clock that wants permission every time it is plugged
+    // in is a worse device than one that starts a second slower than it looks.
+    bool freshFirmware = false;
+    {
+        Preferences p;
+        if (p.begin("orb", false)) {
+            freshFirmware = p.getString("fwseen", "") != FW_VERSION;
+            if (freshFirmware) p.putString("fwseen", FW_VERSION);
+            p.end();
+        }
+    }
+    update_ui::ready(freshFirmware);
+
+    Serial.printf("setup done (firmware %s, %s)\n", FW_VERSION,
+                  freshFirmware ? "first boot after an update" : "already seen this build");
 }
 
 void loop() {

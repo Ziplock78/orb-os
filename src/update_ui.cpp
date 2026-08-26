@@ -25,6 +25,9 @@ bool      s_rebootPending = false;
 // Waiting to be replaced by a USB flash. Changes what the watchdog below means: see
 // firmware_incoming().
 bool      s_firmwareWait  = false;
+// A ready notice is up and waiting for a press. See update_ui.h.
+bool      s_awaitAck      = false;
+lv_timer_t *s_autoClear   = nullptr;
 
 void ensure() {
     if (s_panel) return;
@@ -62,6 +65,8 @@ void destroy() {
     s_interrupted = false;
     s_rebootPending = false;
     s_firmwareWait = false;
+    s_awaitAck = false;
+    if (s_autoClear) { lv_timer_del(s_autoClear); s_autoClear = nullptr; }
 }
 
 // Files stopped arriving and nothing rebooted us: the send died partway. Say so briefly,
@@ -144,6 +149,59 @@ void rebooting() {
     lv_label_set_text(s_sub, "Step 2 of 3 - restarting.\nThe screen goes dark for a few seconds,\nthen it prepares the artwork. Not finished yet.");
 #ifdef ARDUINO
     Serial.println("[update_ui] reboot incoming — told the user to expect the restart");
+#endif
+}
+
+void booting(const char *what) {
+    ensure();
+    s_lastActivity = millis();
+    lv_label_set_text(s_title, "Starting up");
+    lv_label_set_text(s_sub, what ? what : "");
+    lv_label_set_text(s_hint, "The knob will not answer until this clears.");
+    lv_obj_align(s_title, LV_ALIGN_CENTER, 0, -60);
+    lv_obj_align(s_sub,   LV_ALIGN_CENTER, 0,   0);
+    lv_obj_align(s_hint,  LV_ALIGN_CENTER, 0,  60);
+    // Paint NOW. The whole reason this exists is that the caller is about to block for
+    // twenty seconds without servicing LVGL, so a queued repaint would never be drawn.
+    lv_refr_now(NULL);
+}
+
+void auto_clear_cb(lv_timer_t *) { destroy(); }
+
+void ready(bool needsAck) {
+    ensure();
+    s_lastActivity = millis();
+    s_awaitAck = needsAck;
+    lv_label_set_text(s_title, "Ready");
+    lv_label_set_text(s_sub, needsAck
+        ? "The update is finished.\nEverything is running."
+        : "");
+    lv_label_set_text(s_hint, needsAck ? "Press the knob to begin." : "");
+    // Checked with `program --readyshot`. One line at 398 px was most of the dial's width
+    // and the bezel crowds it; two shorter lines sit comfortably inside the glass.
+    lv_obj_align(s_title, LV_ALIGN_CENTER, 0, needsAck ? -62 : 0);
+    lv_obj_align(s_sub,   LV_ALIGN_CENTER, 0,   6);
+    lv_obj_align(s_hint,  LV_ALIGN_CENTER, 0,  78);
+    if (s_autoClear) { lv_timer_del(s_autoClear); s_autoClear = nullptr; }
+    if (!needsAck) {
+        // Long enough to read, short enough that nobody waits on it. An ordinary power-on
+        // should not need permission to become a clock.
+        s_autoClear = lv_timer_create(auto_clear_cb, 1200, nullptr);
+        lv_timer_set_repeat_count(s_autoClear, 1);
+    }
+    lv_refr_now(NULL);
+#ifdef ARDUINO
+    Serial.printf("[update_ui] ready (%s)\n", needsAck ? "waiting for a press" : "clearing itself");
+#endif
+}
+
+bool awaitingAck() { return s_awaitAck && s_panel; }
+
+void ackReady() {
+    if (!s_awaitAck) return;
+    destroy();
+#ifdef ARDUINO
+    Serial.println("[update_ui] ready notice acknowledged - the knob is yours");
 #endif
 }
 

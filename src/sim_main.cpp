@@ -671,7 +671,10 @@ int main(int argc, char **argv) {
     // labels at fixed offsets is exactly the layout that quietly overlaps when one of them
     // gains a line, and this screen has no second chance to be wrong.
     const char *updateShot = (argc >= 3 && strcmp(argv[1], "--updateshot") == 0) ? argv[2] : NULL;
-    const bool  interactive = !shotPath && !gifPath && !updateShot;   // live knob/app-shell only outside headless capture
+    // The "Ready" notice, for the same reason: it exists for a few seconds on real
+    // hardware after an update and there is no other way to look at it.
+    const char *readyShot  = (argc >= 3 && strcmp(argv[1], "--readyshot")  == 0) ? argv[2] : NULL;
+    const bool  interactive = !shotPath && !gifPath && !updateShot && !readyShot;   // live knob/app-shell only outside headless capture
 
     SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "linear");   // smooth up/downscale (both the
                                                               // frame photo and the live LVGL
@@ -1183,18 +1186,21 @@ int main(int argc, char **argv) {
             }
         }
 
-        // headless capture of the firmware-update overlay (--updateshot <path>)
+        // headless capture of the firmware-update overlay (--updateshot <path>) or the
+        // ready notice (--readyshot <path>). Same block: both are the same panel.
         static bool updateSaved = false;
-        if (updateShot && !updateSaved && now - start > 1800) {
+        if ((updateShot || readyShot) && !updateSaved && now - start > 1800) {
             updateSaved = true;
-            update_ui::firmware_incoming();   // paints and calls lv_refr_now itself
+            if (readyShot) update_ui::ready(true);           // the after-an-update variant
+            else           update_ui::firmware_incoming();   // paints and calls lv_refr_now itself
             SDL_RenderClear(s_ren); SDL_RenderCopy(s_ren, s_tex, NULL, NULL);
             int ow, oh; SDL_GetRendererOutputSize(s_ren, &ow, &oh);
             SDL_Surface *surf = SDL_CreateRGBSurfaceWithFormat(0, ow, oh, 32, SDL_PIXELFORMAT_ARGB8888);
             if (surf) {
                 SDL_RenderReadPixels(s_ren, NULL, SDL_PIXELFORMAT_ARGB8888, surf->pixels, surf->pitch);
-                SDL_SaveBMP(surf, updateShot); SDL_FreeSurface(surf);
-                printf("[sim] saved %s\n", updateShot);
+                const char *dest = readyShot ? readyShot : updateShot;
+                SDL_SaveBMP(surf, dest); SDL_FreeSurface(surf);
+                printf("[sim] saved %s\n", dest);
             }
             run = false;
         }

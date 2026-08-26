@@ -1,4 +1,5 @@
 #include "input_router.h"
+#include "update_ui.h"
 #include "app_shell.h"
 #include "knob.h"
 
@@ -68,6 +69,15 @@ bool rocked() {
 }  // namespace
 
 void input_router::dispatch(int delta, bool pressed) {
+    // The "Ready" notice owns the knob until it is acknowledged, and the press that clears
+    // it is SWALLOWED rather than passed on. Letting it through would mean the press that
+    // means "yes, I see it" also opens whatever the clock does with a press, which is the
+    // sort of thing that teaches people not to trust a confirmation.
+    if (update_ui::awaitingAck()) {
+        if (pressed) update_ui::ackReady();
+        return;
+    }
+
     // The switcher owns everything while it is up: turning cycles apps, pressing commits.
     // Leaving it is the 2 s settle or a press, never the gesture, so a rock performed while
     // browsing just cycles two apps and lands back where it started.
