@@ -56,10 +56,16 @@ namespace {
     uint32_t  s_browseTouch   = 0;         // millis() of the last browse interaction
     // How many detents move the menu on by one app.
     //
-    // Two, because this knob is light enough that one detent is easier to produce than to
-    // avoid, and a menu that jumps a screen every time your fingers brush the knob is worse
-    // than one that asks for a deliberate turn. Change this number and nothing else moves.
-    constexpr int BROWSE_DETENTS_PER_ITEM = 2;
+    // One. Two was tried on 2026-08-26 and rejected on the hardware within minutes: it
+    // reads as the menu being reluctant rather than as it being careful, which is a worse
+    // feeling than the occasional accidental step it was meant to prevent.
+    //
+    // Worth keeping the number rather than deleting it, because the request that produced
+    // it was real (this knob is light, one detent is easy to produce by accident) and the
+    // answer might be a heavier detent in hardware rather than a filter in software. It is
+    // also no longer load-bearing: with the accumulator below, one-per-item finally means
+    // one, where before this it meant "one, and some of your turns are discarded".
+    constexpr int BROWSE_DETENTS_PER_ITEM = 1;
 
     // Detents seen but not yet spent. This is the whole fix for "I have to click two or three
     // times before it switches".
