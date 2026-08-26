@@ -2183,7 +2183,7 @@ void setup() {
     // original app's weather tile (view 3). List/Stats stay touch-swipe-only (swipe
     // right from Radar) — they don't get their own knob-menu entry. Push while on Radar
     // cycles the visual theme (Phosphor/Orb/Amber/Military/Aviator).
-    // App lineup. Every app is always registered (so indices and selectApp(n) never
+    // App lineup, in app_shell::Slot order. Every app is always registered (so indices never
     // shift), but the ones a Launch Kit theme flash turns off (custom_apps.h) are
     // marked hidden — still built, just skipped when the knob cycles the menu. The
     // default custom_apps.h has all apps on, so a stock build / single-screen push
@@ -2198,25 +2198,24 @@ void setup() {
     spycamview::init();
     psram_mark("after spycamview");
     app_shell::add(spycamview::screen(), theme_style::names().surveillance, spycamview::onPress, spycamview::onTurn, false, nullptr, nullptr, !theme_style::apps().surveillance);  // push cycles cams; clip loads lazily on commit
+    // Intel before Settings. It used to be appended after, purely because the jumps below
+    // were written as bare integers and moving anything would have pointed the jumps at
+    // the wrong screen. They name app_shell::Slot now, so the menu can be ordered the way it
+    // should read: Settings last, after everything it configures.
+    intelview::init();
+    psram_mark("after intelview");
+    app_shell::add(intelview::screen(), theme_style::names().headlines,
+                   intelview::onPress, intelview::onTurn, false, intelview::onEnter, intelview::onExit, !theme_style::apps().headlines);  // push fetches now, or toggles scroll mode when the type size overflows; onEnter resets to the top
     settingsview::init();
     psram_mark("after settingsview");
     app_shell::add(settingsview::screen(), theme_style::names().settings,
                    settingsview::onPress, settingsview::onTurn,
                    true, settingsview::onEnter, settingsview::onExit, false);  // captures the knob on entry; onEnter resets to the menu and takes the text canvas, onExit gives it back
-    // Appended AFTER Settings on purpose. Several boot paths and the simulator's selftests
-    // address apps by hardcoded index (Settings is 4, Flight Tracker is 1); inserting this
-    // anywhere earlier would move both and send a factory-reset boot into the wrong screen.
-    // The cost is that Settings is no longer last in the wrap-around, which is cosmetic.
-    intelview::init();
-    psram_mark("after intelview");
-    app_shell::add(intelview::screen(), theme_style::names().headlines,
-                   intelview::onPress, intelview::onTurn, false, intelview::onEnter, intelview::onExit, !theme_style::apps().headlines);  // push fetches now, or toggles scroll mode when the type size overflows; onEnter resets to the top
     app_shell::begin();                // start on the clock (index 0 — see comment above)
     psram_mark("after app_shell::begin");
 
     // Fresh out of the box, or right after Settings > Reset: skip the clock and walk
-    // straight into WiFi setup instead — see host_factory_reset(). Index 4 is now
-    // Settings: Clock was inserted at the front, Intel/Surveillance/Settings didn't move.
+    // straight into WiFi setup instead — see host_factory_reset().
     bool wantWifiSetup = false;
     {
         Preferences p;
@@ -2234,7 +2233,7 @@ void setup() {
         // which holds the same splash art up indefinitely (push the knob to leave)
         // instead of the ordinary 2s-hold-then-fade, so it stays put to look at.
         else {
-            app_shell::selectApp(4);
+            app_shell::selectApp(app_shell::APP_SETTINGS);
             app_shell::setCaptured(true);
             settingsview::openAboutPage();
         }
@@ -2242,7 +2241,7 @@ void setup() {
         // Set only by a Flight Tracker push — boots straight into it instead of
         // landing on the clock and making you swipe/switch over, since a radar
         // push is almost always "I just changed this one screen, go look at it."
-        // selectApp(1) runs Flight Tracker's onEnter, which captures the knob for
+        // Selecting APP_FLIGHT runs Flight Tracker's onEnter, which captures the knob for
         // aircraft selection when a custom design is active (see
         // radar_show_home_custom) — left captured on purpose: turning the knob
         // should select an aircraft immediately, not open the switcher, since
@@ -2250,7 +2249,7 @@ void setup() {
         // selection mode and reach the switcher/menu (Settings -> WiFi etc.) —
         // same gesture Settings itself already uses to back out.
         else {
-            app_shell::selectApp(1);
+            app_shell::selectApp(app_shell::APP_FLIGHT);
         }
 #endif
     }
@@ -2337,7 +2336,7 @@ void setup() {
     // up on "The Orb Setup" for anyone who would rather type on a phone.
     if (!wifiUp) wantWifiSetup = true;
     if (wantWifiSetup) {
-        app_shell::selectApp(4);        // Settings
+        app_shell::selectApp(app_shell::APP_SETTINGS);
         app_shell::setCaptured(true);   // Settings captures the knob on entry; match that
         settingsview::openWifiSetupPrompt();
     }

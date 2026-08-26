@@ -14,6 +14,27 @@ typedef void (*app_action_t)();
 typedef void (*app_turn_t)(int delta);
 
 namespace app_shell {
+    // The menu's running order, written down once.
+    //
+    // These used to be numbers typed at each call site, and the numbers then dictated the
+    // menu: the Intel screen had to be registered AFTER Settings, leaving Settings stranded
+    // mid-list, because moving it would have turned selectApp(4) into the wrong screen on a
+    // factory-reset boot. The running order of a menu should be a design decision, not a
+    // consequence of which integers somebody already wrote down.
+    //
+    // Registration in main.cpp and sim_main.cpp follows this order, and every jump names a
+    // slot. To move an app in the menu, move it here and move its add() call to match.
+    // Settings stays last: it is the drawer everything else is not.
+    enum Slot {
+        APP_CLOCK = 0,
+        APP_FLIGHT,
+        APP_WEATHER,
+        APP_SURVEILLANCE,
+        APP_INTEL,
+        APP_SETTINGS,
+        APP_COUNT,
+    };
+
     // `hidden` apps stay registered (so app indices and selectApp(n) never shift)
     // but are skipped when the knob cycles the menu — a Launch Kit theme flash uses
     // this to ship only the apps that theme includes, without renumbering the rest.

@@ -571,8 +571,8 @@ static void sim_register_apps(lv_obj_t *radarScreen) {
                    []() { static bool fc = false; fc = !fc; ui_set_weather_forecast(fc); },  // push toggles WX/forecast
                    nullptr, false, []() { ui_show_view(1); }, nullptr, !theme_style::apps().weather);
     app_shell::add(survScreen,  theme_style::names().surveillance, nullptr, nullptr, false, nullptr, nullptr, !theme_style::apps().surveillance);
-    app_shell::add(settingsview::screen(), theme_style::names().settings,
-                   settingsview::onPress, settingsview::onTurn, true, settingsview::onEnter, settingsview::onExit, false);
+    app_shell::add(intelview::screen(), theme_style::names().headlines,
+                   intelview::onPress, intelview::onTurn, false, intelview::onEnter, intelview::onExit, !theme_style::apps().headlines);
     // After Settings, matching main.cpp. The selftests below address apps by index, so the
     // two lineups have to stay in the same order or the simulator stops standing in for
     // the device at exactly the moment someone is using it to check one.
@@ -581,8 +581,8 @@ static void sim_register_apps(lv_obj_t *radarScreen) {
     // does this from its network task, which the simulator has no equivalent of, and a
     // headless screenshot of an empty screen would tell nobody anything.
     if (intelview::fetchStep()) intelview::onHeadlinesReady();
-    app_shell::add(intelview::screen(), theme_style::names().headlines,
-                   intelview::onPress, intelview::onTurn, false, intelview::onEnter, intelview::onExit, !theme_style::apps().headlines);
+    app_shell::add(settingsview::screen(), theme_style::names().settings,
+                   settingsview::onPress, settingsview::onTurn, true, settingsview::onEnter, settingsview::onExit, false);
     app_shell::begin();   // start on Clock (index 0), matching the device
 }
 
@@ -801,18 +801,18 @@ int main(int argc, char **argv) {
     // (same splash art, held indefinitely, push the knob to leave) instead of
     // the normal boot sequence's 2s-hold-then-fade, matching the device build.
     if (interactive) {
-        app_shell::selectApp(4);
+        app_shell::selectApp(app_shell::APP_SETTINGS);
         app_shell::setCaptured(true);
         settingsview::openAboutPage();
     }
 #elif CUSTOM_BOOT_TARGET == 2
     // Set only by a Flight Tracker push — lands straight on it instead of the
-    // clock, matching the device build (see main.cpp). selectApp(1) runs Flight
+    // clock, matching the device build (see main.cpp). Selecting APP_FLIGHT runs Flight
     // Tracker's onEnter, which captures the knob for aircraft selection when a
     // custom design is active — left captured on purpose, so turning selects an
     // aircraft immediately. Press the knob to leave selection mode and reach
     // the switcher/menu.
-    if (interactive) app_shell::selectApp(1);
+    if (interactive) app_shell::selectApp(app_shell::APP_FLIGHT);
 #endif
     if (interactive) build_updating_overlay();
     printf("[sim] Capsule Radar simulator running (%dx%d) with 6 mock aircraft.\n", SIM_W, SIM_H);
@@ -907,7 +907,7 @@ int main(int argc, char **argv) {
         // About with the knob captured, which silently invalidates every assertion below.
         app_shell::setCaptured(false);
         if (app_shell::browsing()) { simknob::injectPress(true, SDL_GetTicks()); simknob::injectPress(false, SDL_GetTicks()); lv_timer_handler(); }
-        app_shell::selectApp(0);
+        app_shell::selectApp(app_shell::APP_CLOCK);
         lv_timer_handler();
 
         printf("[selftest] roster from theme '%s': clock=%d flight=%d weather=%d surv=%d\n",
@@ -970,7 +970,7 @@ int main(int argc, char **argv) {
         // The Flight Tracker takes a plain turn now. Nothing is captured any more: the knob
         // is never taken from the shell, because the Rock is what leaves rather than a press.
         settle();
-        app_shell::selectApp(1); pump();
+        app_shell::selectApp(app_shell::APP_FLIGHT); pump();
         printf("[selftest] FT enter: app=%s captured=%d (expect 0)\n", app_shell::name(), app_shell::captured());
         settle();
         simknob::injectTurn(+1); pump();
@@ -989,7 +989,7 @@ int main(int argc, char **argv) {
         // and Settings never sees it. The previous step deliberately left it open.
         if (app_shell::browsing()) press();
         settle();
-        app_shell::selectApp(4); pump();          // Settings; onEnter resets to the menu
+        app_shell::selectApp(app_shell::APP_SETTINGS); pump();          // Settings; onEnter resets to the menu
         settingsview::onEnter(); pump();
         printf("[selftest] Settings enter: app=%s captured=%d browsing=%d (expect 1, 0)\n",
                app_shell::name(), app_shell::captured(), app_shell::browsing());
@@ -1009,7 +1009,7 @@ int main(int argc, char **argv) {
         // NOT capture — both behaviours are asserted, whichever this theme exhibits.
         app_shell::setCaptured(false);
         if (app_shell::browsing()) press();
-        app_shell::selectApp(5); pump();          // Intel (the news screen); onEnter resets to the top
+        app_shell::selectApp(app_shell::APP_INTEL); pump();          // Intel (the news screen); onEnter resets to the top
         int iFirst, iVis, iCount;
         intelview::scrollState(iFirst, iVis, iCount);
         const bool iScrollable = iCount > iVis;
@@ -1128,7 +1128,7 @@ int main(int argc, char **argv) {
             const char *fshot = getenv("SIM_FRAMESHOT");   // one composite screenshot, then exit (alignment check)
             if (fshot && !fshotDone && now - start > 2500) {
                 fshotDone = true;
-                app_shell::selectApp(1); ui_show_view(0);   // radar: content reaches the screen edge (best alignment check)
+                app_shell::selectApp(app_shell::APP_FLIGHT); ui_show_view(0);   // radar: content reaches the screen edge (best alignment check)
                 lv_refr_now(NULL); present_composite(now);
                 int ow, oh; SDL_GetRendererOutputSize(s_ren, &ow, &oh);
                 SDL_Surface *surf = SDL_CreateRGBSurfaceWithFormat(0, ow, oh, 24, SDL_PIXELFORMAT_RGB24);
@@ -1301,7 +1301,7 @@ int main(int argc, char **argv) {
             app_shell::begin();
 
             // Settings: jump straight there, no slide, and grab the base menu list.
-            app_shell::selectApp(4);
+            app_shell::selectApp(app_shell::APP_SETTINGS);
             lv_timer_handler();
             lv_refr_now(NULL);
             SDL_RenderClear(s_ren);
@@ -1316,7 +1316,7 @@ int main(int argc, char **argv) {
 
             // Menu (app-switcher) overlay: land on Flight Tracker so both neighbours
             // (Clock, Weather Radar) show in the strip, then open the switcher.
-            app_shell::selectApp(1);
+            app_shell::selectApp(app_shell::APP_FLIGHT);
             app_shell::openSwitcher();
             lv_timer_handler();
             lv_refr_now(NULL);
