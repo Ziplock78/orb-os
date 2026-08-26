@@ -22,6 +22,9 @@ lv_timer_t *s_timer  = nullptr;
 uint32_t  s_lastActivity = 0;
 bool      s_interrupted  = false;
 bool      s_rebootPending = false;
+// Waiting to be replaced by a USB flash. Changes what the watchdog below means: see
+// firmware_incoming().
+bool      s_firmwareWait  = false;
 
 void ensure() {
     if (s_panel) return;
@@ -58,6 +61,7 @@ void destroy() {
     if (s_panel) { lv_obj_del(s_panel); s_panel = nullptr; s_title = s_sub = s_hint = nullptr; }
     s_interrupted = false;
     s_rebootPending = false;
+    s_firmwareWait = false;
 }
 
 // Files stopped arriving and nothing rebooted us: the send died partway. Say so briefly,
@@ -65,6 +69,20 @@ void destroy() {
 void watchdog_cb(lv_timer_t *) {
     if (!s_panel || s_rebootPending) return;
     const uint32_t idle = millis() - s_lastActivity;
+    // Waiting on a firmware flash inverts what this timer means. A flash stops this code
+    // dead, so the fact that this callback is running AT ALL proves the flash never began:
+    // the browser could not take the port, the device chooser was dismissed, or the tab was
+    // closed. Ninety seconds covers a slow start and still refuses to leave a healthy Orb
+    // wearing an update screen forever, which is the same promise the branch below makes.
+    if (s_firmwareWait) {
+        if (idle > 90000) {
+#ifdef ARDUINO
+            Serial.println("[update_ui] no flash arrived in 90s - clearing the firmware overlay");
+#endif
+            destroy();
+        }
+        return;
+    }
     if (!s_interrupted && idle > 12000) {
         s_interrupted = true;
         lv_label_set_text(s_title, "Update interrupted");
@@ -126,6 +144,40 @@ void rebooting() {
     lv_label_set_text(s_sub, "Step 2 of 3 - restarting.\nThe screen goes dark for a few seconds,\nthen it prepares the artwork. Not finished yet.");
 #ifdef ARDUINO
     Serial.println("[update_ui] reboot incoming — told the user to expect the restart");
+#endif
+}
+
+void firmware_incoming() {
+    ensure();
+    s_lastActivity  = millis();
+    s_interrupted   = false;
+    s_rebootPending = false;
+    s_firmwareWait  = true;
+    lv_label_set_text(s_title, "Updating firmware");
+    // Says the quiet part out loud. The complaint this exists to answer is not "what is it
+    // doing", it is "has it locked up", so the screen not changing is named as the expected
+    // behaviour rather than left to be inferred from a motionless panel.
+    lv_label_set_text(s_sub,
+                      "This usually takes a minute or two.\n"
+                      "The screen will not change while it works.\n"
+                      "It restarts itself when it is finished.");
+    lv_label_set_text(s_hint, "Keep it plugged in. Do not unplug.");
+    // Re-space for three lines. The shared offsets (-40 / +6 / +60) are set for the two-line
+    // subtitle the theme-install states use, and a third line grows the block from its centre
+    // in both directions, closing the gap under the title to almost nothing. Checked with
+    // `program --updateshot`, which exists precisely because three labels at fixed offsets is
+    // the layout that silently collides the moment one of them gains a line.
+    lv_obj_align(s_title, LV_ALIGN_CENTER, 0, -78);
+    lv_obj_align(s_sub,   LV_ALIGN_CENTER, 0,   2);
+    lv_obj_align(s_hint,  LV_ALIGN_CENTER, 0,  78);
+    if (!s_timer) s_timer = lv_timer_create(watchdog_cb, 1000, nullptr);
+    // The entire point of this function, and the one line that cannot be dropped. Everything
+    // above only queues a repaint; the chip is moments from being reset into its bootloader,
+    // and a frame still sitting in LVGL's buffer when that happens is never drawn at all.
+    // draw_block() pushes over QSPI and blocks, so when this returns the pixels are on glass.
+    lv_refr_now(NULL);
+#ifdef ARDUINO
+    Serial.println("[update_ui] firmware flash incoming - painted the notice while we still can");
 #endif
 }
 

@@ -264,6 +264,23 @@ void cmd_app(const char *arg) {
 // the card's idle timeout, not whether the text arrives before the card closes — can be
 // observed without someone standing at the device pressing the knob. Same task as the
 // knob's own handler, so this is exactly the input path, not a parallel one.
+// The host is about to hand this chip to a firmware flasher.
+//
+// Answered before anything is reset, because after that this firmware is not running to
+// answer anything. All it does is put the update notice on screen: esptool's write leaves
+// the panel frozen on whatever frame it last had for two minutes, and that frame is the
+// only thing the owner has to go on. A stopped clock reads as a crash and gets the cable
+// pulled mid-write; a screen that says "updating, do not unplug" does not.
+//
+// Note the ordering. update_ui paints synchronously and only then do we reply, so by the
+// time Studio is free to start resetting the board, the pixels are already on glass.
+void cmd_flashing() {
+    update_ui::firmware_incoming();
+    out_reset();
+    out_str("{\"ok\":true,\"showing\":\"firmware-update\"}");
+    out_send();
+}
+
 void cmd_press() {
     app_shell::pressCurrent();
     out_reset();
@@ -536,6 +553,7 @@ void dispatch(char *line) {
     else if (!strcmp(line, "delete"))    cmd_delete(arg);
     else if (!strcmp(line, "apps"))      cmd_apps();
     else if (!strcmp(line, "app"))       cmd_app(arg);
+    else if (!strcmp(line, "flashing"))  cmd_flashing();
     else if (!strcmp(line, "press"))     cmd_press();
     else if (!strcmp(line, "poll"))      cmd_poll(arg);
     else if (!strcmp(line, "layer"))     cmd_layer(arg);

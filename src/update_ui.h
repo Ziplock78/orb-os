@@ -37,6 +37,22 @@ void file_progress(const char *name, int count, uint32_t bytes);
 // reads as expected progress, not a crash.
 void rebooting();
 
+// The host is about to hand this chip to a firmware flasher over USB.
+//
+// This is the one update the device cannot narrate. A theme install runs with the firmware
+// running, so it can count files and repaint. A firmware flash resets the chip into its ROM
+// bootloader, and from that moment this code is not executing at all: no LVGL, no display
+// driver, no timer. The panel simply keeps the last frame it was given, for the whole write.
+//
+// So the frame it is holding has to be chosen on purpose. Left alone it is a clock with a
+// stopped second hand, which reads as a crash, and someone watching a crashed clock for two
+// minutes pulls the cable, which is the one action that actually does destroy the board.
+// This paints the explanation while there is still a processor to paint it with.
+//
+// Nothing clears this from the device side, because nothing on the device runs again until
+// the new firmware boots. The watchdog only covers the case where the flash never starts.
+void firmware_incoming();
+
 // Boot-time bake progress: converting the received theme into the flash cache. This is
 // the "second restart" leg of a full update and takes ~15 s for a rich theme.
 void bake_begin(int totalAssets);

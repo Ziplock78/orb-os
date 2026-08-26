@@ -31,6 +31,7 @@
 #include "app_shell.h"
 #include "app_theme.h"
 #include "theme_select.h"
+#include "update_ui.h"   // --updateshot, below
 #include "theme_style.h"   // per-theme app roster (theme_style::apps())
 #include "settings_view.h"
 #include "custom_boot_target.h"  // CUSTOM_BOOT_TARGET — set by whichever Launch Kit push (clock/splash/radar) ran last
@@ -664,7 +665,13 @@ int main(int argc, char **argv) {
     // checking a custom design — it renders roads and an "AVIATOR" label no matter what
     // is on the card. Without this, verifying a theme meant photographing the hardware.
     const char *themeShot = (argc >= 3 && strcmp(argv[1], "--themeshot") == 0) ? argv[2] : NULL;
-    const bool  interactive = !shotPath && !gifPath;   // live knob/app-shell only outside headless capture
+    // --updateshot captures the system update overlay, which has no other way to be looked
+    // at: on hardware it appears only in the seconds before esptool takes the processor, and
+    // the whole point of it is to be readable at a glance by someone who is worried. Three
+    // labels at fixed offsets is exactly the layout that quietly overlaps when one of them
+    // gains a line, and this screen has no second chance to be wrong.
+    const char *updateShot = (argc >= 3 && strcmp(argv[1], "--updateshot") == 0) ? argv[2] : NULL;
+    const bool  interactive = !shotPath && !gifPath && !updateShot;   // live knob/app-shell only outside headless capture
 
     SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "linear");   // smooth up/downscale (both the
                                                               // frame photo and the live LVGL
@@ -1174,6 +1181,22 @@ int main(int argc, char **argv) {
                 SDL_SaveBMP(surf, path); SDL_FreeSurface(surf);
                 printf("[sim] saved %s\n", path);
             }
+        }
+
+        // headless capture of the firmware-update overlay (--updateshot <path>)
+        static bool updateSaved = false;
+        if (updateShot && !updateSaved && now - start > 1800) {
+            updateSaved = true;
+            update_ui::firmware_incoming();   // paints and calls lv_refr_now itself
+            SDL_RenderClear(s_ren); SDL_RenderCopy(s_ren, s_tex, NULL, NULL);
+            int ow, oh; SDL_GetRendererOutputSize(s_ren, &ow, &oh);
+            SDL_Surface *surf = SDL_CreateRGBSurfaceWithFormat(0, ow, oh, 32, SDL_PIXELFORMAT_ARGB8888);
+            if (surf) {
+                SDL_RenderReadPixels(s_ren, NULL, SDL_PIXELFORMAT_ARGB8888, surf->pixels, surf->pitch);
+                SDL_SaveBMP(surf, updateShot); SDL_FreeSurface(surf);
+                printf("[sim] saved %s\n", updateShot);
+            }
+            run = false;
         }
 
         // animated GIF capture (--gif <prefix>): grab frames after the splash fades
