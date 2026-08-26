@@ -17,6 +17,11 @@ static constexpr int32_t KNOB_STEPS_PER_DETENT = 4;
 // Two, so a slightly heavy flick still counts, but a deliberate scroll does not.
 static constexpr int ROCK_MAX_RUN = 2;
 
+// A rock has to be humanly possible. Below the minimum it is contact bounce; above the
+// maximum it is two separate decisions. input_router applies no timing of its own.
+static constexpr uint32_t ROCK_MIN_GAP_MS = 45;
+static constexpr uint32_t ROCK_MAX_GAP_MS = 900;
+
 static constexpr uint32_t SW_DEBOUNCE_MS = 200;  // min time between accepted presses. Wide on purpose:
                                                   //   this switch bounces heavily, and 200ms is still far
                                                   //   faster than anyone deliberately selects menu items,
@@ -50,7 +55,6 @@ static uint32_t s_lastDirMs  = 0;
 //
 // Here every detent is seen as it happens, with its own timestamp, and nothing can cancel
 // out. esp_timer_get_time rather than millis() because this runs from IRAM.
-static volatile int32_t  s_isrDetent    = 0;
 static volatile int      s_isrLastDir   = 0;
 static volatile uint32_t s_isrLastDirMs = 0;
 // How many detents the current direction has run for. A rock is a small deliberate wiggle,
@@ -58,6 +62,8 @@ static volatile uint32_t s_isrLastDirMs = 0;
 // right counted as a rock, which is just ordinary browsing and is why the menu appeared to
 // open on any turn at all.
 static volatile int      s_isrRunLen    = 0;
+static volatile int32_t  s_anchor       = 0;   // rawPos at the last COMMITTED detent
+static volatile int32_t  s_detent       = 0;   // committed detents; the one true stream
 static volatile uint32_t s_rockMs       = 0;   // the rightward detent that completed a left->right
 static volatile uint32_t s_rockGapMs    = 0;
 static volatile bool s_pendingPress = false;
@@ -81,6 +87,48 @@ static const int8_t kQuadTable[16] = {
      0,  1, -1,  0,
 };
 
+// ONE detent stream, committed with hysteresis, feeding everything.
+//
+// This is the fix for a menu that opened by itself. The detent used to be derived as
+//
+//     const int32_t det = s_rawPos / KNOB_STEPS_PER_DETENT;
+//
+// which has no hysteresis. A knob resting ON a boundary needs only one step of mechanical
+// or electrical dither to flip that value back and forth, 8 -> 7 -> 8, and each flip looked
+// like a change of direction a couple of milliseconds apart with a run length of one: the
+// exact shape of a rock. So stopping mid-turn opened the app menu, which is what "I turned
+// it three times and it went to the menu" was. Truncating division is also asymmetric about
+// zero (both 0..3 and -3..0 map to 0), a second bug in the same line.
+//
+// This never mattered before the Rock existed, because poll() only ever looked at NET
+// movement since the last call and that quietly absorbed the dither. Moving detection into
+// the ISR to stop losing whole rocks removed the filter along with the problem.
+//
+// So: a detent is committed only after a FULL detent of travel from the last committed
+// position, in either direction. Dither of one to three steps commits nothing, ever. And
+// poll() reads the same counter, so the stream that decides a rock and the stream that
+// moves an app can no longer disagree about what happened.
+static void IRAM_ATTR on_detent(int dir) {
+    s_detent += dir;
+    const uint32_t now = (uint32_t)(esp_timer_get_time() / 1000);
+    // A rock is a SHORT turn back, then forward, as one gesture.
+    //   run length : the turn back was a flick, not a scroll
+    //   gap        : one gesture rather than two decisions
+    //   minimum gap: a hand cannot reverse in five milliseconds. Anything faster is the
+    //                encoder, not the person, and treating it as input is what let a
+    //                resting knob open the menu.
+    if (s_isrLastDir == -1 && dir == 1 && s_isrRunLen <= ROCK_MAX_RUN) {
+        const uint32_t gap = now - s_isrLastDirMs;
+        if (gap >= ROCK_MIN_GAP_MS && gap <= ROCK_MAX_GAP_MS) {
+            s_rockGapMs = gap;
+            s_rockMs    = now ? now : 1;   // never 0, which means "never happened"
+        }
+    }
+    s_isrRunLen    = (dir == s_isrLastDir) ? s_isrRunLen + 1 : 1;
+    s_isrLastDir   = dir;
+    s_isrLastDirMs = now;
+}
+
 static void IRAM_ATTR knob_isr() {
     uint8_t a  = (uint8_t)digitalRead(PIN_KNOB_A);
     uint8_t b  = (uint8_t)digitalRead(PIN_KNOB_B);
@@ -89,23 +137,8 @@ static void IRAM_ATTR knob_isr() {
     s_rawPos += kQuadTable[idx];
     s_prevAB  = ab;
 
-    // Direction changes, at the moment they happen. See the note by s_isrDetent.
-    const int32_t det = s_rawPos / KNOB_STEPS_PER_DETENT;
-    if (det != s_isrDetent) {
-        const int dir = (det > s_isrDetent) ? 1 : -1;
-        const uint32_t now = (uint32_t)(esp_timer_get_time() / 1000);
-        // A rock is: a SHORT turn left, then immediately back right. Both halves matter.
-        // The gap says it was one gesture rather than two decisions; the run length says
-        // the left half was a flick and not a scroll.
-        if (s_isrLastDir == -1 && dir == 1 && s_isrRunLen <= ROCK_MAX_RUN) {
-            s_rockGapMs = now - s_isrLastDirMs;
-            s_rockMs    = now ? now : 1;   // never 0, which means "never happened"
-        }
-        s_isrRunLen    = (dir == s_isrLastDir) ? s_isrRunLen + 1 : 1;
-        s_isrLastDir   = dir;
-        s_isrLastDirMs = now;
-        s_isrDetent    = det;
-    }
+    while (s_rawPos - s_anchor >= KNOB_STEPS_PER_DETENT) { s_anchor += KNOB_STEPS_PER_DETENT; on_detent(+1); }
+    while (s_anchor - s_rawPos >= KNOB_STEPS_PER_DETENT) { s_anchor -= KNOB_STEPS_PER_DETENT; on_detent(-1); }
 }
 
 // Debounced in the ISR. A RELEASE (rising edge) is always accepted so s_swLevel can
@@ -153,8 +186,11 @@ void knob::begin() {
 
 void knob::poll() {
     // --- Rotation: one log line per detent ----------------------------------
+    // The SAME committed stream the ISR builds, not a second derivation from rawPos. Two
+    // derivations meant two answers about what the knob had done, and the one that decided
+    // rocks had no hysteresis.
     static int32_t s_lastDetent = 0;
-    int32_t detent = s_rawPos / KNOB_STEPS_PER_DETENT;
+    const int32_t detent = s_detent;
     if (detent != s_lastDetent) {
         int32_t delta = detent - s_lastDetent;
         s_lastDetent = detent;

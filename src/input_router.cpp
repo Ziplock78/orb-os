@@ -125,7 +125,15 @@ void input_router::dispatch(int delta, bool pressed) {
     // Checked before the turn is delivered, so the detents that MADE the gesture are not
     // also handed to the app underneath. Without this, rocking out of the flight tracker
     // would select an aircraft on the way past.
-    if (rocked()) {
+    //
+    // An app that has CAPTURED the knob owns it, rock included. Settings is the case: its
+    // wheel scrolls with the knob, and scrolling a list back and forth is an ordinary thing
+    // to do in it. Leaving the rock live there threw you out to the app menu, with nothing
+    // chosen, in the middle of reading a list. Capturing already means "this screen is using
+    // the knob for something else", and the rock was the one input ignoring that.
+    //
+    // Nothing gets trapped: a capturing screen carries its own way out. Settings has Back.
+    if (!app_shell::captured() && rocked()) {
         app_shell::openSwitcher();
         return;
     }
