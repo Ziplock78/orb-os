@@ -1,5 +1,6 @@
 #include <Arduino.h>
 #include "knob.h"
+#include <esp_timer.h>   // esp_timer_get_time() — IRAM-safe, unlike millis() from an ISR
 
 // --- Wiring -----------------------------------------------------------------
 // See knob.h for the full header pinout. These three GPIOs are unused by the
@@ -29,8 +30,27 @@ static volatile uint8_t s_prevAB  = 0;
 static int32_t s_pendingDelta = 0;
 static int      s_lastDir    = 0;    // -1 left, +1 right, 0 = nothing turned yet
 static uint32_t s_lastDirMs  = 0;
-static uint32_t s_rockMs     = 0;    // the rightward detent that completed a left->right
-static uint32_t s_rockGapMs  = 0;
+
+// The Rock, detected IN THE ISR.
+//
+// It used to be worked out in poll(), from the net change in position since the last call.
+// That threw whole rocks away. poll() sees one number, and a left detent followed by a right
+// one between two calls nets to zero: the position is back where it started, `detent !=
+// s_lastDetent` is false, and the rock never happened as far as anything downstream knows.
+// The interrupt had caught both detents perfectly; poll() collapsed them.
+//
+// Which made it a frame-rate bug wearing an input bug's clothes, and explains the report
+// that it worked from every app except the Clock. The Clock rotates a 539 KB minute hand and
+// a 294 KB hour hand with shadows every frame, so its loop iteration is the longest on the
+// device and poll() runs least often there. Widest window, most rocks swallowed.
+//
+// Here every detent is seen as it happens, with its own timestamp, and nothing can cancel
+// out. esp_timer_get_time rather than millis() because this runs from IRAM.
+static volatile int32_t  s_isrDetent    = 0;
+static volatile int      s_isrLastDir   = 0;
+static volatile uint32_t s_isrLastDirMs = 0;
+static volatile uint32_t s_rockMs       = 0;   // the rightward detent that completed a left->right
+static volatile uint32_t s_rockGapMs    = 0;
 static volatile bool s_pendingPress = false;
 static volatile bool s_pendingLong  = false;
 
@@ -59,6 +79,20 @@ static void IRAM_ATTR knob_isr() {
     uint8_t idx = (uint8_t)(((s_prevAB << 2) | ab) & 0x0F);
     s_rawPos += kQuadTable[idx];
     s_prevAB  = ab;
+
+    // Direction changes, at the moment they happen. See the note by s_isrDetent.
+    const int32_t det = s_rawPos / KNOB_STEPS_PER_DETENT;
+    if (det != s_isrDetent) {
+        const int dir = (det > s_isrDetent) ? 1 : -1;
+        const uint32_t now = (uint32_t)(esp_timer_get_time() / 1000);
+        if (s_isrLastDir == -1 && dir == 1) {
+            s_rockGapMs = now - s_isrLastDirMs;
+            s_rockMs    = now ? now : 1;   // never 0, which means "never happened"
+        }
+        s_isrLastDir   = dir;
+        s_isrLastDirMs = now;
+        s_isrDetent    = det;
+    }
 }
 
 // Debounced in the ISR. A RELEASE (rising edge) is always accepted so s_swLevel can
@@ -112,14 +146,12 @@ void knob::poll() {
         int32_t delta = detent - s_lastDetent;
         s_lastDetent = detent;
         s_pendingDelta += delta;
-        // Watch for a left-then-right reversal as it happens. See knob.h for why this is
-        // recorded in sequence rather than reconstructed from timestamps afterwards.
+        // The rock is NOT decided here any more; the ISR owns it. This is only the log,
+        // and the log is deliberately kept at poll resolution so the two can be compared:
+        // a reversal the ISR recorded that never appears here is a rock this code used to
+        // lose entirely.
         const int dir = delta > 0 ? 1 : -1;
         const uint32_t now = millis();
-        if (s_lastDir == -1 && dir == 1) {
-            s_rockGapMs = now - s_lastDirMs;
-            s_rockMs    = now ? now : 1;   // never 0, which means "never happened"
-        }
         // EVERY reversal, with the gap that decides whether it counts as a Rock.
         //
         // ROCK_WINDOW_MS was a guess, and a guess is exactly the wrong kind of number for
