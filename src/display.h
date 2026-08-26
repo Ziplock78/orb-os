@@ -14,6 +14,14 @@ bool begin();
 void loop();
 
 // 0..255 panel brightness (CO5300 command 0x51).
+// Stamp an input so the next COMPLETED frame reports how long it took to reach the glass.
+//
+// The detent handler was measured at 1 ms and the menu still felt slow, which means the
+// gap is not the handler, it is everything between the handler and the pixels: LVGL's
+// refresh tick, and whatever else is still drawing on that frame. Timing the handler
+// answered the wrong question. This answers the one that was asked.
+void markInput(uint32_t ms);
+
 void setBrightness(uint8_t v);
 
 // ms since the last touch (LVGL inactivity timer) — for idle auto-dim.

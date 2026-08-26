@@ -15,6 +15,7 @@
 #include "theme_select.h"
 #include "theme_style.h"
 #include "update_ui.h"
+#include "input_router.h"  // cmd_turn drives the real input path
 #include "app_shell.h"   // selectApp/nameAt for the app + apps commands
 #include <strings.h>     // strncasecmp
 #include <esp_heap_caps.h> // heap_caps_get_info for the "mem" command
@@ -278,6 +279,20 @@ void cmd_flashing() {
     update_ui::firmware_incoming();
     out_reset();
     out_str("{\"ok\":true,\"showing\":\"firmware-update\"}");
+    out_send();
+}
+
+// Turn the knob from here.
+//
+// Added to measure the menu without a hand on the device: the question is how long a detent
+// takes to reach the glass, and answering it needs the turn and the stopwatch on the same
+// side of the cable. Goes through input_router, not straight into app_shell, so it takes
+// exactly the path a real detent takes, Rock detection and all.
+void cmd_turn(const char *arg) {
+    const int n = arg && *arg ? atoi(arg) : 1;
+    input_router::dispatch(n, false);
+    out_reset();
+    out_fmt("{\"ok\":true,\"turned\":%d}", n);
     out_send();
 }
 
@@ -554,6 +569,7 @@ void dispatch(char *line) {
     else if (!strcmp(line, "apps"))      cmd_apps();
     else if (!strcmp(line, "app"))       cmd_app(arg);
     else if (!strcmp(line, "flashing"))  cmd_flashing();
+    else if (!strcmp(line, "turn"))      cmd_turn(arg);
     else if (!strcmp(line, "press"))     cmd_press();
     else if (!strcmp(line, "poll"))      cmd_poll(arg);
     else if (!strcmp(line, "layer"))     cmd_layer(arg);

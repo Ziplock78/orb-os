@@ -37,6 +37,7 @@ uint32_t display_frames() { return s_frameCount; }
 // panel" distinguishes compositing cost (CPU, layer blending) from QSPI transfer cost.
 static volatile uint32_t s_lvglUs  = 0;   // cumulative us inside lv_timer_handler()
 static volatile uint32_t s_flushUs = 0;   // cumulative us inside flush_cb (a subset)
+static volatile uint32_t s_inputAtMs = 0;  // see display::markInput
 static volatile uint32_t s_flushedPx = 0; // cumulative pixels pushed (dirty-area size)
 uint32_t display_flushed_px() { return s_flushedPx; }
 // Defined at file scope, matching display_frames() above: display.h declares these
@@ -203,7 +204,15 @@ static void flush_cb(lv_disp_drv_t *drv, const lv_area_t *area, lv_color_t *px) 
         default: break;  // 0°
     }
     draw_block(dx, dy, out, dw, dh);
-    if (lv_disp_flush_is_last(drv)) s_frameCount++;
+    if (lv_disp_flush_is_last(drv)) {
+        s_frameCount++;
+        // The end of the frame IS the moment the pixels are on the panel: draw_block writes
+        // over QSPI and blocks, so nothing is queued behind this.
+        if (s_inputAtMs) {
+            Serial.printf("[display] input -> glass: %lums\n", (unsigned long)(millis() - s_inputAtMs));
+            s_inputAtMs = 0;
+        }
+    }
     s_flushUs += micros() - t_flush0;
     lv_disp_flush_ready(drv);
 }
@@ -310,6 +319,8 @@ void loop() {
     lv_timer_handler();
     s_lvglUs += micros() - t0;
 }
+
+void markInput(uint32_t ms) { s_inputAtMs = ms ? ms : 1; }
 
 void setBrightness(uint8_t v) { if (s_gfx) s_gfx->setBrightness(v); }
 

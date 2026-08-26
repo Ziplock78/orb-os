@@ -1,4 +1,5 @@
 #include "app_shell.h"
+#include "display.h"   // markInput — click-to-pixels timing
 #ifdef ARDUINO
 #include <Arduino.h>
 #else
@@ -360,6 +361,7 @@ void app_shell::browseTurn(int delta) {
         ++moved;
     }
     if (!moved) return;    // a half turn: kept, not thrown away, and spent on the next one
+    display::markInput(millis());   // report how long this takes to reach the glass
     show_overlay(s_apps[s_browseIdx].name);
 }
 
