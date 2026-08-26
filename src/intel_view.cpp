@@ -5,6 +5,7 @@
 #include "theme_style.h"
 #include "intel_sprite.h"
 #include "curved_text.h"
+#include "font_ladder.h"
 #include "theme_font.h"
 #include "app_shell.h"
 #ifdef ARDUINO
@@ -129,24 +130,9 @@ const lv_font_t *slot_font(int slot, int size) {
     return font_for(size);
 }
 
-const lv_font_t *font_for(int size) {
-    switch (size) {
-        case 12: return &lv_font_montserrat_12;
-        case 14: return &lv_font_montserrat_14;
-        case 18: return &lv_font_montserrat_18;
-        case 20: return &lv_font_montserrat_20;
-        case 22: return &lv_font_montserrat_22;
-        case 24: return &lv_font_montserrat_24;
-        case 26: return &lv_font_montserrat_26;
-        case 28: return &lv_font_montserrat_28;
-        case 32: return &lv_font_montserrat_32;
-        case 36: return &lv_font_montserrat_36;
-        case 40: return &lv_font_montserrat_40;
-        case 44: return &lv_font_montserrat_44;
-        case 48: return &lv_font_montserrat_48;
-        default: return &lv_font_montserrat_16;
-    }
-}
+// The ladder itself now lives in font_ladder.h, because the splash wants it too and this
+// file is not the right owner of a fact about the whole binary.
+const lv_font_t *font_for(int size) { return font_ladder(size); }
 
 // Where a row of text may live at height y (centre-relative): the margin box, intersected
 // with the circle's chord when the curved boundary is on. Returns width and the row's own

@@ -12,6 +12,7 @@
 #include "airports.h"
 #include "config.h"
 #include "splash_art.h"       // splash_art_decode() — boot-splash PNG, decoded on demand
+#include "splash_lines.h"     // the three standing lines, and the glass over them
 #include <lvgl.h>
 #include <stdio.h>
 #include <stdint.h>
@@ -669,7 +670,14 @@ void ui_show_view(int idx) {
 
 // ------------------------------------------------------------------- splash
 static void splash_fade_cb(void *obj, int32_t v) { lv_obj_set_style_opa((lv_obj_t *)obj, (lv_opa_t)v, 0); }
-static void splash_del_cb(lv_anim_t *a) { lv_obj_del((lv_obj_t *)a->var); }
+static void splash_del_cb(lv_anim_t *a) {
+    // Before the container goes, not after. splash_lines owns a 651 KB PSRAM buffer and
+    // holds pointers to two children of this object; deleting the parent first would free
+    // neither the buffer nor the pointers, and leave release() deleting objects that are
+    // already gone.
+    splash_lines::release();
+    lv_obj_del((lv_obj_t *)a->var);
+}
 
 static void splash_dismiss_cb(lv_timer_t *t) {
     lv_obj_t *cont = (lv_obj_t *)t->user_data;
@@ -702,6 +710,12 @@ void ui_splash_show(void) {
         lv_img_set_src(img, &splashImg);
         lv_obj_center(img);
     }
+
+    // The same three lines the About page shows, from the same theme data and the same
+    // module: the version, the address and the data credits, with the glass composited over
+    // them. The address reads capsuleradar.local here, which is true from the moment mDNS
+    // is up and does not need an IP the board cannot have yet at this point in boot.
+    splash_lines::attach(cont);
 
     // Force this onto the panel right now — the rest of setup() (WiFi connect, sensor
     // init, etc.) is blocking and won't call lv_timer_handler() again until loop()

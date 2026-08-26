@@ -39,6 +39,7 @@ Radar    s_radar;
 Menu     s_menu;
 Settings s_settings;
 Intel    s_intel;
+Splash   s_splash;
 Apps     s_apps;
 Names    s_names;
 // The theme's declared asset list (theme.json "assets"). s_assetN == 0 means the theme
@@ -211,6 +212,7 @@ void seed_defaults() {
     // before THEME_CAPS 9, so there is no prior welded state a theme below that level
     // could be relying on. Compiled defaults ARE the whole fallback.
     s_intel = Intel{};
+    s_splash = Splash{};
 
     s_settings = Settings{};
     s_settings.wheelR = CUSTOM_SETTINGS_WHEEL_R;
@@ -565,6 +567,44 @@ void load() {
         }
     }
     {
+        // The splash / About screen. Reading this file at all is what tells the firmware
+        // that this theme's splash.png was baked WITHOUT the glass, so the overlay is
+        // composited on top rather than assumed to be in the picture already. See Splash.
+        JsonDocument doc;
+        if (read_style_json(slug, "splash_style.json", doc)) {
+            s_splash.styled = true;
+            struct { const char *key; SplashText *dst; } items[] = {
+                { "version", &s_splash.version },
+                { "network", &s_splash.network },
+                { "credits", &s_splash.credits },
+            };
+            for (auto &it : items) {
+                JsonVariantConst v = doc[it.key];
+                if (v.isNull()) continue;
+                SplashText &t = *it.dst;
+                if (v["x"].is<int>())         t.x = v["x"].as<int>();
+                if (v["y"].is<int>())         t.y = v["y"].as<int>();
+                // Clamped to the ladder lv_conf.h actually compiles. Studio clamps to the
+                // same range; both directions, per the checklist.
+                if (v["size"].is<int>()) {
+                    const int z = v["size"].as<int>();
+                    t.size = z < 8 ? 8 : (z > 48 ? 48 : z);
+                }
+                if (v["color"].is<uint32_t>())     t.color = v["color"].as<uint32_t>();
+                if (v["glow"].is<int>())           t.glow = v["glow"].as<int>();
+                if (v["glowColor"].is<uint32_t>()) t.glowColor = v["glowColor"].as<uint32_t>();
+                if (v["align"].is<int>()) {
+                    const int a = v["align"].as<int>();
+                    t.align = a < 0 ? 0 : (a > 2 ? 2 : a);
+                }
+                if (v["curved"].is<bool>())  t.curved = v["curved"].as<bool>();
+                if (v["curveR"].is<int>())   t.curveR = v["curveR"].as<int>();
+                if (v["arcDeg"].is<float>()) t.arcDeg = v["arcDeg"].as<float>();
+                // No "show". These three are not the theme's to remove; see Splash.
+            }
+        }
+    }
+    {
         JsonDocument doc;
         if (read_style_json(slug, "intel_style.json", doc)) {
             if (doc["bg"].is<uint32_t>()) s_intel.bg = doc["bg"].as<uint32_t>();
@@ -731,6 +771,7 @@ const Radar &radar() { return s_radar; }
 const Menu &menu() { return s_menu; }
 const Settings &settings() { return s_settings; }
 const Intel &intel() { return s_intel; }
+const Splash &splash() { return s_splash; }
 const Apps &apps() { return s_apps; }
 const Names &names() { return s_names; }
 

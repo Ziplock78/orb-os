@@ -140,7 +140,20 @@ namespace theme_style {
 //      headline band, up to twenty headlines held rather than five, and an explicit
 //      how-many-on-screen separate from how-many-fetched. An Orb below this draws the
 //      compiled face, keeps the line straight, and holds five.
-constexpr int THEME_CAPS = 15;
+//  16  the splash became a real screen rather than a flat picture. Its three standing
+//      lines, the firmware version, the config address and the data credits, moved out of
+//      hardcoded offsets in settings_view.cpp and into splash_style.json, so a theme places
+//      and styles them like any other text: position, size from the ladder, colour, glow,
+//      alignment, and an arc. They have no show/hide, on purpose: Studio reads the version
+//      off the device before it will write a design, and the map credit is required by
+//      OpenStreetMap's ODbL rather than offered as a courtesy.
+//      This level also moves the glass OUT of splash.png. The picture used to have the
+//      overlay painted into it in the browser, which put the glass under anything the
+//      firmware drew afterwards; it is now composited on top like every other screen's,
+//      reusing clock_overlay.png rather than baking a second copy. An Orb below this level
+//      keeps the compiled offsets, and a THEME above it that lands on an older Orb simply
+//      does not find splash_style.json, so nothing draws twice.
+constexpr int THEME_CAPS = 16;
 
 struct ClockText {
     bool     show   = false;
@@ -486,6 +499,55 @@ struct Settings {
     int      defaultSel   = 0;
 };
 
+// One line of text on the splash / About screen.
+//
+// Deliberately NOT ClockText: that struct leads with `show`, and these three lines do not
+// have one. See Splash below for why. It also carries no size, because the clock's text is
+// drawn at a size the theme's baked font already fixed, and these are drawn from the
+// compiled ladder instead.
+struct SplashText {
+    int      x         = 233;
+    int      y         = 233;
+    // From the compiled ladder in lv_conf.h only. LVGL fonts are glyph bitmaps, not
+    // outlines, so a size the binary was not built with cannot be drawn at any quality.
+    int      size      = 14;
+    uint32_t color     = 0xFFFFFF;
+    int      glow      = 0;
+    uint32_t glowColor = 0xFFFFFF;
+    int      align     = 1;      // 0 left, 1 center, 2 right
+    bool     curved    = false;
+    int      curveR    = 0;
+    float    arcDeg    = 0.0f;
+};
+
+// The splash, which is also the About page.
+//
+// Three lines here are not the theme's to delete. The firmware version has to stay readable
+// off the device because Orb Studio asks which build you are on before it will write a
+// design. The map credit is not courtesy either: the roads and coastlines baked into this
+// firmware are OpenStreetMap data under ODbL, and that licence requires the attribution to
+// appear. So a theme gets to say where these sit, how big they are, what colour, whether
+// they curve. It does not get a switch that turns them off, because a switch that quietly
+// breaks a licence is not a feature.
+//
+// `styled` is the migration flag, and it means one specific thing: this theme shipped a
+// splash_style.json, therefore its splash.png was built by a Studio that knows to leave the
+// glass OUT of the bake. Older themes have no such file, their splash.png already has the
+// glass painted in, and drawing the overlay over them again would show it twice. Absent
+// means "behave exactly as before", which is the same promise hasAsset() makes.
+struct Splash {
+    bool styled = false;
+    // These reproduce, exactly, the offsets and colours settings_view.cpp used to hardcode:
+    // CENTER +120 / +152 / +186 on a 466 px screen is y 353 / 385 / 419, in the Settings
+    // palette's ink and soft. A theme that says nothing about the splash has to look
+    // identical to the one that shipped before this existed, or the level is a redesign
+    // wearing a feature's clothes.
+    //                  x    y   size  color     glow  glowColor  align  curved  curveR  arcDeg
+    SplashText version{ 233, 353, 14, 0xFFFFFF,  0,    0xFFFFFF,  1,     false,  0,      0.0f };
+    SplashText network{ 233, 385, 14, 0x6A7078,  0,    0x6A7078,  1,     false,  0,      0.0f };
+    SplashText credits{ 233, 419, 12, 0x6A7078,  0,    0x6A7078,  1,     false,  0,      0.0f };
+};
+
 // The Headlines screen. The background can be a colour or a picture, and the picture
 // arrives the same way every other screen's does: intel_plate.png, decoded by
 // intel_sprite.cpp, tried in flash before the card. This was colour-only until THEME_CAPS
@@ -622,6 +684,7 @@ const Radar     &radar();
 const Menu      &menu();
 const Settings  &settings();
 const Intel     &intel();
+const Splash    &splash();
 const Apps      &apps();      // from /themes/<slug>/theme.json
 const Names     &names();     // display labels; see the Names comment on why these are not ids
 

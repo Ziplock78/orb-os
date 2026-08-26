@@ -10,6 +10,7 @@
 #include <string.h>
 #include "config.h"     // SCREEN_W / SCREEN_H
 #include "splash_art.h" // splash_art_decode() — the boot splash, reused for the About page
+#include "splash_lines.h" // the three standing lines and the glass over them
 #include "diag_log.h"
 #include "custom_settings.h"    // CUSTOM_HAS_SETTINGS (compile-time show/hide gate) + compiled fallback defaults — see theme_style.h
 #include "settings_sprite.h"    // settings_custom_plate()/settings_custom_overlay() — the editor's baked background / CRT+glass
@@ -253,9 +254,10 @@ namespace {
     lv_obj_t *s_plateImg = nullptr;    // themed background, built on enter / freed on exit
     lv_obj_t *s_ovImg    = nullptr;    // themed CRT+glass, same lifecycle
     lv_obj_t *s_aboutPage = nullptr;   // About: the boot splash, push to return
-    lv_obj_t *s_aboutVer  = nullptr;   // firmware version line (Orb Studio needs this readable)
-    lv_obj_t *s_aboutNet  = nullptr;   // config-page address, fed by settingsview::setNetInfo()
-    lv_obj_t *s_aboutCredits = nullptr; // who the data on screen actually comes from
+    // The version, address and credit lines used to be three labels built here at hardcoded
+    // offsets. They are theme data now (splash_style.json) and are drawn by splash_lines,
+    // which the boot splash also uses, so the two places that show this picture cannot
+    // drift apart again.
     char      s_netInfo[112] = "";     // last line handed to setNetInfo(), replayed on page open
     lv_obj_t *s_aboutImg  = nullptr;   // decoded fresh each time (see refresh_about()) — cheap, avoids relying on splash_art's shared decode buffer staying valid
     lv_obj_t *s_resetPage = nullptr;   // Reset: warning + confirm, push to wipe, turn to cancel
@@ -543,9 +545,10 @@ namespace {
         static lv_img_dsc_t aboutImg;
         if (splash_art_decode(app_theme::get() == APP_THEME_OFFICE, &aboutImg))
             lv_img_set_src(s_aboutImg, &aboutImg);
-        if (s_aboutNet) lv_label_set_text(s_aboutNet, s_netInfo);
-        if (s_aboutVer) lv_obj_move_foreground(s_aboutVer);   // stay above the splash image
-        if (s_aboutNet) lv_obj_move_foreground(s_aboutNet);
+        // Built on entry rather than at init: the canvas is 651 KB of PSRAM and this page
+        // is visited, not lived on. release() runs when the page closes.
+        splash_lines::attach(s_aboutPage);
+        splash_lines::setNetwork(s_netInfo);
     }
 
     void show_page(Mode m) {
@@ -573,6 +576,10 @@ namespace {
         lv_obj_add_flag(s_rangePage, LV_OBJ_FLAG_HIDDEN);
         lv_obj_add_flag(s_volPage, LV_OBJ_FLAG_HIDDEN);
         lv_obj_add_flag(s_aboutPage, LV_OBJ_FLAG_HIDDEN);
+        // Hiding the About page does not free its canvas, and that canvas is 651 KB of
+        // PSRAM. Every other page here is a handful of labels; this one is not, so it is
+        // the one page that has to give its memory back when it leaves the screen.
+        splash_lines::release();
         lv_obj_add_flag(s_resetPage, LV_OBJ_FLAG_HIDDEN);
         lv_obj_add_flag(s_wifiListPage, LV_OBJ_FLAG_HIDDEN);
         lv_obj_add_flag(s_wifiPassPage, LV_OBJ_FLAG_HIDDEN);
@@ -1467,41 +1474,10 @@ void settingsview::init() {
     s_aboutImg = lv_img_create(s_aboutPage);
     lv_obj_center(s_aboutImg);
 
-    // Firmware version + how to reach the config page. Both used to live on the Stats
-    // screen, which was touch-only and went away with the touchscreen. The version in
-    // particular has to stay readable from the device: Orb Studio asks the user which
-    // firmware they are on so it can grey out controls their build cannot render.
-    s_aboutVer = lv_label_create(s_aboutPage);
-    lv_label_set_text(s_aboutVer, "Capsule Radar v" FW_VERSION);
-    lv_obj_set_style_text_color(s_aboutVer, C_WHITE, 0);
-    lv_obj_set_style_text_font(s_aboutVer, &lv_font_montserrat_14, 0);
-    lv_obj_set_style_text_align(s_aboutVer, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_align(s_aboutVer, LV_ALIGN_CENTER, 0, 120);
-
-    s_aboutNet = lv_label_create(s_aboutPage);
-    lv_obj_set_width(s_aboutNet, 320);
-    lv_label_set_text(s_aboutNet, "");
-    lv_obj_set_style_text_color(s_aboutNet, C_GREY, 0);
-    lv_obj_set_style_text_font(s_aboutNet, &lv_font_montserrat_14, 0);
-    lv_obj_set_style_text_align(s_aboutNet, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_align(s_aboutNet, LV_ALIGN_CENTER, 0, 152);
-
-    // Who the aircraft on the radar actually come from, and who drew the map under them.
-    // Neither was named anywhere on the device before this. OpenStreetMap's license
-    // actually requires the second one (ODbL, not just courtesy); the first is the same
-    // argument P9 makes about the aircraft themselves: a source unnamed reads as the Orb's
-    // own claim, and it is not one. Two short lines, not a fuller list of every source in
-    // the system (routes, weather) — this is a 466 px circle, and the round bezel eats far
-    // more width at this depth than a rectangular mock-up would suggest. Kept to what sits
-    // safely inside the visible chord down here rather than what would be nice to fit.
-    s_aboutCredits = lv_label_create(s_aboutPage);
-    lv_obj_set_width(s_aboutCredits, 210);
-    lv_label_set_text(s_aboutCredits, "Aircraft data: adsb.lol\nMap data: OpenStreetMap");
-    lv_obj_set_style_text_color(s_aboutCredits, C_GREY, 0);
-    lv_obj_set_style_text_font(s_aboutCredits, &lv_font_montserrat_12, 0);
-    lv_obj_set_style_text_align(s_aboutCredits, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_set_style_text_line_space(s_aboutCredits, 4, 0);
-    lv_obj_align(s_aboutCredits, LV_ALIGN_CENTER, 0, 186);
+    // The version, the config address and the data credits are drawn by splash_lines on
+    // entry, from splash_style.json. They were three labels nailed here at CENTER +120,
+    // +152 and +186; the compiled defaults in theme_style::Splash are those same offsets,
+    // so a theme that says nothing about them is unchanged.
 
     // --- Reset confirm: warning + push-to-confirm/turn-to-cancel, same red as the
     // other destructive-action warning (main.cpp's g_holdWarning) ---
@@ -1675,5 +1651,5 @@ void settingsview::openAboutPage() {
 void settingsview::setNetInfo(const char *line) {
     if (!line) return;
     snprintf(s_netInfo, sizeof(s_netInfo), "%s", line);
-    if (s_aboutNet && s_mode == MODE_ABOUT) lv_label_set_text(s_aboutNet, s_netInfo);
+    if (s_mode == MODE_ABOUT) splash_lines::setNetwork(s_netInfo);
 }
