@@ -13,6 +13,10 @@ static constexpr uint8_t PIN_KNOB_SW = 16;   // encoder push switch (active low,
 // If turns feel doubled or halved on real hardware, tune this to 2 or 1.
 static constexpr int32_t KNOB_STEPS_PER_DETENT = 4;
 
+// How many detents the leftward half of a rock may span before it stops being a rock.
+// Two, so a slightly heavy flick still counts, but a deliberate scroll does not.
+static constexpr int ROCK_MAX_RUN = 2;
+
 static constexpr uint32_t SW_DEBOUNCE_MS = 200;  // min time between accepted presses. Wide on purpose:
                                                   //   this switch bounces heavily, and 200ms is still far
                                                   //   faster than anyone deliberately selects menu items,
@@ -49,6 +53,11 @@ static uint32_t s_lastDirMs  = 0;
 static volatile int32_t  s_isrDetent    = 0;
 static volatile int      s_isrLastDir   = 0;
 static volatile uint32_t s_isrLastDirMs = 0;
+// How many detents the current direction has run for. A rock is a small deliberate wiggle,
+// so the turn INTO it has to be small: without this, five detents left followed by one
+// right counted as a rock, which is just ordinary browsing and is why the menu appeared to
+// open on any turn at all.
+static volatile int      s_isrRunLen    = 0;
 static volatile uint32_t s_rockMs       = 0;   // the rightward detent that completed a left->right
 static volatile uint32_t s_rockGapMs    = 0;
 static volatile bool s_pendingPress = false;
@@ -85,10 +94,14 @@ static void IRAM_ATTR knob_isr() {
     if (det != s_isrDetent) {
         const int dir = (det > s_isrDetent) ? 1 : -1;
         const uint32_t now = (uint32_t)(esp_timer_get_time() / 1000);
-        if (s_isrLastDir == -1 && dir == 1) {
+        // A rock is: a SHORT turn left, then immediately back right. Both halves matter.
+        // The gap says it was one gesture rather than two decisions; the run length says
+        // the left half was a flick and not a scroll.
+        if (s_isrLastDir == -1 && dir == 1 && s_isrRunLen <= ROCK_MAX_RUN) {
             s_rockGapMs = now - s_isrLastDirMs;
             s_rockMs    = now ? now : 1;   // never 0, which means "never happened"
         }
+        s_isrRunLen    = (dir == s_isrLastDir) ? s_isrRunLen + 1 : 1;
         s_isrLastDir   = dir;
         s_isrLastDirMs = now;
         s_isrDetent    = det;

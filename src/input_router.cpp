@@ -66,7 +66,11 @@ namespace {
 // This is also what "it works on Aviator but not on Steam Punk" turned out to be. Nothing
 // in this path knows what theme is loaded: the detection is in the knob ISR and the
 // dispatch is here. The rocks on that day were simply slower than the window.
-constexpr uint32_t ROCK_WINDOW_MS = 1400;
+// Back to 800 alongside the run-length rule in knob.cpp, which is the change that actually
+// mattered. Widening this to 1400 without it made ordinary browsing open the menu, because
+// any left-then-right counted however far the left half had run. The two together are the
+// gesture: a SHORT turn back, then forward, reasonably promptly.
+constexpr uint32_t ROCK_WINDOW_MS = 800;
 
 // The reversal this router has already acted on, so one gesture cannot fire twice. Stored
 // as the timestamp rather than a flag: a second rock produces a new one, so it fires again
