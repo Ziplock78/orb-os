@@ -32,13 +32,14 @@ struct Target {
 // which is how these screens fake a canvas shadowBlur the firmware has no equivalent for.
 void draw_arc(const Target &dst, const lv_font_t *font, const char *str,
               float cx, float cy, float R, float arcDeg,
-              lv_color_t col, int glow, lv_color_t glowCol);
+              lv_color_t col, int glow, lv_color_t glowCol, lv_opa_t opa = 255);
 
 // The same glyph machinery without the arc: one straight line, baseline vertically centred
 // on `by`, laid out by each glyph's own advance width so a digit changing width pushes only
 // the tail of the string and a live value never wobbles.
 // align: 0 = bx is the start, 1 = bx is the middle, 2 = bx is the end.
 void draw_straight(const Target &dst, const lv_font_t *font, const char *str,
-                   float bx, float by, lv_color_t col, int glow, lv_color_t glowCol, int align);
+                   float bx, float by, lv_color_t col, int glow, lv_color_t glowCol, int align,
+                   lv_opa_t opa = 255);
 
 }  // namespace curved_text

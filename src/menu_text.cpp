@@ -252,7 +252,7 @@ void stencil_composite(lv_color_t glowCol, int strength) {
     }
 }
 void draw_straight(const lv_font_t *font, const char *str, float bx, float by,
-                   lv_color_t col, int glow, lv_color_t glowCol, int align) {
+                   lv_color_t col, int glow, lv_color_t glowCol, int align, lv_opa_t opa = 255) {
     if (!font || !str || !str[0]) return;
     const int n = (int)strlen(str), cap = n < 80 ? n : 80;
     float w[80], total = 0.0f;
@@ -301,7 +301,7 @@ void draw_straight(const lv_font_t *font, const char *str, float bx, float by,
             if (bmp && g.box_w && g.box_h) {
                 const float destCx = x + (float)g.ofs_x + (float)g.box_w * 0.5f;
                 const float destCy = by + halfMid - (float)g.ofs_y - (float)g.box_h * 0.5f;
-                blit_glyph(bmp, g.box_w, g.box_h, destCx, destCy, col, 255, true);
+                blit_glyph(bmp, g.box_w, g.box_h, destCx, destCy, col, opa, true);
             }
         }
         x += w[i];
@@ -403,11 +403,11 @@ static float measure(const lv_font_t *font, const char *s, int len) {
 // single-line behaviour exactly, which is what every existing theme gets.
 void draw_wrapped(const lv_font_t *font, const char *str, float bx, float by,
                   lv_color_t col, int glow, lv_color_t glowCol, int align,
-                  int wrapWidth, int lineGap, int lineStep) {
+                  int wrapWidth, int lineGap, int lineStep, lv_opa_t opa = 255) {
     if (!font || !str || !str[0]) return;
     char wrapped[160];
     const int lines = wrap_text(font, str, wrapWidth, wrapped, sizeof(wrapped));
-    if (lines <= 1) { draw_straight(font, str, bx, by, col, glow, glowCol, align); return; }
+    if (lines <= 1) { draw_straight(font, str, bx, by, col, glow, glowCol, align, opa); return; }
 
     // Use the editor's exact step when it sent one. Deriving it here from
     // lv_font_get_line_height() while Studio derived it from size*1.2 put the two a few
@@ -428,7 +428,7 @@ void draw_wrapped(const lv_font_t *font, const char *str, float bx, float by,
         const size_t cap = len < sizeof(line) - 1 ? len : sizeof(line) - 1;
         memcpy(line, p, cap);
         line[cap] = '\0';
-        draw_straight(font, line, bx, firstY + i * step, col, glow, glowCol, align);
+        draw_straight(font, line, bx, firstY + i * step, col, glow, glowCol, align, opa);
         if (!nl) break;
         p = nl + 1;
     }
@@ -495,7 +495,7 @@ void refresh(const char *prevName, const char *curName, const char *nextName) {
         const theme_style::MenuText &t = theme_style::menu().prev;
         format_name(t.fmt, prevName, out, sizeof(out));
         draw_straight(theme_font::menu_prev(), out, (float)t.x, (float)t.y,
-                     lv_color_hex(t.color), t.glow, lv_color_hex(t.glowColor), t.align);
+                     lv_color_hex(t.color), t.glow, lv_color_hex(t.glowColor), t.align, (lv_opa_t)t.opa);
     }
 #endif
 #if CUSTOM_HAS_MENU_NEXT
@@ -503,7 +503,7 @@ void refresh(const char *prevName, const char *curName, const char *nextName) {
         const theme_style::MenuText &t = theme_style::menu().next;
         format_name(t.fmt, nextName, out, sizeof(out));
         draw_straight(theme_font::menu_next(), out, (float)t.x, (float)t.y,
-                     lv_color_hex(t.color), t.glow, lv_color_hex(t.glowColor), t.align);
+                     lv_color_hex(t.color), t.glow, lv_color_hex(t.glowColor), t.align, (lv_opa_t)t.opa);
     }
 #endif
 #if CUSTOM_HAS_MENU_CURRENT
@@ -512,7 +512,7 @@ void refresh(const char *prevName, const char *curName, const char *nextName) {
         format_name(t.fmt, curName, out, sizeof(out));
         draw_wrapped(theme_font::menu_current(), out, (float)t.x, (float)t.y,
                      lv_color_hex(t.color), t.glow, lv_color_hex(t.glowColor), t.align,
-                     t.wrapWidth, t.lineGap, t.lineStep);
+                     t.wrapWidth, t.lineGap, t.lineStep, (lv_opa_t)t.opa);
     }
 #endif
     // Only what changed: what was just drawn, plus what was just erased.

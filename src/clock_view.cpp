@@ -566,7 +566,7 @@ static void banner_silent(const char *which, const char *why, const char *fmt) {
 
 static void draw_baked_text(const lv_font_t *font, const char *fmt, int bx, int by,
                             uint32_t color, int glow, uint32_t glowColor, int align,
-                            const struct tm *ti, const char *which) {
+                            const struct tm *ti, const char *which, lv_opa_t opa = LV_OPA_COVER) {
     if (!font)          { banner_silent(which, "no font loaded for this slot", fmt); return; }
     if (!fmt || !fmt[0]) { banner_silent(which, "empty format", fmt); return; }
     char buf[48];
@@ -610,7 +610,7 @@ static void draw_baked_text(const lv_font_t *font, const char *fmt, int bx, int 
                 paint((int)lroundf(dirs[di][0] * r), (int)lroundf(dirs[di][1] * r), gc, opa);
         }
     }
-    paint(0, 0, lv_color_hex(color), LV_OPA_COVER);
+    paint(0, 0, lv_color_hex(color), opa);
 }
 
 // Read a 4-bpp (16-level) glyph alpha bitmap (as lv_font_conv --bpp 4 --no-compress
@@ -625,7 +625,7 @@ static inline float glyph_alpha4(const uint8_t *bmp, int bw, int x, int y) {
 // Rotate one glyph's alpha bitmap around its own centre by angleDeg (clockwise,
 // screen space) and alpha-blend it into the canvas in a solid colour, with its
 // box centred at (destCx,destCy). Bilinear sampled so rotated edges stay smooth.
-static void blit_glyph_rot(const uint8_t *bmp, int bw, int bh, float destCx, float destCy, float angleDeg, lv_color_t col) {
+static void blit_glyph_rot(const uint8_t *bmp, int bw, int bh, float destCx, float destCy, float angleDeg, lv_color_t col, lv_opa_t opa = LV_OPA_COVER) {
     if (!bmp || bw <= 0 || bh <= 0) return;
     const float th = angleDeg * DEG2RAD, ct = cosf(th), st = sinf(th);
     const float pivotX = bw * 0.5f, pivotY = bh * 0.5f;
@@ -645,7 +645,8 @@ static void blit_glyph_rot(const uint8_t *bmp, int bw, int bh, float destCx, flo
             const float a10 = (ix + 1 >= 0 && iy >= 0 && ix + 1 < bw && iy < bh) ? glyph_alpha4(bmp, bw, ix + 1, iy) : 0.0f;
             const float a01 = (ix >= 0 && iy + 1 >= 0 && ix < bw && iy + 1 < bh) ? glyph_alpha4(bmp, bw, ix, iy + 1) : 0.0f;
             const float a11 = (ix + 1 >= 0 && iy + 1 >= 0 && ix + 1 < bw && iy + 1 < bh) ? glyph_alpha4(bmp, bw, ix + 1, iy + 1) : 0.0f;
-            const float a = a00 * (1 - fx) * (1 - fy) + a10 * fx * (1 - fy) + a01 * (1 - fx) * fy + a11 * fx * fy;
+            const float a = (a00 * (1 - fx) * (1 - fy) + a10 * fx * (1 - fy) + a01 * (1 - fx) * fy + a11 * fx * fy)
+                          * (float)opa / 255.0f;
             if (a < 8.0f) continue;
             lv_color_t *d = &s_buf[dy * SCREEN_W + dx];
             *d = lv_color_mix(col, *d, (lv_opa_t)lroundf(fminf(255.0f, a)));
@@ -659,7 +660,8 @@ static void blit_glyph_rot(const uint8_t *bmp, int bw, int bh, float destCx, flo
 // drawCurvedText (textAlign centre, textBaseline middle). Glow isn't applied on
 // the curve.
 static void draw_baked_arc_text(const lv_font_t *font, const char *fmt, float R, float arcDeg,
-                                uint32_t color, const struct tm *ti, const char *which) {
+                                uint32_t color, const struct tm *ti, const char *which,
+                                lv_opa_t opa = LV_OPA_COVER) {
     if (!font)           { banner_silent(which, "no font loaded for this slot", fmt); return; }
     if (!fmt || !fmt[0])  { banner_silent(which, "empty format", fmt); return; }
     if (R < 1.0f)        { banner_silent(which, "curved, but sitting on the dial centre", fmt); return; }
@@ -698,7 +700,7 @@ static void draw_baked_arc_text(const lv_font_t *font, const char *fmt, float R,
         const float offY = halfMid - (float)g.ofs_y - (float)g.box_h * 0.5f;
         const float cr = cosf(rot), sr = sinf(rot);
         const float destCx = ax - offY * sr, destCy = ay + offY * cr;
-        blit_glyph_rot(bmp, g.box_w, g.box_h, destCx, destCy, rot / DEG2RAD, col);
+        blit_glyph_rot(bmp, g.box_w, g.box_h, destCx, destCy, rot / DEG2RAD, col, opa);
     }
 }
 
@@ -921,15 +923,15 @@ static void draw_custom(const struct tm *ti) {
     {
         const theme_style::ClockText &t = theme_style::clock().text1;
         if (t.show) {
-            if (t.curved) draw_baked_arc_text(theme_font::clock_text1(), t.fmt, (float)t.curveR, t.arcDeg, t.color, ti, "text1");
-            else draw_baked_text(theme_font::clock_text1(), t.fmt, t.x, t.y, t.color, t.glow, t.glowColor, t.align, ti, "text1");
+            if (t.curved) draw_baked_arc_text(theme_font::clock_text1(), t.fmt, (float)t.curveR, t.arcDeg, t.color, ti, "text1", (lv_opa_t)t.opa);
+            else draw_baked_text(theme_font::clock_text1(), t.fmt, t.x, t.y, t.color, t.glow, t.glowColor, t.align, ti, "text1", (lv_opa_t)t.opa);
         }
     }
     {
         const theme_style::ClockText &t = theme_style::clock().text2;
         if (t.show) {
-            if (t.curved) draw_baked_arc_text(theme_font::clock_text2(), t.fmt, (float)t.curveR, t.arcDeg, t.color, ti, "text2");
-            else draw_baked_text(theme_font::clock_text2(), t.fmt, t.x, t.y, t.color, t.glow, t.glowColor, t.align, ti, "text2");
+            if (t.curved) draw_baked_arc_text(theme_font::clock_text2(), t.fmt, (float)t.curveR, t.arcDeg, t.color, ti, "text2", (lv_opa_t)t.opa);
+            else draw_baked_text(theme_font::clock_text2(), t.fmt, t.x, t.y, t.color, t.glow, t.glowColor, t.align, ti, "text2", (lv_opa_t)t.opa);
         }
     }
 

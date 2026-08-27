@@ -79,7 +79,7 @@ void blit_glyph_glow(const curved_text::Target &dst, const uint8_t *bmp, int bw,
 
 void curved_text::draw_arc(const Target &dst, const lv_font_t *font, const char *str,
                            float cx, float cy, float R, float arcDeg,
-                           lv_color_t col, int glow, lv_color_t glowCol) {
+                           lv_color_t col, int glow, lv_color_t glowCol, lv_opa_t opa) {
     if (!dst.buf || !font || !str || !str[0] || R < 1.0f) return;
     const int n = (int)strlen(str), cap = n < 80 ? n : 80;
     float w[80], total = 0.0f;
@@ -113,13 +113,13 @@ void curved_text::draw_arc(const Target &dst, const lv_font_t *font, const char 
         const float destCx = ax - offY * sr, destCy = ay + offY * cr;
         const float rotDeg = rot * 180.0f / (float)M_PI;
         blit_glyph_glow(dst, bmp, g.box_w, g.box_h, destCx, destCy, rotDeg, glowCol, glow);
-        blit_glyph(dst, bmp, g.box_w, g.box_h, destCx, destCy, rotDeg, col, 255);
+        blit_glyph(dst, bmp, g.box_w, g.box_h, destCx, destCy, rotDeg, col, opa);
     }
 }
 
 void curved_text::draw_straight(const Target &dst, const lv_font_t *font, const char *str,
                                 float bx, float by, lv_color_t col, int glow, lv_color_t glowCol,
-                                int align) {
+                                int align, lv_opa_t opa) {
     if (!dst.buf || !font || !str || !str[0]) return;
     const int n = (int)strlen(str), cap = n < 80 ? n : 80;
     float w[80], total = 0.0f;
@@ -140,7 +140,7 @@ void curved_text::draw_straight(const Target &dst, const lv_font_t *font, const 
                 const float destCx = x + (float)g.ofs_x + (float)g.box_w * 0.5f;
                 const float destCy = by + halfMid - (float)g.ofs_y - (float)g.box_h * 0.5f;
                 blit_glyph_glow(dst, bmp, g.box_w, g.box_h, destCx, destCy, 0.0f, glowCol, glow);
-                blit_glyph(dst, bmp, g.box_w, g.box_h, destCx, destCy, 0.0f, col, 255);
+                blit_glyph(dst, bmp, g.box_w, g.box_h, destCx, destCy, 0.0f, col, opa);
             }
         }
         x += w[i];

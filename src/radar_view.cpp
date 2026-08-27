@@ -2504,15 +2504,15 @@ static void radar_range_fmt(char *out, size_t outSz, const char *fmt) {
 // call site rather than a third implementation. The arithmetic there is byte for byte what
 // was here: these banners are tuned against designs that already exist.
 static void rtext_draw_curved(const lv_font_t *font, const char *str, float R, float arcDeg,
-                              lv_color_t col, int glow, lv_color_t glowCol) {
+                              lv_color_t col, int glow, lv_color_t glowCol, lv_opa_t opa) {
     const curved_text::Target dst = { (uint8_t *)s_textBuf, SCREEN_W, SCREEN_H };
-    curved_text::draw_arc(dst, font, str, (float)s_cx, (float)s_cy, R, arcDeg, col, glow, glowCol);
+    curved_text::draw_arc(dst, font, str, (float)s_cx, (float)s_cy, R, arcDeg, col, glow, glowCol, opa);
 }
 
 static void rtext_draw_straight(const lv_font_t *font, const char *str, float bx, float by,
-                                lv_color_t col, int glow, lv_color_t glowCol, int align) {
+                                lv_color_t col, int glow, lv_color_t glowCol, int align, lv_opa_t opa) {
     const curved_text::Target dst = { (uint8_t *)s_textBuf, SCREEN_W, SCREEN_H };
-    curved_text::draw_straight(dst, font, str, bx, by, col, glow, glowCol, align);
+    curved_text::draw_straight(dst, font, str, bx, by, col, glow, glowCol, align, opa);
 }
 
 // Refresh the 4 selection banners for whatever's currently selected — the
@@ -2587,14 +2587,14 @@ static void refresh_custom_text() {
             if (!t.show) continue;
             char buf[64];
             if (!radar_fmt(buf, sizeof(buf), t.fmt, in)) continue;
-            if (t.curved) { rtext_draw_curved(theme_font::radar_text(i), buf, (float)t.curveR, t.arcDeg, lv_color_hex(t.color), t.glow, lv_color_hex(t.glowColor)); continue; }
+            if (t.curved) { rtext_draw_curved(theme_font::radar_text(i), buf, (float)t.curveR, t.arcDeg, lv_color_hex(t.color), t.glow, lv_color_hex(t.glowColor), (lv_opa_t)t.opa); continue; }
             // A line riding the card reads x/y as an offset from the card's own centre, so
             // it travels with it. Only when a card is actually showing: a line pinned to a
             // card that is switched off would otherwise land at an offset from the middle
             // of the scope, which is not where anyone put it.
             const float lx = (t.onCard && cardOn) ? cardCx + (float)(t.x - SCREEN_W / 2) : (float)t.x;
             const float ly = (t.onCard && cardOn) ? cardCy + (float)(t.y - SCREEN_H / 2) : (float)t.y;
-            rtext_draw_straight(theme_font::radar_text(i), buf, lx, ly, lv_color_hex(t.color), t.glow, lv_color_hex(t.glowColor), t.align);
+            rtext_draw_straight(theme_font::radar_text(i), buf, lx, ly, lv_color_hex(t.color), t.glow, lv_color_hex(t.glowColor), t.align, (lv_opa_t)t.opa);
         }
     }
     // The range banner describes the scope itself (its configured radius), not a
@@ -2603,8 +2603,8 @@ static void refresh_custom_text() {
     if (rs.rtext[3].show) {
       const theme_style::RadarText &t = rs.rtext[3];
       char buf[64]; radar_range_fmt(buf, sizeof(buf), t.fmt);
-      if (t.curved) rtext_draw_curved(theme_font::radar_text(3), buf, (float)t.curveR, t.arcDeg, lv_color_hex(t.color), t.glow, lv_color_hex(t.glowColor));
-      else rtext_draw_straight(theme_font::radar_text(3), buf, (float)t.x, (float)t.y, lv_color_hex(t.color), t.glow, lv_color_hex(t.glowColor), t.align);
+      if (t.curved) rtext_draw_curved(theme_font::radar_text(3), buf, (float)t.curveR, t.arcDeg, lv_color_hex(t.color), t.glow, lv_color_hex(t.glowColor), (lv_opa_t)t.opa);
+      else rtext_draw_straight(theme_font::radar_text(3), buf, (float)t.x, (float)t.y, lv_color_hex(t.color), t.glow, lv_color_hex(t.glowColor), t.align, (lv_opa_t)t.opa);
     }
     lv_obj_invalidate(s_textCanvas);
 }

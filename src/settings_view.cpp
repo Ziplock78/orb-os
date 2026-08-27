@@ -344,10 +344,15 @@ namespace {
             else if (ad == 1) font = &lv_font_montserrat_16;
             else              font = &lv_font_montserrat_14;
 #if CUSTOM_HAS_SETTINGS
+          // The theme's own opacity for this row, MULTIPLIED into the wheel's distance fade
+          // rather than replacing it. The fade is what makes the wheel read as a wheel; a
+          // theme asking for faint text is asking for faint text at every position on it.
+          const lv_opa_t rowOpa = (lv_opa_t)((int)opa *
+              ((i == sel) ? theme_style::settings().selOpa : theme_style::settings().itemOpa) / 255);
           if (settings_text::available()) {
             lv_obj_set_style_text_opa(items[i], LV_OPA_TRANSP, 0);   // the native label draws nothing; the canvas draws the real glyphs below
             settings_text::draw_item(lv_label_get_text(items[i]), 233.0f + sx, 233.0f + sy,
-                                     i == sel ? lv_color_hex(theme_style::settings().selColor) : lv_color_hex(theme_style::settings().itemColor), opa);
+                                     i == sel ? lv_color_hex(theme_style::settings().selColor) : lv_color_hex(theme_style::settings().itemColor), rowOpa);
           } else {
             // No canvas (either it could not be allocated, or the theme asks for no glow
             // so we deliberately skipped it). Draw with plain labels, but still using the
@@ -355,7 +360,7 @@ namespace {
             // and falling back to the stock font stepping made a themed device suddenly
             // render Settings in the wrong size and weight.
             lv_obj_set_style_text_font(items[i], theme_font::settings_item(), 0);
-            lv_obj_set_style_text_opa(items[i], opa, 0);
+            lv_obj_set_style_text_opa(items[i], rowOpa, 0);
             lv_obj_set_style_text_color(items[i],
                 lv_color_hex(i == sel ? theme_style::settings().selColor
                                       : theme_style::settings().itemColor), 0);

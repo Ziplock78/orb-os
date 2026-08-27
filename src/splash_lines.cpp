@@ -44,10 +44,10 @@ void one_line(const theme_style::SplashText &t, const char *text) {
     const lv_color_t glowCol = rgb(t.glowColor);
     if (t.curved && t.curveR > 0) {
         curved_text::draw_arc(dst, f, text, (float)(W / 2), (float)(H / 2),
-                              (float)t.curveR, t.arcDeg, col, t.glow, glowCol);
+                              (float)t.curveR, t.arcDeg, col, t.glow, glowCol, (lv_opa_t)t.opa);
     } else {
         curved_text::draw_straight(dst, f, text, (float)t.x, (float)t.y,
-                                   col, t.glow, glowCol, t.align);
+                                   col, t.glow, glowCol, t.align, (lv_opa_t)t.opa);
     }
 }
 

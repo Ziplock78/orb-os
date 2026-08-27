@@ -157,13 +157,22 @@ namespace theme_style {
 //      places, and 2 px is a statement about a compact sans: a 24 px display serif puts the
 //      descenders of g and y straight through the credit line beneath it. An Orb below this
 //      level keeps the 2 px, which is what every theme built before this asked for anyway.
-constexpr int THEME_CAPS = 17;
+//  18  opacity on every piece of text a theme controls. It costs nothing to draw: both
+//      glyph blitters already multiply each pixel by an opacity, and the value was pinned
+//      at full, while LVGL labels alpha-blend for anti-aliasing whatever happens. Faint
+//      type is a real design tool on a screen this bright, and there was no way to ask for
+//      it. An Orb below this level draws every one of them at full strength.
+constexpr int THEME_CAPS = 18;
 
 struct ClockText {
     bool     show   = false;
     int      x      = 233;
     int      y      = 233;
     uint32_t color  = 0xF2F5F9;
+    // 0..255. Costs nothing: both glyph blitters already multiply every pixel by an
+    // opacity and the value was simply pinned at full, and LVGL labels alpha-blend for
+    // anti-aliasing regardless. See THEME_CAPS 18.
+    int      opa    = 255;
     int      glow   = 0;
     uint32_t glowColor = 0xF2F5F9;
     char     fmt[32] = "";
@@ -259,6 +268,10 @@ struct RadarText {
     int      x      = 233;
     int      y      = 233;
     uint32_t color  = 0xFFFFFF;
+    // 0..255. Costs nothing: both glyph blitters already multiply every pixel by an
+    // opacity and the value was simply pinned at full, and LVGL labels alpha-blend for
+    // anti-aliasing regardless. See THEME_CAPS 18.
+    int      opa    = 255;
     int      glow   = 0;
     uint32_t glowColor = 0xFFFFFF;
     char     fmt[80] = "";
@@ -463,6 +476,7 @@ struct MenuText {
     int      x     = 233;
     int      y     = 233;
     uint32_t color = 0xFFFFFF;
+    int      opa    = 255;   // 0..255, see THEME_CAPS 18
     int      glow  = 0;
     uint32_t glowColor = 0xFFFFFF;
     char     fmt[64] = "{name}";
@@ -491,7 +505,9 @@ struct Settings {
     float    wheelCy      = 0.0f;
     float    wheelFade    = 2.0f;
     uint32_t selColor     = 0xFFFFFF;
+    int      selOpa       = 255;   // 0..255, see THEME_CAPS 18
     uint32_t itemColor    = 0x6A7078;
+    int      itemOpa      = 255;
     int      glow         = 0;
     uint32_t glowColor    = 0xFFFFFF;
     bool     hlShow       = true;
@@ -516,6 +532,7 @@ struct SplashText {
     // outlines, so a size the binary was not built with cannot be drawn at any quality.
     int      size      = 14;
     uint32_t color     = 0xFFFFFF;
+    int      opa    = 255;   // 0..255, see THEME_CAPS 18
     int      glow      = 0;
     uint32_t glowColor = 0xFFFFFF;
     int      align     = 1;      // 0 left, 1 center, 2 right
@@ -546,10 +563,13 @@ struct Splash {
     // palette's ink and soft. A theme that says nothing about the splash has to look
     // identical to the one that shipped before this existed, or the level is a redesign
     // wearing a feature's clothes.
-    //                  x    y   size  color     glow  glowColor  align  curved  curveR  arcDeg
-    SplashText version{ 233, 353, 14, 0xFFFFFF,  0,    0xFFFFFF,  1,     false,  0,      0.0f };
-    SplashText network{ 233, 385, 14, 0x6A7078,  0,    0x6A7078,  1,     false,  0,      0.0f };
-    SplashText credits{ 233, 419, 12, 0x6A7078,  0,    0x6A7078,  1,     false,  0,      0.0f };
+    // Designated rather than positional. These were positional, and adding `opa` to
+    // SplashText silently slid every value one place along: arcDeg's 0.0f landed on an int
+    // and only a narrowing warning caught it. The next field added would not have been so
+    // lucky, and a colour quietly becoming an alignment is not a compiler's problem.
+    SplashText version{ .x = 233, .y = 353, .size = 14, .color = 0xFFFFFF, .opa = 255 };
+    SplashText network{ .x = 233, .y = 385, .size = 14, .color = 0x6A7078, .opa = 255 };
+    SplashText credits{ .x = 233, .y = 419, .size = 12, .color = 0x6A7078, .opa = 255 };
 };
 
 // The Headlines screen. The background can be a colour or a picture, and the picture
@@ -561,8 +581,11 @@ struct Splash {
 struct Intel {
     uint32_t bg          = 0x000000;
     uint32_t titleColor  = 0x7E8794;
+    int      titleOpa    = 255;   // 0..255, see THEME_CAPS 18
     uint32_t textColor   = 0xE8ECF1;
+    int      textOpa     = 255;
     uint32_t sourceColor = 0x5F6874;
+    int      sourceOpa   = 255;
     uint32_t staleColor  = 0xC8922E;
     // How many headlines to FETCH, 1..INTEL_MAX_ITEMS (20). Not the same question as how
     // many are on screen: the surplus is what the knob scrolls through.
@@ -668,6 +691,7 @@ struct Intel {
     int      sourceSize   = 12;
     char     ageFmt[40]   = "{t}";
     uint32_t ageColor     = 0x5F6874;
+    int      ageOpa       = 255;   // 0..255, see THEME_CAPS 18
     int      ageSize      = 12;    // one of the compiled Montserrat sizes
     int      ageGlow      = 0;     // px of halo, 0 = none, clamped to [0, 20]
     uint32_t ageGlowColor = 0x5F6874;

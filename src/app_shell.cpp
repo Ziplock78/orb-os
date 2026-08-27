@@ -182,6 +182,7 @@ namespace {
             // no-canvas branch.
             const theme_style::MenuText &mc = theme_style::menu().current;
             lv_obj_set_style_text_color(s_overlayLabel, lv_color_hex(mc.color), 0);
+            lv_obj_set_style_text_opa(s_overlayLabel, (lv_opa_t)mc.opa, 0);
             lv_obj_set_style_text_font(s_overlayLabel, theme_font::menu_current(), 0);
             lv_obj_set_style_text_align(s_overlayLabel, LV_TEXT_ALIGN_CENTER, 0);
             // Wrapping belongs here too, not only on the glow canvas: menu_text's

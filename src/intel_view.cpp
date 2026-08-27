@@ -673,7 +673,7 @@ void intelview::tick() {
         curved_text::draw_arc(dst, slot_font(3, cfg.ageSize), buf,
                               (float)(SCREEN_W / 2), (float)(SCREEN_H / 2),
                               (float)cfg.ageCurveR, cfg.ageArcDeg,
-                              col, cfg.ageGlow, lv_color_hex(cfg.ageGlowColor));
+                              col, cfg.ageGlow, lv_color_hex(cfg.ageGlowColor), (lv_opa_t)cfg.ageOpa);
         lv_obj_invalidate(s_ageCanvas);
         return;
     }
@@ -709,6 +709,7 @@ void intelview::init() {
     s_title = lv_label_create(s_screen);
     lv_label_set_text(s_title, cfg.title);
     lv_obj_set_style_text_color(s_title, c_title(), 0);
+    lv_obj_set_style_text_opa(s_title, (lv_opa_t)cfg.titleOpa, 0);
     lv_obj_set_style_text_font(s_title, slot_font(0, cfg.titleSize), 0);
     // Letter-spaced, because a short word in small caps at the top of a dial reads as a
     // label rather than as another headline.
@@ -726,6 +727,7 @@ void intelview::init() {
         lv_label_set_long_mode(s_rows[i], LV_LABEL_LONG_WRAP);
         lv_obj_set_style_text_align(s_rows[i], LV_TEXT_ALIGN_CENTER, 0);
         lv_obj_set_style_text_color(s_rows[i], c_text(), 0);
+        lv_obj_set_style_text_opa(s_rows[i], (lv_opa_t)cfg.textOpa, 0);
         lv_obj_set_style_text_font(s_rows[i], &lv_font_montserrat_16, 0);
         lv_label_set_text(s_rows[i], "");
         // Top of its box, so a headline that overruns grows downward into the clip rather
@@ -736,6 +738,7 @@ void intelview::init() {
 
         s_credit[i] = lv_label_create(s_screen);
         lv_obj_set_style_text_color(s_credit[i], c_source(), 0);
+        lv_obj_set_style_text_opa(s_credit[i], (lv_opa_t)cfg.sourceOpa, 0);
         lv_obj_set_style_text_font(s_credit[i], &lv_font_montserrat_12, 0);
         lv_label_set_text(s_credit[i], "");
         show(s_credit[i], false);
@@ -765,6 +768,7 @@ void intelview::init() {
     }
     lv_obj_set_style_text_align(s_empty, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_set_style_text_color(s_empty, c_source(), 0);
+    lv_obj_set_style_text_opa(s_empty, (lv_opa_t)cfg.sourceOpa, 0);
     lv_obj_set_style_text_font(s_empty, &lv_font_montserrat_16, 0);
     lv_label_set_text(s_empty, empty_reason());
 
@@ -794,6 +798,7 @@ void intelview::init() {
 
     s_age = lv_label_create(s_screen);
     lv_obj_set_style_text_color(s_age, lv_color_hex(cfg.ageColor), 0);
+    lv_obj_set_style_text_opa(s_age, (lv_opa_t)cfg.ageOpa, 0);
     lv_obj_set_style_text_font(s_age, slot_font(3, cfg.ageSize), 0);
     lv_label_set_text(s_age, "");
     lv_obj_align(s_age, LV_ALIGN_CENTER, cfg.ageX - 233, cfg.ageY - 233);

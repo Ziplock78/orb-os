@@ -265,6 +265,15 @@ void seed_defaults() {
 #endif
 }
 
+// 0..255, from a value that may be absent, negative, or 300. Ten opacity fields share this
+// rather than each writing its own clamp, because ten hand-written clamps is ten chances to
+// differ from the one Studio applies on the other side.
+static int opa_of(JsonVariantConst v, int fallback) {
+    if (!v.is<int>()) return fallback;
+    const int o = v.as<int>();
+    return o < 0 ? 0 : (o > 255 ? 255 : o);
+}
+
 // Merge helpers: only touch a field when the JSON actually has it, so a partial
 // file (or a field a given theme never set) leaves the compiled default in place.
 void merge_text(JsonVariantConst j, ClockText &t) {
@@ -273,6 +282,7 @@ void merge_text(JsonVariantConst j, ClockText &t) {
     if (j["x"].is<int>()) t.x = j["x"].as<int>();
     if (j["y"].is<int>()) t.y = j["y"].as<int>();
     if (j["color"].is<uint32_t>()) t.color = j["color"].as<uint32_t>();
+    t.opa = opa_of(j["opa"], t.opa);
     if (j["glow"].is<int>()) t.glow = j["glow"].as<int>();
     if (j["glowColor"].is<uint32_t>()) t.glowColor = j["glowColor"].as<uint32_t>();
     if (j["fmt"].is<const char *>()) snprintf(t.fmt, sizeof(t.fmt), "%s", j["fmt"].as<const char *>());
@@ -302,6 +312,7 @@ void merge_rtext(JsonVariantConst j, RadarText &t) {
     if (j["x"].is<int>()) t.x = j["x"].as<int>();
     if (j["y"].is<int>()) t.y = j["y"].as<int>();
     if (j["color"].is<uint32_t>()) t.color = j["color"].as<uint32_t>();
+    t.opa = opa_of(j["opa"], t.opa);
     if (j["glow"].is<int>()) t.glow = j["glow"].as<int>();
     if (j["glowColor"].is<uint32_t>()) t.glowColor = j["glowColor"].as<uint32_t>();
     if (j["fmt"].is<const char *>()) snprintf(t.fmt, sizeof(t.fmt), "%s", j["fmt"].as<const char *>());
@@ -337,6 +348,7 @@ void merge_menu_text(JsonVariantConst j, MenuText &t) {
     if (j["x"].is<int>()) t.x = j["x"].as<int>();
     if (j["y"].is<int>()) t.y = j["y"].as<int>();
     if (j["color"].is<uint32_t>()) t.color = j["color"].as<uint32_t>();
+    t.opa = opa_of(j["opa"], t.opa);
     if (j["glow"].is<int>()) t.glow = j["glow"].as<int>();
     if (j["glowColor"].is<uint32_t>()) t.glowColor = j["glowColor"].as<uint32_t>();
     if (j["fmt"].is<const char *>()) snprintf(t.fmt, sizeof(t.fmt), "%s", j["fmt"].as<const char *>());
@@ -439,6 +451,7 @@ void load() {
             if (doc["selEnabled"].is<bool>()) s_radar.selEnabled = doc["selEnabled"].as<bool>();
             if (doc["selStyle"].is<int>()) s_radar.selStyle = doc["selStyle"].as<int>();
             if (doc["selColor"].is<uint32_t>()) s_radar.selColor = doc["selColor"].as<uint32_t>();
+            s_settings.selOpa = opa_of(doc["selOpa"], s_settings.selOpa);
             if (doc["selWidth"].is<int>()) s_radar.selWidth = doc["selWidth"].as<int>();
             if (doc["selDiameter"].is<int>()) s_radar.selDiameter = doc["selDiameter"].as<int>();
             if (doc["selGlow"].is<int>()) s_radar.selGlow = doc["selGlow"].as<int>();
@@ -555,6 +568,7 @@ void load() {
             if (doc["wheelFade"].is<float>()) s_settings.wheelFade = doc["wheelFade"].as<float>();
             if (doc["selColor"].is<uint32_t>()) s_settings.selColor = doc["selColor"].as<uint32_t>();
             if (doc["itemColor"].is<uint32_t>()) s_settings.itemColor = doc["itemColor"].as<uint32_t>();
+            s_settings.itemOpa = opa_of(doc["itemOpa"], s_settings.itemOpa);
             if (doc["glow"].is<int>()) s_settings.glow = doc["glow"].as<int>();
             if (doc["glowColor"].is<uint32_t>()) s_settings.glowColor = doc["glowColor"].as<uint32_t>();
             if (doc["hlShow"].is<bool>()) s_settings.hlShow = doc["hlShow"].as<bool>();
@@ -591,6 +605,7 @@ void load() {
                     t.size = z < 8 ? 8 : (z > 48 ? 48 : z);
                 }
                 if (v["color"].is<uint32_t>())     t.color = v["color"].as<uint32_t>();
+                t.opa = opa_of(v["opa"], t.opa);
                 if (v["glow"].is<int>())           t.glow = v["glow"].as<int>();
                 if (v["glowColor"].is<uint32_t>()) t.glowColor = v["glowColor"].as<uint32_t>();
                 if (v["align"].is<int>()) {
@@ -609,8 +624,11 @@ void load() {
         if (read_style_json(slug, "intel_style.json", doc)) {
             if (doc["bg"].is<uint32_t>()) s_intel.bg = doc["bg"].as<uint32_t>();
             if (doc["titleColor"].is<uint32_t>()) s_intel.titleColor = doc["titleColor"].as<uint32_t>();
+            s_intel.titleOpa = opa_of(doc["titleOpa"], s_intel.titleOpa);
             if (doc["textColor"].is<uint32_t>()) s_intel.textColor = doc["textColor"].as<uint32_t>();
+            s_intel.textOpa = opa_of(doc["textOpa"], s_intel.textOpa);
             if (doc["sourceColor"].is<uint32_t>()) s_intel.sourceColor = doc["sourceColor"].as<uint32_t>();
+            s_intel.sourceOpa = opa_of(doc["sourceOpa"], s_intel.sourceOpa);
             if (doc["staleColor"].is<uint32_t>()) s_intel.staleColor = doc["staleColor"].as<uint32_t>();
             if (doc["count"].is<int>()) {
                 const int c = doc["count"].as<int>();
@@ -684,6 +702,7 @@ void load() {
             if (doc["ageX"].is<int>()) s_intel.ageX = clampPos(doc["ageX"].as<int>());
             if (doc["ageY"].is<int>()) s_intel.ageY = clampPos(doc["ageY"].as<int>());
             if (doc["ageColor"].is<uint32_t>()) s_intel.ageColor = doc["ageColor"].as<uint32_t>();
+            s_intel.ageOpa = opa_of(doc["ageOpa"], s_intel.ageOpa);
             if (doc["ageSize"].is<int>() && fontSizeOk(doc["ageSize"].as<int>()))
                 s_intel.ageSize = doc["ageSize"].as<int>();
             if (doc["ageGlow"].is<int>()) {
