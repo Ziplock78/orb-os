@@ -19,10 +19,21 @@
 #define INTEL_MAX_ROWS    8
 #define INTEL_TEXT_BYTES  96
 #define INTEL_SOURCE_BYTES 12
+// Eight hex characters and a NUL. The gateway's handle for one story, hashed from the
+// headline. See intel_brief_want() for why a story is addressed by hash and not by
+// position.
+#define INTEL_KEY_BYTES   9
+// One story's summary, as the feed wrote it. The gateway caps what it sends at 400
+// characters; this is that plus a NUL plus room to spare, and it is ONE buffer for the
+// story being read rather than one per headline. Twenty of these would be eight kilobytes
+// of internal RAM held permanently for text nobody has asked to see, on a board that
+// cannot negotiate TLS because it cannot find two contiguous sixteen-kilobyte blocks.
+#define INTEL_BRIEF_BYTES 432
 
 struct IntelItem {
     char text[INTEL_TEXT_BYTES];      // the headline, already cut to fit by the worker
     char source[INTEL_SOURCE_BYTES];  // "BBC", "BBC Sport", "NASA" — shown as a credit
+    char key[INTEL_KEY_BYTES];        // ask the gateway for this story's summary with it
 };
 
 struct IntelSnapshot {
@@ -49,3 +60,43 @@ bool intel_meta(uint32_t &fetchedMs, int &count);
 // intel_window: `n` items starting at `from`, clamped to what exists. Returns how many
 // were actually written, and reports the full count through `total`.
 int  intel_window(int from, int n, IntelItem *out, int &total);
+
+// ---------------------------------------------------------------------------
+// One story's summary, fetched on demand when somebody presses a headline.
+//
+// Same core-0-writes / core-1-reads handoff as the snapshot above, and the same mutex. The
+// UI asks by key and then watches the state; the network task does the waiting. Nothing
+// here may block the LVGL task, which is the whole reason this is a state machine rather
+// than a function that returns a string.
+enum IntelBriefState : uint8_t {
+    INTEL_BRIEF_IDLE,      // nobody has asked
+    INTEL_BRIEF_WANTED,    // asked; the network task has not picked it up yet
+    INTEL_BRIEF_LOADING,   // in flight
+    INTEL_BRIEF_READY,     // body is good
+    INTEL_BRIEF_EMPTY,     // the feed carries no description for this story. Not a fault.
+    INTEL_BRIEF_GONE,      // the story aged out of the feed between the list and the press
+    INTEL_BRIEF_FAILED,    // no network, or the gateway did not answer
+};
+
+struct IntelBrief {
+    IntelBriefState state;
+    char key[INTEL_KEY_BYTES];
+    char headline[INTEL_TEXT_BYTES];
+    char source[INTEL_SOURCE_BYTES];
+    char body[INTEL_BRIEF_BYTES];
+};
+
+// UI: ask for a story's summary. Cheap and idempotent — asking again for the key already
+// held is a no-op, so a second press on the same headline shows what is already there
+// instead of refetching it.
+void intel_brief_want(const char *key, const char *headline, const char *source);
+// UI: stop caring (the briefing was closed). Frees nothing, but stops a late answer from
+// arriving into a screen nobody is looking at.
+void intel_brief_release();
+// UI: what to draw right now.
+bool intel_brief_get(IntelBrief &out);
+// Network task: is there a key waiting to be fetched? Copies it out and moves to LOADING.
+bool intel_brief_take(char *keyOut, size_t keyCap);
+// Network task: the answer, whatever it was.
+void intel_brief_store(const char *key, IntelBriefState state,
+                       const char *headline, const char *source, const char *body);

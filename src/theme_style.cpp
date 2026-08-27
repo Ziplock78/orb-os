@@ -630,6 +630,32 @@ void load() {
             if (doc["sourceColor"].is<uint32_t>()) s_intel.sourceColor = doc["sourceColor"].as<uint32_t>();
             s_intel.sourceOpa = opa_of(doc["sourceOpa"], s_intel.sourceOpa);
             if (doc["staleColor"].is<uint32_t>()) s_intel.staleColor = doc["staleColor"].as<uint32_t>();
+            // Browsing marks and the briefing. See THEME_CAPS 19.
+            s_intel.selDim = opa_of(doc["selDim"], s_intel.selDim);
+            if (doc["selColorOn"].is<bool>()) s_intel.selColorOn = doc["selColorOn"].as<bool>();
+            if (doc["selColor"].is<uint32_t>()) s_intel.selColor = doc["selColor"].as<uint32_t>();
+            if (doc["selBarOn"].is<bool>()) s_intel.selBarOn = doc["selBarOn"].as<bool>();
+            if (doc["selBarColor"].is<uint32_t>()) s_intel.selBarColor = doc["selBarColor"].as<uint32_t>();
+            s_intel.selBarOpa = opa_of(doc["selBarOpa"], s_intel.selBarOpa);
+            if (doc["selBarRadius"].is<int>()) {
+                const int v = doc["selBarRadius"].as<int>();
+                s_intel.selBarRadius = v < 0 ? 0 : (v > 60 ? 60 : v);
+            }
+            if (doc["selBarPadX"].is<int>()) {
+                const int v = doc["selBarPadX"].as<int>();
+                s_intel.selBarPadX = v < 0 ? 0 : (v > 40 ? 40 : v);
+            }
+            if (doc["selBarPadY"].is<int>()) {
+                const int v = doc["selBarPadY"].as<int>();
+                s_intel.selBarPadY = v < 0 ? 0 : (v > 40 ? 40 : v);
+            }
+            if (doc["briefColorOn"].is<bool>()) s_intel.briefColorOn = doc["briefColorOn"].as<bool>();
+            if (doc["briefColor"].is<uint32_t>()) s_intel.briefColor = doc["briefColor"].as<uint32_t>();
+            s_intel.briefOpa = opa_of(doc["briefOpa"], s_intel.briefOpa);
+            if (doc["briefGap"].is<int>()) {
+                const int v = doc["briefGap"].as<int>();
+                s_intel.briefGap = v < 0 ? 0 : (v > 40 ? 40 : v);
+            }
             if (doc["count"].is<int>()) {
                 const int c = doc["count"].as<int>();
                 s_intel.count = c < 1 ? 1 : (c > INTEL_MAX_ITEMS ? INTEL_MAX_ITEMS : c);

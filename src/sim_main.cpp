@@ -189,6 +189,23 @@ static SDL_Window   *s_win = NULL;
 static SDL_Renderer *s_ren = NULL;
 static SDL_Texture  *s_tex = NULL;   // the 466x466 LVGL framebuffer
 
+// Copy what is on screen into a file. Written once because there were three copies of it
+// already and --newsshot would have made a fourth, which is three too many places for a
+// pixel format to be wrong in only one of them.
+static void sim_save_frame(const char *path) {
+    if (!path || !s_ren) return;
+    SDL_RenderClear(s_ren);
+    SDL_RenderCopy(s_ren, s_tex, NULL, NULL);
+    int ow = 0, oh = 0;
+    SDL_GetRendererOutputSize(s_ren, &ow, &oh);
+    SDL_Surface *surf = SDL_CreateRGBSurfaceWithFormat(0, ow, oh, 32, SDL_PIXELFORMAT_ARGB8888);
+    if (!surf) return;
+    SDL_RenderReadPixels(s_ren, NULL, SDL_PIXELFORMAT_ARGB8888, surf->pixels, surf->pitch);
+    SDL_SaveBMP(surf, path);
+    SDL_FreeSurface(surf);
+    printf("[sim] saved %s\n", path);
+}
+
 // ---- Orb chrome (interactive only) --------------------------------------------
 // The window shows the physical Orb render (sim/orb-frame.bmp) with the live UI
 // composited into its round lens, plus a control strip with three buttons that
@@ -571,16 +588,24 @@ static void sim_register_apps(lv_obj_t *radarScreen) {
                    []() { static bool fc = false; fc = !fc; ui_set_weather_forecast(fc); },  // push toggles WX/forecast
                    nullptr, false, []() { ui_show_view(1); }, nullptr, !theme_style::apps().weather);
     app_shell::add(survScreen,  theme_style::names().surveillance, nullptr, nullptr, false, nullptr, nullptr, !theme_style::apps().surveillance);
-    app_shell::add(intelview::screen(), theme_style::names().headlines,
-                   intelview::onPress, intelview::onTurn, false, intelview::onEnter, intelview::onExit, !theme_style::apps().headlines);
-    // After Settings, matching main.cpp. The selftests below address apps by index, so the
-    // two lineups have to stay in the same order or the simulator stops standing in for
-    // the device at exactly the moment someone is using it to check one.
+    // init() FIRST, and this is not a style preference.
+    //
+    // screen() returns null until init() has built it, and add() quietly rejects a null
+    // screen. So this call did nothing at all: the simulator's menu had five apps, News was
+    // not among them, and every app after it moved up one — which broke the exact invariant
+    // the comment below claims to protect, since selectApp(APP_INTEL) landed on Settings.
+    // Nothing failed, nothing logged, and the screen simply could not be reached in the
+    // simulator. Found by driving the knob to it and photographing Settings instead.
     intelview::init();
     // Fetch once, synchronously, the way the location app's own sim path does: the device
     // does this from its network task, which the simulator has no equivalent of, and a
     // headless screenshot of an empty screen would tell nobody anything.
     if (intelview::fetchStep()) intelview::onHeadlinesReady();
+    app_shell::add(intelview::screen(), theme_style::names().headlines,
+                   intelview::onPress, intelview::onTurn, false, intelview::onEnter, intelview::onExit, !theme_style::apps().headlines);
+    // After News, matching main.cpp. The selftests below address apps by index, so the two
+    // lineups have to stay in the same order or the simulator stops standing in for the
+    // device at exactly the moment someone is using it to check one.
     app_shell::add(settingsview::screen(), theme_style::names().settings,
                    settingsview::onPress, settingsview::onTurn, true, settingsview::onEnter, settingsview::onExit, false);
     app_shell::begin();   // start on Clock (index 0), matching the device
@@ -674,6 +699,16 @@ int main(int argc, char **argv) {
     // The "Ready" notice, for the same reason: it exists for a few seconds on real
     // hardware after an update and there is no other way to look at it.
     const char *readyShot  = (argc >= 3 && strcmp(argv[1], "--readyshot")  == 0) ? argv[2] : NULL;
+    // --newsshot <prefix> drives the News screen the way a person does and captures both
+    // halves of it: <prefix>-list.bmp with the knob turned twice (so the selection is on the
+    // third headline and the two above it are dimmed) and <prefix>-brief.bmp after a press.
+    // Neither state can be photographed any other way — the selection marks fade after six
+    // seconds of stillness, and the briefing needs a real answer from the gateway to have
+    // anything in it. This makes the same two round trips the Orb makes.
+    const char *newsShot   = (argc >= 3 && strcmp(argv[1], "--newsshot")   == 0) ? argv[2] : NULL;
+    // --newsshot is headless but drives the KNOB, so it needs the full app lineup that only
+    // interactive mode registers. It is the one capture that walks the shell rather than
+    // putting a single screen up directly.
     const bool  interactive = !shotPath && !gifPath && !updateShot && !readyShot;   // live knob/app-shell only outside headless capture
 
     SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "linear");   // smooth up/downscale (both the
@@ -1092,6 +1127,24 @@ int main(int argc, char **argv) {
             }
         }
         Uint32 now = SDL_GetTicks();
+
+        // The network step, which this simulator used to run exactly once at boot. That was
+        // enough while the only thing it fetched was the headline list, and stopped being
+        // enough the moment pressing a headline could ask for something: a brief requested
+        // here would sit in the store with nobody to go and get it, and the briefing would
+        // read "Getting the story..." for ever while the device did it correctly.
+        //
+        // Blocking on the UI thread, unlike the device, which does this on core 0. A
+        // simulator that stutters for the length of one HTTP request is a fair trade for one
+        // that can show what the screen really does; the alternative is a thread this file
+        // has no other reason to own.
+        {
+            static Uint32 lastNet = 0;
+            if (now - lastNet > 400) {
+                lastNet = now;
+                if (intelview::fetchStep()) intelview::onHeadlinesReady();
+            }
+        }
         lv_tick_inc(now - last);
         last = now;
         if (interactive) {                       // drive the app shell through the SAME path as the device
@@ -1193,16 +1246,41 @@ int main(int argc, char **argv) {
             updateSaved = true;
             if (readyShot) update_ui::ready(true);           // the after-an-update variant
             else           update_ui::firmware_incoming();   // paints and calls lv_refr_now itself
-            SDL_RenderClear(s_ren); SDL_RenderCopy(s_ren, s_tex, NULL, NULL);
-            int ow, oh; SDL_GetRendererOutputSize(s_ren, &ow, &oh);
-            SDL_Surface *surf = SDL_CreateRGBSurfaceWithFormat(0, ow, oh, 32, SDL_PIXELFORMAT_ARGB8888);
-            if (surf) {
-                SDL_RenderReadPixels(s_ren, NULL, SDL_PIXELFORMAT_ARGB8888, surf->pixels, surf->pitch);
-                const char *dest = readyShot ? readyShot : updateShot;
-                SDL_SaveBMP(surf, dest); SDL_FreeSurface(surf);
-                printf("[sim] saved %s\n", dest);
-            }
+            sim_save_frame(readyShot ? readyShot : updateShot);
             run = false;
+        }
+
+        // --newsshot: turn, turn, shoot; press, wait for the gateway, shoot.
+        //
+        // Wall-clock stepped rather than frame-counted because the second half genuinely
+        // waits on the network: the brief is a real request to the real worker, and a state
+        // machine that fires on frame numbers would photograph "Getting the story..." on a
+        // slow morning and call it a pass.
+        static int newsStep = 0;
+        static Uint32 newsAt = 0;
+        if (newsShot) {
+            if (newsStep == 0 && now - start > 2500) {
+                app_shell::selectApp(app_shell::APP_INTEL);
+                printf("[newsshot] count=%d idx=%d name=%s\n", app_shell::count(), app_shell::index(), app_shell::name());
+                for (int q = 0; q < app_shell::count(); ++q)
+                    printf("[newsshot]   %d: %s%s\n", q, app_shell::nameAt(q), app_shell::hiddenAt(q) ? " (hidden)" : "");
+                newsStep = 1; newsAt = now;
+            } else if (newsStep == 1 && now - newsAt > 3500) {
+                // Two detents: the selection lands on the third headline, which is the one
+                // arrangement that shows a dimmed row both above and below it.
+                input_router::dispatch(1, false);
+                input_router::dispatch(1, false);
+                newsStep = 2; newsAt = now;
+            } else if (newsStep == 2 && now - newsAt > 400) {
+                char path[300]; snprintf(path, sizeof(path), "%s-list.bmp", newsShot);
+                sim_save_frame(path);
+                input_router::dispatch(0, true);      // press: open the briefing
+                newsStep = 3; newsAt = now;
+            } else if (newsStep == 3 && now - newsAt > 6000) {
+                char path[300]; snprintf(path, sizeof(path), "%s-brief.bmp", newsShot);
+                sim_save_frame(path);
+                run = false;
+            }
         }
 
         // animated GIF capture (--gif <prefix>): grab frames after the splash fades
@@ -1301,7 +1379,7 @@ int main(int argc, char **argv) {
             app_shell::add(clockview::screen(), "Clock");
             app_shell::add(radarScreen, "Flight Tracker", nullptr, nullptr, false, []() { ui_show_view(0); });
             app_shell::add(radarScreen, "Weather Radar", nullptr, nullptr, false, []() { ui_show_view(1); });
-            app_shell::add(unavailScreen1, "Intel");
+            app_shell::add(unavailScreen1, "News");
             app_shell::add(unavailScreen2, "Surveillance");
             app_shell::add(settingsview::screen(), "Settings", settingsview::onPress, settingsview::onTurn, true, settingsview::onEnter, settingsview::onExit);
             app_shell::begin();

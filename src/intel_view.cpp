@@ -261,6 +261,21 @@ int      s_lastCount  = 0;
 bool     s_scrollMode = false;
 uint32_t s_scrollActivityMs = 0;
 
+// Which headline the knob is on, absolute rather than a row number: the window slides
+// under it, so a row index would mean something different after every scroll. The window
+// follows the selection, not the other way round.
+int      s_sel        = 0;
+lv_obj_t *s_selBar    = nullptr;   // the optional bar behind the selected headline
+
+// The briefing, over the list.
+lv_obj_t *s_briefPanel = nullptr;
+lv_obj_t *s_briefHead  = nullptr;
+lv_obj_t *s_briefBody  = nullptr;
+lv_obj_t *s_briefFoot  = nullptr;
+bool     s_briefOpen      = false;
+int      s_briefScroll    = 0;
+int      s_briefMaxScroll = 0;
+
 void show(lv_obj_t *o, bool on) {
     if (!o) return;
     if (on) lv_obj_clear_flag(o, LV_OBJ_FLAG_HIDDEN);
@@ -345,6 +360,7 @@ void render() {
             show(s_rowBox[i], false); show(s_credit[i], false);
             set_fade(i, false, 0, 0, 0);
         }
+        show(s_selBar, false);
         lv_label_set_text(s_age, "");
         exit_scroll_mode();
         return;
@@ -412,10 +428,30 @@ void render() {
     const int maxScroll = total - s_visible;
     if (s_scroll > maxScroll) s_scroll = maxScroll < 0 ? 0 : maxScroll;
     if (s_scroll < 0)         s_scroll = 0;
-    if (total <= s_visible) exit_scroll_mode();
+    // NOT cancelled when everything fits any more.
+    //
+    // This flag used to mean only "the scroll marks are showing", so a list with nothing to
+    // scroll had no use for it. It now also means "the knob is in use, show which headline
+    // is picked", and a three-headline screen that all fits still has a selection to show
+    // and a press to answer. Cancelling here dimmed nothing and left the press acting on an
+    // invisible choice, which is how this arrived: two detents genuinely moved the selection
+    // to the third story, the brief that came back was the third story's, and all three rows
+    // measured the same brightness in the screenshot.
+    //
+    // The chevrons take care of themselves: style_chevrons already hides each one unless
+    // there is something past that end.
 
     // Only the window, never the whole set: at twenty items the full struct is over 2 KB
     // and this runs on the LVGL task's stack.
+    // The selection cannot point past a set that shrank while it was pointing at the end.
+    if (s_sel > total - 1) s_sel = total - 1;
+    if (s_sel < 0)         s_sel = 0;
+    // And it has to be inside the window, which is what makes the window follow it.
+    if (s_sel < s_scroll)                 s_scroll = s_sel;
+    if (s_sel > s_scroll + s_visible - 1) s_scroll = s_sel - s_visible + 1;
+    if (s_scroll < 0)                     s_scroll = 0;
+    show(s_selBar, false);   // raised again below only if this render has a selection
+
     IntelItem win[INTEL_MAX_ROWS];
     int dummy = 0;
     const int got = intel_window(s_scroll, s_visible, win, dummy);
@@ -450,7 +486,37 @@ void render() {
             cropped = want.y > textH;
             lv_obj_set_height(s_rowBox[i], textH);
         }
+        // The selection, and only while browsing. A resting screen looks exactly as it did
+        // before any of this existed, which is the promise every capability level here
+        // keeps; the marks arrive when somebody reaches for the knob and leave again after
+        // six seconds of stillness, along with the chevrons they belong with.
+        const bool isSel = s_scrollMode && (s_scroll + i == s_sel);
+        lv_obj_set_style_text_color(s_rows[i],
+            (isSel && cfg.selColorOn) ? lv_color_hex(cfg.selColor) : c_text(), 0);
+        // Dimming the others rather than colouring the one is the default because it is the
+        // only marking that works without knowing the theme's palette. Note it multiplies
+        // INTO the theme's own text opacity: a design that set its headlines to 60% gets a
+        // dimmed row at 60% of the dim, not a row that ignores what it asked for.
+        const int rowOpa = (!s_scrollMode || isSel)
+            ? cfg.textOpa
+            : (cfg.textOpa * cfg.selDim) / 255;
+        lv_obj_set_style_text_opa(s_rows[i], (lv_opa_t)rowOpa, 0);
+        lv_obj_set_style_text_opa(s_credit[i], (lv_opa_t)((cfg.sourceOpa *
+            ((!s_scrollMode || isSel) ? 255 : cfg.selDim)) / 255), 0);
         lv_obj_align(s_rowBox[i], LV_ALIGN_CENTER, box.cx, yCen);
+        if (isSel && cfg.selBarOn && s_selBar) {
+            lv_obj_set_style_bg_color(s_selBar, lv_color_hex(cfg.selBarColor), 0);
+            lv_obj_set_style_bg_opa(s_selBar, (lv_opa_t)cfg.selBarOpa, 0);
+            lv_obj_set_style_radius(s_selBar, cfg.selBarRadius, 0);
+            lv_obj_set_size(s_selBar, box.w + 2 * cfg.selBarPadX, textH + 2 * cfg.selBarPadY);
+            lv_obj_align(s_selBar, LV_ALIGN_CENTER, box.cx, yCen);
+            show(s_selBar, true);
+            // Behind the words, in front of the theme's picture. Re-asserting the plate is
+            // cheaper than reasoning about who moved what, the same way the glass is
+            // re-asserted on entry.
+            lv_obj_move_background(s_selBar);
+            if (s_plateImg) lv_obj_move_background(s_plateImg);
+        }
         if (i == 0) { firstTop = yCen - textH / 2; cxFirst = box.cx; }
         // The credit hangs below the box, so the list's real bottom is past it.
         lastBottom = yCen + textH / 2 + cfg.sourceGap + creditH;
@@ -466,6 +532,147 @@ void render() {
     }
 
     style_chevrons(total, lastBottom, firstTop, cxLast, cxFirst);
+}
+
+// ---- the briefing -----------------------------------------------------------
+//
+// Press a headline and read the story's own summary, as the publisher wrote it in the feed.
+//
+// It draws in the faces this screen already installs: the heading in the headline face, the
+// body and the footer in the source-credit face. No font of its own, because a brief is
+// arbitrary feed text and this screen's fourth face would be another ~30 KB of install for
+// something most designs will never restyle. See the note on briefColorOn in theme_style.h.
+
+// How far in from the bezel the briefing sets its text. Not the theme's headline margins:
+// those describe a list of two-line blocks, and a wall of body text wants more room than a
+// headline does or it runs into the curve of the glass on every line.
+constexpr int BRIEF_INSET   = 62;
+constexpr int BRIEF_TOP     = 74;
+constexpr int BRIEF_BOTTOM  = 74;
+constexpr int BRIEF_STEP_PX = 22;   // one detent's worth of scroll through a long brief
+
+void brief_style() {
+    if (!s_briefPanel) return;
+    const theme_style::Intel &cfg = theme_style::intel();
+    lv_obj_set_style_bg_color(s_briefPanel, lv_color_hex(cfg.bg), 0);
+    // Opaque on purpose: this is a reading screen, and the list showing through behind a
+    // paragraph is the difference between a briefing and a smear. The theme's own
+    // background picture is a separate object and stays where it is, behind this.
+    lv_obj_set_style_bg_opa(s_briefPanel, LV_OPA_COVER, 0);
+
+    const lv_font_t *headFont = theme_font::intel_has_font(1) ? theme_font::intel_text()
+                                                              : &lv_font_montserrat_16;
+    const lv_font_t *bodyFont = slot_font(2, cfg.sourceSize);
+    lv_obj_set_style_text_font(s_briefHead, headFont, 0);
+    lv_obj_set_style_text_color(s_briefHead, c_text(), 0);
+    lv_obj_set_style_text_opa(s_briefHead, (lv_opa_t)cfg.textOpa, 0);
+
+    lv_obj_set_style_text_font(s_briefBody, bodyFont, 0);
+    lv_obj_set_style_text_color(s_briefBody,
+        cfg.briefColorOn ? lv_color_hex(cfg.briefColor) : c_text(), 0);
+    lv_obj_set_style_text_opa(s_briefBody, (lv_opa_t)cfg.briefOpa, 0);
+
+    lv_obj_set_style_text_font(s_briefFoot, bodyFont, 0);
+    lv_obj_set_style_text_color(s_briefFoot, c_source(), 0);
+    lv_obj_set_style_text_opa(s_briefFoot, (lv_opa_t)cfg.sourceOpa, 0);
+}
+
+// Lay the briefing out and fill it from the store. Cheap enough to call on every state
+// change: three label writes and an align.
+void render_brief() {
+    if (!s_briefPanel || !s_briefOpen) return;
+    const theme_style::Intel &cfg = theme_style::intel();
+    IntelBrief b = {};
+    intel_brief_get(b);
+
+    brief_style();
+    const int w = SCREEN_W - 2 * BRIEF_INSET;
+    lv_obj_set_width(s_briefHead, w);
+    lv_obj_set_width(s_briefBody, w);
+    lv_obj_set_width(s_briefFoot, w);
+
+    lv_label_set_text(s_briefHead, b.headline);
+
+    // Every outcome gets its own sentence. "No summary for this one" and "that story has
+    // gone" and "cannot reach the gateway" are three different things to know, and a single
+    // "unavailable" for all three is how a working device gets called broken.
+    switch (b.state) {
+        case INTEL_BRIEF_WANTED:
+        case INTEL_BRIEF_LOADING:
+            lv_label_set_text(s_briefBody, "Getting the story...");
+            break;
+        case INTEL_BRIEF_READY:
+            lv_label_set_text(s_briefBody, b.body);
+            break;
+        case INTEL_BRIEF_EMPTY:
+            lv_label_set_text(s_briefBody, "This one came with no summary. The headline is all the feed sent.");
+            break;
+        case INTEL_BRIEF_GONE:
+            lv_label_set_text(s_briefBody, "That story has dropped out of the feed since the list arrived.");
+            break;
+        case INTEL_BRIEF_FAILED:
+        default:
+#ifdef ARDUINO
+            lv_label_set_text(s_briefBody, WiFi.status() == WL_CONNECTED
+                ? "The service is not answering. Your Orb is fine."
+                : "No WiFi, so the story cannot be fetched.");
+#else
+            lv_label_set_text(s_briefBody, "The service is not answering.");
+#endif
+            break;
+    }
+
+    char foot[INTEL_SOURCE_BYTES + 24];
+    snprintf(foot, sizeof(foot), "%s  ~  press to go back", b.source[0] ? b.source : "");
+    lv_label_set_text(s_briefFoot, foot);
+
+    // The footer is pinned to the bottom and the heading to the top; the body is what
+    // scrolls between them when a long brief will not fit.
+    lv_obj_align(s_briefHead, LV_ALIGN_TOP_MID, 0, BRIEF_TOP);
+    lv_obj_align(s_briefFoot, LV_ALIGN_BOTTOM_MID, 0, -BRIEF_BOTTOM);
+
+    lv_obj_update_layout(s_briefPanel);
+    const int headH  = lv_obj_get_height(s_briefHead);
+    const int bodyTop = BRIEF_TOP + headH + cfg.briefGap;
+    const int room   = SCREEN_H - BRIEF_BOTTOM - lv_obj_get_height(s_briefFoot) - 10 - bodyTop;
+    const int bodyH  = lv_obj_get_height(s_briefBody);
+    // Clamped here rather than in onTurn, because how far it CAN scroll depends on the text
+    // that just arrived. Turning past the end holds at the end; there is nothing after it
+    // and wrapping a paragraph back to its own top reads as a fault.
+    s_briefMaxScroll = bodyH > room ? bodyH - room : 0;
+    if (s_briefScroll > s_briefMaxScroll) s_briefScroll = s_briefMaxScroll;
+    if (s_briefScroll < 0)                s_briefScroll = 0;
+    lv_obj_align(s_briefBody, LV_ALIGN_TOP_MID, 0, bodyTop - s_briefScroll);
+}
+
+void open_brief() {
+    if (!s_briefPanel) return;
+    IntelItem win[1];
+    int total = 0;
+    // The selected item, read narrowly: one item off the store rather than the whole
+    // snapshot onto this stack.
+    if (intel_window(s_sel, 1, win, total) != 1) return;
+    if (!win[0].key[0]) {
+        // A gateway older than the briefing feature sends no key. Say so rather than
+        // opening a panel that can never fill.
+        Serial.println("[intel] no story key: the gateway predates briefs");
+        return;
+    }
+    intel_brief_want(win[0].key, win[0].text, win[0].source);
+    s_briefOpen   = true;
+    s_briefScroll = 0;
+    exit_scroll_mode();          // the selection marks belong to the list, not to this
+    show(s_briefPanel, true);
+    lv_obj_move_foreground(s_briefPanel);
+    if (s_overlayImg) lv_obj_move_foreground(s_overlayImg);   // glass over everything, always
+    render_brief();
+}
+
+void close_brief() {
+    s_briefOpen = false;
+    intel_brief_release();
+    show(s_briefPanel, false);
+    render();
 }
 
 // Attach the theme's plate and glass, if it ships them.
@@ -548,16 +755,23 @@ void attach_art() {
 
 lv_obj_t *intelview::screen() { return s_screen; }
 
-void intelview::onExit() { intelview::sprite_release(); release_age_canvas(); }
+void intelview::onExit() {
+    // Close the briefing before the artwork goes: leaving it open would hold a panel over a
+    // screen whose plate has been freed, and the next entry would find a paragraph about a
+    // story chosen before the list was refetched.
+    if (s_briefOpen) close_brief();
+    intelview::sprite_release();
+    release_age_canvas();
+}
 
-// A knob press: toggle scroll mode when there is anything to scroll, otherwise ask now
-// instead of waiting out the poll. The fetch itself belongs to the network task, so the
-// refresh half only clears the timer that task is watching.
-// A press asks for the headlines again. Nothing else: scrolling is what a TURN does now,
-// so the button is not needed to reach any of it.
+// Press: open the highlighted story, or close the one that is open.
+//
+// This used to ask for a refresh, which is a thing the screen already does on its own
+// timer. A press is the only gesture on this screen that means "this one", and spending it
+// on a refresh left the selection with nothing to do.
 void intelview::onPress() {
-    s_lastTryMs = 0;
-    Serial.println("[intel] refresh requested from the knob");
+    if (s_briefOpen) { close_brief(); return; }
+    open_brief();
 }
 
 // A detent in scroll mode: move the window. Clamped in render(), so spinning past the
@@ -570,9 +784,27 @@ void intelview::onPress() {
 // s_scrollMode now means only "the marks are showing", not "the knob has been taken". The
 // knob is never taken on this screen: the Rock gesture is what leaves, so there is nothing
 // to hand back.
+// A detent: move the highlight, or scroll the briefing when one is open.
+//
+// The highlight moves one headline per detent and the WINDOW follows it, which is the
+// ordinary behaviour of every scrolling list and is what the old code did not do: it slid
+// the window and marked nothing, so there was never a "this one" for a press to act on.
+//
+// Turning still works when everything fits on one screen. There is nothing to scroll then,
+// but there is still something to choose, and refusing the turn would make the press look
+// broken on exactly the short lists most designs show.
 void intelview::onTurn(int delta) {
-    if (s_lastCount <= s_visible) return;   // nothing to scroll
-    s_scroll += delta;
+    if (s_briefOpen) {
+        s_briefScroll += delta * BRIEF_STEP_PX;
+        if (s_briefScroll < 0) s_briefScroll = 0;
+        if (s_briefScroll > s_briefMaxScroll) s_briefScroll = s_briefMaxScroll;
+        render_brief();
+        return;
+    }
+    if (s_lastCount <= 0) return;
+    s_sel += delta;
+    if (s_sel < 0)                s_sel = 0;
+    if (s_sel > s_lastCount - 1)  s_sel = s_lastCount - 1;
     s_scrollMode = true;
     s_scrollActivityMs = millis();
     render();
@@ -583,6 +815,11 @@ void intelview::onTurn(int delta) {
 // leak into this one.
 void intelview::onEnter() {
     s_scroll = 0;
+    s_sel    = 0;
+    // A briefing left open on the way out must not be what greets you on the way back in:
+    // it would be a paragraph about a story chosen in a previous visit, over a list that
+    // has since been refetched.
+    if (s_briefOpen) close_brief();
     exit_scroll_mode();
     attach_art();
     attach_age_canvas();
@@ -604,6 +841,26 @@ void intelview::scrollState(int &first, int &visible, int &count) {
 bool intelview::fetchStep() {
     const theme_style::Intel &cfg = theme_style::intel();
     const uint32_t now = millis();
+
+    // A brief somebody is waiting to read jumps the queue. It is a sub-kilobyte request
+    // against a cache the list request already warmed, and it is the only thing on this
+    // screen with a person actively watching for it: making it wait behind the poll timer
+    // would put a spinner on screen for as long as the next scheduled fetch.
+    {
+        char key[INTEL_KEY_BYTES];
+        if (intel_brief_take(key, sizeof(key))) {
+            char h[INTEL_TEXT_BYTES]; char src[INTEL_SOURCE_BYTES];
+            // Static for the same reason the snapshot below is: 432 bytes is not something
+            // to discover about this task's stack at the moment it overflows.
+            static char body[INTEL_BRIEF_BYTES];
+            const IntelBriefState st = intel_brief_fetch(cfg.topic, cfg.source, key,
+                                                         h, sizeof(h), src, sizeof(src),
+                                                         body, sizeof(body));
+            intel_brief_store(key, st, h, src, body);
+            return true;
+        }
+    }
+
     if (s_lastTryMs != 0) {
         uint32_t seen = 0; int held = 0;
         const bool have = intel_meta(seen, held);
@@ -625,6 +882,11 @@ bool intelview::fetchStep() {
 void intelview::onHeadlinesReady() {
     render();
     intelview::tick();
+    // The same flag core 0 raises for a fresh headline set is raised for a brief that has
+    // landed, because both are "the store changed and the labels are core 1's to write".
+    // Without this the briefing would sit on "Getting the story..." until something else
+    // happened to repaint it.
+    render_brief();
 }
 
 // The age line, refreshed on a timer rather than only on arrival: headlines that stopped
@@ -745,6 +1007,31 @@ void intelview::init() {
 
 
 
+    }
+
+    // The bar behind the selected headline. Built always, shown only when a theme asks for
+    // it and the knob is being used: one empty object costs less than the branch that would
+    // create it lazily and then have to reason about its z-order afterwards.
+    s_selBar = lv_obj_create(s_screen);
+    lv_obj_remove_style_all(s_selBar);
+    lv_obj_clear_flag(s_selBar, LV_OBJ_FLAG_SCROLLABLE);
+    show(s_selBar, false);
+
+    // The briefing panel: a full-dial reading surface over the list.
+    s_briefPanel = lv_obj_create(s_screen);
+    lv_obj_remove_style_all(s_briefPanel);
+    lv_obj_clear_flag(s_briefPanel, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_size(s_briefPanel, SCREEN_W, SCREEN_H);
+    lv_obj_align(s_briefPanel, LV_ALIGN_CENTER, 0, 0);
+    // Clipped to the panel, so a long brief scrolled upward disappears at the edge instead
+    // of drawing over the heading that is supposed to stay put.
+    lv_obj_set_style_clip_corner(s_briefPanel, true, 0);
+    show(s_briefPanel, false);
+    for (lv_obj_t **slot : { &s_briefHead, &s_briefBody, &s_briefFoot }) {
+        *slot = lv_label_create(s_briefPanel);
+        lv_label_set_long_mode(*slot, LV_LABEL_LONG_WRAP);
+        lv_obj_set_style_text_align(*slot, LV_TEXT_ALIGN_CENTER, 0);
+        lv_label_set_text(*slot, "");
     }
 
     // Drawn rather than set in a font: LVGL's built-in symbols are a fixed weight and size

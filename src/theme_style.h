@@ -162,7 +162,12 @@ namespace theme_style {
 //      at full, while LVGL labels alpha-blend for anti-aliasing whatever happens. Faint
 //      type is a real design tool on a screen this bright, and there was no way to ask for
 //      it. An Orb below this level draws every one of them at full strength.
-constexpr int THEME_CAPS = 18;
+//  19  the News screen's browsing marks and its briefing. Turning the knob now moves a
+//      selection through the headlines instead of sliding the window, and pressing opens
+//      the story's own summary from the feed. An Orb below this level scrolls the way it
+//      always did and does nothing on a press, so the theme's selection colours and bar
+//      would be settings with no screen to appear on.
+constexpr int THEME_CAPS = 19;
 
 struct ClockText {
     bool     show   = false;
@@ -253,13 +258,23 @@ struct Names {
     char flight[20]       = "Flight Tracker";
     char weather[20]      = "Weather Radar";
     char surveillance[20] = "Surveillance";
-    // The KEY stays `headlines` and the LABEL is "Intel", which looks like a mismatch and
-    // is not one. There used to be a second app whose key was `intel`: a city/temperature/
-    // pressure screen that carried a wiki fun fact captioned "INTEL" and so took the name.
-    // That screen is gone, and this one inherits the word people actually mean by it. The
-    // key cannot follow, because it is a field in every theme.json already written to a
-    // card and renaming it would silently switch this app off on every one of them.
-    char headlines[20]    = "Intel";        // key `headlines` -> intel_view.cpp (the news)
+    // The KEY stays `headlines`, the LABEL is "News", and the source file is still called
+    // intel_view.cpp. Three names for one screen, none of which can be made to agree.
+    //
+    // There used to be a second app whose key was `intel`: a city/temperature/pressure
+    // screen carrying a wiki fun fact captioned "INTEL". It is gone, this screen took the
+    // word for a while, and the word was never what the screen does. It shows the news, so
+    // it is called News.
+    //
+    // The key cannot follow, because it is a field in every theme.json already written to a
+    // card and renaming it would silently switch this app off on every one of them. The
+    // filenames do not follow either, for the same reason a rename is cosmetic by design:
+    // a theme may call this screen anything it likes, so no filename could track it anyway.
+    //
+    // A theme that stores its own name for this app keeps it. Only themes with no opinion
+    // (the empty string, which is what Studio saves unless someone types a name) pick this
+    // up, which is why changing it here changes every stock theme and overrides nobody.
+    char headlines[20]    = "News";         // key `headlines` -> intel_view.cpp
     char settings[20]     = "Settings";      // renameable, but never hideable
 };
 
@@ -587,6 +602,44 @@ struct Intel {
     uint32_t sourceColor = 0x5F6874;
     int      sourceOpa   = 255;
     uint32_t staleColor  = 0xC8922E;
+    // ---- browsing: which headline the knob is on -------------------------------------
+    //
+    // None of this shows on a resting screen, which is the promise every capability level
+    // here keeps: turning the knob is what makes a selection appear, and six seconds of
+    // stillness takes it away again. So a theme built before this existed looks exactly as
+    // it did until somebody reaches for the knob.
+    //
+    // The default marks the selection by DIMMING the others rather than by colouring the
+    // one, because that is the only choice that works without knowing the theme's palette.
+    // A hardcoded white selection is invisible on a pale design and a hardcoded bar colour
+    // is wrong on half of them; fading what you are not reading is right on all of them.
+    // 150 rather than the 110 this started at: a neighbour should read as quieter, not as
+    // nearly gone. Checked on a screenshot rather than guessed, which is how 110 was caught.
+    int      selDim      = 150;   // 0..255: what unselected headlines fade to while browsing
+    bool     selColorOn  = false; // give the selected headline a colour of its own
+    uint32_t selColor    = 0xFFFFFF;
+    // The bar is ON by default, because a highlight band is what a scrolling list looks like
+    // everywhere else including this Orb's own Settings wheel, and it is what was asked for.
+    // Quiet enough at 26/255 to sit under a dark theme's text as well as a light one's: it is
+    // the theme's own text colour, so it always contrasts with the background it is on.
+    bool     selBarOn    = true;
+    uint32_t selBarColor = 0xE8ECF1;
+    int      selBarOpa   = 26;
+    int      selBarRadius = 12;
+    int      selBarPadX  = 10;
+    int      selBarPadY  = 6;
+    // ---- the briefing: press a headline to read the story's own summary ---------------
+    //
+    // No font slots of its own, on purpose. The heading draws in the headline face and the
+    // body in the source-credit face, both of which are already installed and both of which
+    // are shipped with their full glyph range (only the title is subsetted, because only
+    // the title's words are known in advance). A brief is arbitrary feed text, so a
+    // subsetted face would draw holes in it, and a fourth face would be another ~30 KB of
+    // install for a screen most designs will never restyle.
+    bool     briefColorOn = false;  // false: follow the headline colour
+    uint32_t briefColor   = 0xE8ECF1;
+    int      briefOpa     = 255;
+    int      briefGap     = 18;     // between the heading and the body
     // How many headlines to FETCH, 1..INTEL_MAX_ITEMS (20). Not the same question as how
     // many are on screen: the surplus is what the knob scrolls through.
     int      count       = 3;
