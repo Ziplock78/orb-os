@@ -92,12 +92,17 @@ bool rocked() {
 }  // namespace
 
 void input_router::dispatch(int delta, bool pressed) {
-    // The "Ready" notice owns the knob until it is acknowledged, and the press that clears
-    // it is SWALLOWED rather than passed on. Letting it through would mean the press that
-    // means "yes, I see it" also opens whatever the clock does with a press, which is the
-    // sort of thing that teaches people not to trust a confirmation.
+    // The "Ready" notice owns the knob until it is acknowledged, and ANY input clears it:
+    // a turn either way or a press. It used to demand a press specifically, which made a
+    // notice that exists to say "the knob is yours again" the one screen where most of the
+    // knob did nothing. Reaching for a control and having it ignore you is the exact
+    // feeling this notice is here to end.
+    //
+    // Whichever input clears it is SWALLOWED rather than passed on. Letting it through
+    // would mean the gesture that means "yes, I see it" also does whatever the clock does
+    // with it, which is the sort of thing that teaches people not to trust a confirmation.
     if (update_ui::awaitingAck()) {
-        if (pressed) update_ui::ackReady();
+        if (pressed || delta != 0) update_ui::ackReady();
         return;
     }
     // Stamped here rather than in the menu, because "how long until I see it" is a question

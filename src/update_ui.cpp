@@ -176,7 +176,9 @@ void ready(bool needsAck) {
     lv_label_set_text(s_sub, needsAck
         ? "The update is finished.\nEverything is running."
         : "");
-    lv_label_set_text(s_hint, needsAck ? "Press the knob to begin." : "");
+    // Names the turn rather than the press, because a turn is the smaller motion and both
+    // work. Shorter than the string it replaced, so the two-line layout below is unchanged.
+    lv_label_set_text(s_hint, needsAck ? "Turn the knob to begin." : "");
     // Checked with `program --readyshot`. One line at 398 px was most of the dial's width
     // and the bezel crowds it; two shorter lines sit comfortably inside the glass.
     lv_obj_align(s_title, LV_ALIGN_CENTER, 0, needsAck ? -62 : 0);
@@ -191,7 +193,7 @@ void ready(bool needsAck) {
     }
     lv_refr_now(NULL);
 #ifdef ARDUINO
-    Serial.printf("[update_ui] ready (%s)\n", needsAck ? "waiting for a press" : "clearing itself");
+    Serial.printf("[update_ui] ready (%s)\n", needsAck ? "waiting for the knob" : "clearing itself");
 #endif
 }
 

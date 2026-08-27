@@ -68,18 +68,20 @@ void booting(const char *what);
 
 // Everything is up and the knob is live.
 //
-// After a firmware update this WAITS for a press, because that is the moment the question
+// After a firmware update this WAITS for the knob, because that is the moment the question
 // "is it finished?" actually gets asked, and answering it with a clock that may or may not
 // respond is what made the update feel broken. On an ordinary power-on it clears itself
 // after a moment: a desk clock that demands a button press every time it is plugged in is a
 // worse device than one that occasionally starts a second slower than it looks.
 void ready(bool needsAck);
 
-// True while a ready notice is waiting to be acknowledged. input_router asks, so the press
-// that dismisses the notice is not also delivered to whatever app is underneath it.
+// True while a ready notice is waiting to be acknowledged. input_router asks, so whichever
+// input dismisses the notice is not also delivered to whatever app is underneath it.
 bool awaitingAck();
 
-// The press that clears it.
+// Any knob input clears it: a turn in either direction or a press. A notice whose whole
+// message is "the knob is yours again" must not be the one screen that ignores most of the
+// knob.
 void ackReady();
 
 // Boot-time bake progress: converting the received theme into the flash cache. This is
