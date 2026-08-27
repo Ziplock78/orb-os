@@ -276,6 +276,14 @@ bool     s_briefOpen      = false;
 int      s_briefScroll    = 0;
 int      s_briefMaxScroll = 0;
 
+// Where the headlines sit, measured by render() and read by the briefing, which fills the
+// same area. Coordinates are centre-relative, the way every align on this screen is. Two
+// copies of this arithmetic is how a briefing starts landing somewhere the headlines never
+// were, so there is one and render() owns it.
+struct BriefBand { int top; int bottom; int w; int cx; };
+BriefBand s_band = { -110, 110, 320, 0 };
+void render_brief();
+
 void show(lv_obj_t *o, bool on) {
     if (!o) return;
     if (on) lv_obj_clear_flag(o, LV_OBJ_FLAG_HIDDEN);
@@ -362,6 +370,7 @@ void render() {
         }
         show(s_selBar, false);
         lv_label_set_text(s_age, "");
+        show(s_briefPanel, false);
         exit_scroll_mode();
         return;
     }
@@ -452,6 +461,37 @@ void render() {
     if (s_scroll < 0)                     s_scroll = 0;
     show(s_selBar, false);   // raised again below only if this render has a selection
 
+    // The band the headlines occupy, measured once and used by both modes. Under a curved
+    // boundary the row width varies with height, so the briefing takes the NARROWER of the
+    // band's two ends: a paragraph sized to the middle of a circle overruns the glass at the
+    // top and bottom of it.
+    {
+        const int bTop = firstCenter - textH / 2;
+        const int bBot = firstCenter + (s_visible - 1) * step + textH / 2 + cfg.sourceGap + creditH;
+        const RowBox atTop = row_box(bTop + textH / 2);
+        const RowBox atBot = row_box(bBot - textH / 2);
+        s_band.top    = bTop;
+        s_band.bottom = bBot;
+        s_band.w      = atTop.w < atBot.w ? atTop.w : atBot.w;
+        s_band.cx     = (atTop.cx + atBot.cx) / 2;
+    }
+
+    // Reading one story instead of the list. Everything else on the screen stays exactly as
+    // it is: same background, same glass, same title, same updated line. Only the band
+    // changes what it holds, which is what makes this free to design.
+    if (s_briefOpen) {
+        for (int i = 0; i < INTEL_MAX_ROWS; ++i) {
+            show(s_rowBox[i], false); show(s_credit[i], false);
+            set_fade(i, false, 0, 0, 0);
+        }
+        show(s_chevDown, false);
+        show(s_chevUp, false);
+        show(s_briefPanel, true);
+        render_brief();
+        return;
+    }
+    show(s_briefPanel, false);
+
     IntelItem win[INTEL_MAX_ROWS];
     int dummy = 0;
     const int got = intel_window(s_scroll, s_visible, win, dummy);
@@ -538,47 +578,48 @@ void render() {
 //
 // Press a headline and read the story's own summary, as the publisher wrote it in the feed.
 //
-// It draws in the faces this screen already installs: the heading in the headline face, the
-// body and the footer in the source-credit face. No font of its own, because a brief is
-// arbitrary feed text and this screen's fourth face would be another ~30 KB of install for
-// something most designs will never restyle. See the note on briefColorOn in theme_style.h.
-
-// How far in from the bezel the briefing sets its text. Not the theme's headline margins:
-// those describe a list of two-line blocks, and a wall of body text wants more room than a
-// headline does or it runs into the curve of the glass on every line.
-constexpr int BRIEF_INSET   = 62;
-constexpr int BRIEF_TOP     = 74;
-constexpr int BRIEF_BOTTOM  = 74;
+// It is a MODE OF THIS SCREEN, not a screen of its own. Same background, same glass, same
+// title, same updated line, same typefaces, same margins; the only thing that changes is
+// that the band the headlines occupy now holds one headline and its summary instead of a
+// list. That is what makes it free to design: a theme that has dressed the News screen has
+// already dressed this, and there is no second surface to keep in step with the first.
+//
+// It began as a full-dial panel with insets of its own and an opaque background, which was
+// a second screen wearing the first one's colours and would have needed its own margins,
+// its own type, and its own answer every time the News screen gained a control.
+//
+// The heading draws in the headline face and the body in the source-credit face, both of
+// which this screen already installs with a full glyph range. It could not use the title's
+// face in any event: that one is subsetted to the title's own letters, and a brief is
+// arbitrary feed text.
 constexpr int BRIEF_STEP_PX = 22;   // one detent's worth of scroll through a long brief
 
 void brief_style() {
     if (!s_briefPanel) return;
     const theme_style::Intel &cfg = theme_style::intel();
-    lv_obj_set_style_bg_color(s_briefPanel, lv_color_hex(cfg.bg), 0);
-    // Opaque on purpose: this is a reading screen, and the list showing through behind a
-    // paragraph is the difference between a briefing and a smear. The theme's own
-    // background picture is a separate object and stays where it is, behind this.
-    lv_obj_set_style_bg_opa(s_briefPanel, LV_OPA_COVER, 0);
-
     const lv_font_t *headFont = theme_font::intel_has_font(1) ? theme_font::intel_text()
                                                               : &lv_font_montserrat_16;
     const lv_font_t *bodyFont = slot_font(2, cfg.sourceSize);
+
     lv_obj_set_style_text_font(s_briefHead, headFont, 0);
     lv_obj_set_style_text_color(s_briefHead, c_text(), 0);
     lv_obj_set_style_text_opa(s_briefHead, (lv_opa_t)cfg.textOpa, 0);
+    lv_obj_set_style_text_line_space(s_briefHead, cfg.lineGap, 0);
+
+    // The credit sits under the heading exactly where it sits under a headline in the list,
+    // in the same face and the same colour, because "the same formatting" is the point.
+    lv_obj_set_style_text_font(s_briefFoot, bodyFont, 0);
+    lv_obj_set_style_text_color(s_briefFoot, c_source(), 0);
+    lv_obj_set_style_text_opa(s_briefFoot, (lv_opa_t)cfg.sourceOpa, 0);
 
     lv_obj_set_style_text_font(s_briefBody, bodyFont, 0);
     lv_obj_set_style_text_color(s_briefBody,
         cfg.briefColorOn ? lv_color_hex(cfg.briefColor) : c_text(), 0);
     lv_obj_set_style_text_opa(s_briefBody, (lv_opa_t)cfg.briefOpa, 0);
-
-    lv_obj_set_style_text_font(s_briefFoot, bodyFont, 0);
-    lv_obj_set_style_text_color(s_briefFoot, c_source(), 0);
-    lv_obj_set_style_text_opa(s_briefFoot, (lv_opa_t)cfg.sourceOpa, 0);
+    lv_obj_set_style_text_line_space(s_briefBody, cfg.lineGap, 0);
 }
 
-// Lay the briefing out and fill it from the store. Cheap enough to call on every state
-// change: three label writes and an align.
+// Fill and lay out the briefing inside the band render() just measured.
 void render_brief() {
     if (!s_briefPanel || !s_briefOpen) return;
     const theme_style::Intel &cfg = theme_style::intel();
@@ -586,12 +627,20 @@ void render_brief() {
     intel_brief_get(b);
 
     brief_style();
-    const int w = SCREEN_W - 2 * BRIEF_INSET;
-    lv_obj_set_width(s_briefHead, w);
-    lv_obj_set_width(s_briefBody, w);
-    lv_obj_set_width(s_briefFoot, w);
+    // The panel is transparent and merely clips: the theme's own picture and colour are
+    // behind it, untouched, which is the whole point of this being a mode rather than a
+    // screen. Clipping is what lets a long brief scroll under the band's edge instead of
+    // drawing over the title above it.
+    const int h = s_band.bottom - s_band.top;
+    lv_obj_set_size(s_briefPanel, s_band.w, h > 0 ? h : 1);
+    lv_obj_align(s_briefPanel, LV_ALIGN_CENTER, s_band.cx, (s_band.top + s_band.bottom) / 2);
+
+    lv_obj_set_width(s_briefHead, s_band.w);
+    lv_obj_set_width(s_briefFoot, s_band.w);
+    lv_obj_set_width(s_briefBody, s_band.w);
 
     lv_label_set_text(s_briefHead, b.headline);
+    lv_label_set_text(s_briefFoot, b.source);
 
     // Every outcome gets its own sentence. "No summary for this one" and "that story has
     // gone" and "cannot reach the gateway" are three different things to know, and a single
@@ -622,27 +671,27 @@ void render_brief() {
             break;
     }
 
-    char foot[INTEL_SOURCE_BYTES + 24];
-    snprintf(foot, sizeof(foot), "%s  ~  press to go back", b.source[0] ? b.source : "");
-    lv_label_set_text(s_briefFoot, foot);
-
-    // The footer is pinned to the bottom and the heading to the top; the body is what
-    // scrolls between them when a long brief will not fit.
-    lv_obj_align(s_briefHead, LV_ALIGN_TOP_MID, 0, BRIEF_TOP);
-    lv_obj_align(s_briefFoot, LV_ALIGN_BOTTOM_MID, 0, -BRIEF_BOTTOM);
+    // Headline, its credit, then the summary: the same order and the same spacings a row in
+    // the list uses, so the two read as one design. sourceGap under the heading and briefGap
+    // under the credit are the theme's own numbers, not new ones invented here.
+    lv_obj_update_layout(s_briefPanel);
+    lv_obj_align(s_briefHead, LV_ALIGN_TOP_MID, 0, -s_briefScroll);
+    lv_obj_align_to(s_briefFoot, s_briefHead, LV_ALIGN_OUT_BOTTOM_MID, 0, cfg.sourceGap);
+    lv_obj_align_to(s_briefBody, s_briefFoot, LV_ALIGN_OUT_BOTTOM_MID, 0, cfg.briefGap);
 
     lv_obj_update_layout(s_briefPanel);
-    const int headH  = lv_obj_get_height(s_briefHead);
-    const int bodyTop = BRIEF_TOP + headH + cfg.briefGap;
-    const int room   = SCREEN_H - BRIEF_BOTTOM - lv_obj_get_height(s_briefFoot) - 10 - bodyTop;
-    const int bodyH  = lv_obj_get_height(s_briefBody);
     // Clamped here rather than in onTurn, because how far it CAN scroll depends on the text
-    // that just arrived. Turning past the end holds at the end; there is nothing after it
-    // and wrapping a paragraph back to its own top reads as a fault.
-    s_briefMaxScroll = bodyH > room ? bodyH - room : 0;
-    if (s_briefScroll > s_briefMaxScroll) s_briefScroll = s_briefMaxScroll;
-    if (s_briefScroll < 0)                s_briefScroll = 0;
-    lv_obj_align(s_briefBody, LV_ALIGN_TOP_MID, 0, bodyTop - s_briefScroll);
+    // that just arrived. Turning past the end holds there; wrapping a paragraph back to its
+    // own top reads as a fault.
+    const int used = lv_obj_get_height(s_briefHead) + cfg.sourceGap
+                   + lv_obj_get_height(s_briefFoot) + cfg.briefGap
+                   + lv_obj_get_height(s_briefBody);
+    s_briefMaxScroll = used > h ? used - h : 0;
+    if (s_briefScroll > s_briefMaxScroll) { s_briefScroll = s_briefMaxScroll; }
+    if (s_briefScroll < 0)                { s_briefScroll = 0; }
+    lv_obj_align(s_briefHead, LV_ALIGN_TOP_MID, 0, -s_briefScroll);
+    lv_obj_align_to(s_briefFoot, s_briefHead, LV_ALIGN_OUT_BOTTOM_MID, 0, cfg.sourceGap);
+    lv_obj_align_to(s_briefBody, s_briefFoot, LV_ALIGN_OUT_BOTTOM_MID, 0, cfg.briefGap);
 }
 
 void open_brief() {
@@ -662,10 +711,8 @@ void open_brief() {
     s_briefOpen   = true;
     s_briefScroll = 0;
     exit_scroll_mode();          // the selection marks belong to the list, not to this
-    show(s_briefPanel, true);
-    lv_obj_move_foreground(s_briefPanel);
+    render();                    // measures the band, hides the rows, fills the briefing
     if (s_overlayImg) lv_obj_move_foreground(s_overlayImg);   // glass over everything, always
-    render_brief();
 }
 
 void close_brief() {
@@ -1017,15 +1064,16 @@ void intelview::init() {
     lv_obj_clear_flag(s_selBar, LV_OBJ_FLAG_SCROLLABLE);
     show(s_selBar, false);
 
-    // The briefing panel: a full-dial reading surface over the list.
+    // The briefing lives in the band the headlines occupy, so it is sized and placed by
+    // render() rather than here. Transparent, with no style of its own: the theme's own
+    // background and picture stay exactly where they are behind it, which is the whole
+    // reason this is a mode of the News screen and not a screen of its own.
+    //
+    // LVGL clips children to their parent unless told otherwise, which is what lets a long
+    // brief scroll up under the band's top edge instead of drawing over the title above it.
     s_briefPanel = lv_obj_create(s_screen);
     lv_obj_remove_style_all(s_briefPanel);
     lv_obj_clear_flag(s_briefPanel, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_set_size(s_briefPanel, SCREEN_W, SCREEN_H);
-    lv_obj_align(s_briefPanel, LV_ALIGN_CENTER, 0, 0);
-    // Clipped to the panel, so a long brief scrolled upward disappears at the edge instead
-    // of drawing over the heading that is supposed to stay put.
-    lv_obj_set_style_clip_corner(s_briefPanel, true, 0);
     show(s_briefPanel, false);
     for (lv_obj_t **slot : { &s_briefHead, &s_briefBody, &s_briefFoot }) {
         *slot = lv_label_create(s_briefPanel);
