@@ -687,6 +687,16 @@ void load() {
                         return false;
                 }
             };
+            // "left" | "center" | "right", the same three words Studio's control uses.
+            // Spelled out rather than sent as a number so a theme file stays readable and a
+            // future fourth alignment cannot silently mean something else.
+            auto alignFromName = [](const char *v, int fallback) {
+                if (!v) return fallback;
+                if (!strcmp(v, "left"))   return (int)theme_style::Intel::ALIGN_LEFT;
+                if (!strcmp(v, "center")) return (int)theme_style::Intel::ALIGN_CENTER;
+                if (!strcmp(v, "right"))  return (int)theme_style::Intel::ALIGN_RIGHT;
+                return fallback;
+            };
             if (doc["title"].is<const char *>())
                 snprintf(s_intel.title, sizeof(s_intel.title), "%s", doc["title"].as<const char *>());
             if (doc["titleShow"].is<bool>()) s_intel.titleShow = doc["titleShow"].as<bool>();
@@ -715,6 +725,17 @@ void load() {
             if (doc["sourceGap"].is<int>()) {
                 const int g = doc["sourceGap"].as<int>();
                 s_intel.sourceGap = g < 0 ? 0 : (g > 24 ? 24 : g);
+            }
+            // Anything unrecognised keeps the current value rather than snapping to a
+            // default: a typo in a hand-edited theme should leave the screen as designed,
+            // not silently re-centre it.
+            if (doc["textAlign"].is<const char *>())
+                s_intel.textAlign = alignFromName(doc["textAlign"].as<const char *>(), s_intel.textAlign);
+            if (doc["sourceAlign"].is<const char *>())
+                s_intel.sourceAlign = alignFromName(doc["sourceAlign"].as<const char *>(), s_intel.sourceAlign);
+            if (doc["blockAngle"].is<int>()) {
+                const int a = doc["blockAngle"].as<int>();
+                s_intel.blockAngle = a < -90 ? -90 : (a > 90 ? 90 : a);
             }
             if (doc["sourceSize"].is<int>() && fontSizeOk(doc["sourceSize"].as<int>()))
                 s_intel.sourceSize = doc["sourceSize"].as<int>();

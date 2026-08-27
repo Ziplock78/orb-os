@@ -167,7 +167,17 @@ namespace theme_style {
 //      the story's own summary from the feed. An Orb below this level scrolls the way it
 //      always did and does nothing on a press, so the theme's selection colours and bar
 //      would be settings with no screen to appear on.
-constexpr int THEME_CAPS = 19;
+//  20  how the News screen's headline block is set: which edge the headlines and their
+//      source credits line up on, and what angle the whole block sits at. All three were
+//      welded — centred, centred, and square to the screen — which is the right default on
+//      a round dial and the wrong one the moment the background art has an edge in it:
+//      type set against a drawn sheet of paper has to sit where the paper's own margin is
+//      and lie at the paper's own angle. An Orb below this level centres both and draws
+//      the block square, so a design set flush left on a tilted sheet would appear centred
+//      and level on the device with nothing saying why. LVGL has left, centre and right
+//      and no justify, so justify is not offered here rather than being offered and
+//      silently centred.
+constexpr int THEME_CAPS = 20;
 
 struct ClockText {
     bool     show   = false;
@@ -725,6 +735,34 @@ struct Intel {
     // question about the TYPEFACE, so it cannot be a constant. 2 is the default, so a theme
     // that says nothing is laid out exactly as before. Clamped [0, 24].
     int      sourceGap    = 2;
+    // THEME_CAPS 20. Which edge a headline and its credit line up on: 0 left, 1 centre,
+    // 2 right. Both default to centre, which is what this screen drew from the beginning.
+    // They are separate settings because a credit set flush right under a left-aligned
+    // headline is an ordinary thing to want and tying them together would forbid it. The
+    // JSON carries "left" | "center" | "right"; ALIGN_* below is the parsed form, and the
+    // values line up with nothing in LVGL on purpose, since the view maps them itself.
+    static constexpr int ALIGN_LEFT   = 0;
+    static constexpr int ALIGN_CENTER = 1;
+    static constexpr int ALIGN_RIGHT  = 2;
+    int      textAlign    = ALIGN_CENTER;
+    int      sourceAlign  = ALIGN_CENTER;
+    // The angle the whole headline block lies at, in whole degrees, positive clockwise.
+    // 0 is square to the screen and is what this screen has always drawn. It exists for
+    // background art with an edge in it: a drawn sheet of paper at 7 degrees wants its type
+    // at 7 degrees, and every other way of getting there means baking the words into the
+    // picture, which cannot be done with text that arrives from a feed.
+    //
+    // The headlines, their credits and the selection bar rotate together, as one block.
+    // The title and the updated line do not: they have positions of their own, the same
+    // way blockOffsetY moves the headlines and leaves them alone.
+    //
+    // Costs nothing at 0. LVGL only builds a transform layer for an object whose angle is
+    // non-zero, so every theme that never touches this draws exactly as it did. A rotated
+    // one spends roughly 430 KB of PSRAM per redraw on that layer, which this board has
+    // (the menu overlay holds about twice it) and which is why the range is clamped rather
+    // than free: [-90, 90]. Past 90 the block reads upside down, and paying for a layer to
+    // draw unreadable text is not a trade worth offering.
+    int      blockAngle   = 0;
     // The "just now" age line, a full text field like every other one in Studio: its own
     // colour, compiled type size, position and glow. ageColor's default is the exact grey
     // the line borrowed from sourceColor before it had a colour of its own, so an untouched

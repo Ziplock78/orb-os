@@ -174,6 +174,14 @@ lv_obj_t *s_ageGlow[AGE_GLOW_RINGS * AGE_GLOW_DIRS] = {};
 // cuts it off at both edges, which is exactly what it did when this was tried the easy
 // way). A plain object clips its children by default, so the label wraps freely inside a
 // box that is exactly two lines tall, and everything past that is simply not drawn.
+// THEME_CAPS 20. The headlines, their credits and the selection bar hang off this rather
+// than off the screen, so one angle turns all of them together. It is the full screen and
+// centred on it, which is what keeps every alignment call below unchanged: LV_ALIGN_CENTER
+// against this parent lands on the same pixel it landed on against the screen.
+//
+// At blockAngle 0 LVGL builds no layer for it and it costs nothing, which is the whole
+// reason it can be introduced under every theme that already exists.
+lv_obj_t *s_block = nullptr;
 lv_obj_t *s_rowBox[INTEL_MAX_ROWS] = {};
 lv_obj_t *s_rows[INTEL_MAX_ROWS]   = {};
 lv_obj_t *s_credit[INTEL_MAX_ROWS] = {};
@@ -264,6 +272,23 @@ uint32_t s_scrollActivityMs = 0;
 // Which headline the knob is on, absolute rather than a row number: the window slides
 // under it, so a row index would mean something different after every scroll. The window
 // follows the selection, not the other way round.
+// THEME_CAPS 20. The theme's three words as LVGL's own enum. LVGL has no justify, so
+// none is offered: a control that could be set and could not be drawn is the exact thing
+// the capability ledger exists to prevent.
+lv_text_align_t text_align_for(int a) {
+    if (a == theme_style::Intel::ALIGN_LEFT)  return LV_TEXT_ALIGN_LEFT;
+    if (a == theme_style::Intel::ALIGN_RIGHT) return LV_TEXT_ALIGN_RIGHT;
+    return LV_TEXT_ALIGN_CENTER;
+}
+// The credit is content-width, so it is hung off an EDGE of the headline's box rather
+// than being aligned inside a box of its own. Same three choices, same box, so a credit
+// set left starts exactly where a left-aligned headline starts.
+lv_align_t credit_side_for(int a) {
+    if (a == theme_style::Intel::ALIGN_LEFT)  return LV_ALIGN_OUT_BOTTOM_LEFT;
+    if (a == theme_style::Intel::ALIGN_RIGHT) return LV_ALIGN_OUT_BOTTOM_RIGHT;
+    return LV_ALIGN_OUT_BOTTOM_MID;
+}
+
 int      s_sel        = 0;
 lv_obj_t *s_selBar    = nullptr;   // the optional bar behind the selected headline
 
@@ -506,6 +531,8 @@ void render() {
         const RowBox box = row_box(autoSize ? yCen : yCen - lineH + blockH / 2);
         lv_obj_set_style_text_font(s_rows[i], font, 0);
         lv_obj_set_style_text_line_space(s_rows[i], gap, 0);
+        // Set per render, not once at creation: a theme swap has to be able to move it.
+        lv_obj_set_style_text_align(s_rows[i], text_align_for(cfg.textAlign), 0);
         lv_obj_set_width(s_rows[i], box.w);
         lv_obj_set_width(s_rowBox[i], box.w);
         lv_label_set_text(s_rows[i], win[i].text);
@@ -568,7 +595,30 @@ void render() {
         // to the label keeps it put: the label inside may be three lines tall and clipped,
         // and a credit chasing the label's real height would sit under text nobody can see.
         lv_obj_set_style_text_font(s_credit[i], creditFont, 0);
-        lv_obj_align_to(s_credit[i], s_rowBox[i], LV_ALIGN_OUT_BOTTOM_MID, 0, cfg.sourceGap);
+        lv_obj_align_to(s_credit[i], s_rowBox[i], credit_side_for(cfg.sourceAlign), 0, cfg.sourceGap);
+    }
+
+    // THEME_CAPS 20. Turn the block as a whole, about its own middle rather than the
+    // dial's. Pivoting on the dial would swing an offset block sideways as it turned, which
+    // is not what anybody means by "rotate the headlines": they mean tilt them where they
+    // are, onto the angle the artwork behind them already sits at.
+    //
+    // Set every render because the middle moves: the count, the type size and blockOffsetY
+    // all change where the block actually is, and a pivot fixed at setup would drift off it.
+    if (s_block) {
+        const int angle = cfg.blockAngle < -90 ? -90 : (cfg.blockAngle > 90 ? 90 : cfg.blockAngle);
+        // firstTop and lastBottom are only meaningful once a row has been laid out; with no
+        // headlines on screen there is nothing to turn and the dial's middle will do.
+        const bool haveRows = got > 0;
+        // cxFirst, firstTop and lastBottom are all offsets from the dial's middle, the
+        // convention every LV_ALIGN_CENTER call above uses. A pivot is measured from the
+        // object's top-left corner instead, so each one gets the middle added back.
+        lv_obj_set_style_transform_pivot_x(s_block, SCREEN_W / 2 + (haveRows ? cxFirst : 0), 0);
+        lv_obj_set_style_transform_pivot_y(s_block, SCREEN_H / 2 + (haveRows ? (firstTop + lastBottom) / 2 : 0), 0);
+        // LVGL counts in tenths of a degree, and negatives have to be brought into 0..3599
+        // itself: lv_refr.c normalises the value it reads, but the style stores what it is
+        // given and a negative there reads as "no transform" in the layer-type check.
+        lv_obj_set_style_transform_angle(s_block, angle < 0 ? (angle * 10 + 3600) : angle * 10, 0);
     }
 
     style_chevrons(total, lastBottom, firstTop, cxLast, cxFirst);
@@ -1026,8 +1076,14 @@ void intelview::init() {
     lv_obj_align(s_title, LV_ALIGN_CENTER, cfg.titleX - 233, cfg.titleY - 233);
     show(s_title, cfg.titleShow);
 
+    s_block = lv_obj_create(s_screen);
+    lv_obj_remove_style_all(s_block);
+    lv_obj_clear_flag(s_block, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_size(s_block, SCREEN_W, SCREEN_H);
+    lv_obj_align(s_block, LV_ALIGN_CENTER, 0, 0);
+
     for (int i = 0; i < INTEL_MAX_ROWS; ++i) {
-        s_rowBox[i] = lv_obj_create(s_screen);
+        s_rowBox[i] = lv_obj_create(s_block);
         lv_obj_remove_style_all(s_rowBox[i]);
         lv_obj_clear_flag(s_rowBox[i], LV_OBJ_FLAG_SCROLLABLE);
         show(s_rowBox[i], false);
@@ -1045,7 +1101,7 @@ void intelview::init() {
         lv_obj_add_event_cb(s_rows[i], row_draw_cb, LV_EVENT_DRAW_MAIN_BEGIN, (void *)(intptr_t)i);
         lv_obj_add_event_cb(s_rows[i], row_draw_cb, LV_EVENT_DRAW_MAIN_END,   (void *)(intptr_t)i);
 
-        s_credit[i] = lv_label_create(s_screen);
+        s_credit[i] = lv_label_create(s_block);
         lv_obj_set_style_text_color(s_credit[i], c_source(), 0);
         lv_obj_set_style_text_opa(s_credit[i], (lv_opa_t)cfg.sourceOpa, 0);
         lv_obj_set_style_text_font(s_credit[i], &lv_font_montserrat_12, 0);
@@ -1059,7 +1115,7 @@ void intelview::init() {
     // The bar behind the selected headline. Built always, shown only when a theme asks for
     // it and the knob is being used: one empty object costs less than the branch that would
     // create it lazily and then have to reason about its z-order afterwards.
-    s_selBar = lv_obj_create(s_screen);
+    s_selBar = lv_obj_create(s_block);
     lv_obj_remove_style_all(s_selBar);
     lv_obj_clear_flag(s_selBar, LV_OBJ_FLAG_SCROLLABLE);
     show(s_selBar, false);

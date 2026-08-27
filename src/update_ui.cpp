@@ -61,12 +61,30 @@ void ensure() {
 
 void destroy() {
     if (s_timer) { lv_timer_del(s_timer); s_timer = nullptr; }
+    const bool had = s_panel != nullptr;
     if (s_panel) { lv_obj_del(s_panel); s_panel = nullptr; s_title = s_sub = s_hint = nullptr; }
     s_interrupted = false;
     s_rebootPending = false;
     s_firmwareWait = false;
     s_awaitAck = false;
     if (s_autoClear) { lv_timer_del(s_autoClear); s_autoClear = nullptr; }
+    // Repaint everything underneath, by hand.
+    //
+    // Deleting an object normally invalidates the area it occupied and that is enough. This
+    // one is not a normal case twice over: the panel sits on lv_layer_top() rather than on
+    // the screen, and bake_done() calls this from boot code between explicit lv_refr_now()
+    // calls rather than from the timer cycle LVGL expects to be running. Anything that
+    // leaves a region unclaimed in that situation shows on this panel as a strip of whatever
+    // the overlay last had there, which does not clear until something else happens to draw
+    // over it.
+    //
+    // A whole-screen invalidate costs one repaint on a path that runs a handful of times in
+    // a device's life, so there is no reason to be clever about which region it was.
+    if (had) {
+        if (lv_obj_t *scr = lv_scr_act()) lv_obj_invalidate(scr);
+        lv_obj_invalidate(lv_layer_top());
+        lv_refr_now(NULL);
+    }
 }
 
 // Files stopped arriving and nothing rebooted us: the send died partway. Say so briefly,
