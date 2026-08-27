@@ -153,7 +153,11 @@ namespace theme_style {
 //      reusing clock_overlay.png rather than baking a second copy. An Orb below this level
 //      keeps the compiled offsets, and a THEME above it that lands on an older Orb simply
 //      does not find splash_style.json, so nothing draws twice.
-constexpr int THEME_CAPS = 16;
+//  17  the gap between a headline and its source credit. It was 2 px, hardcoded in three
+//      places, and 2 px is a statement about a compact sans: a 24 px display serif puts the
+//      descenders of g and y straight through the credit line beneath it. An Orb below this
+//      level keeps the 2 px, which is what every theme built before this asked for anyway.
+constexpr int THEME_CAPS = 17;
 
 struct ClockText {
     bool     show   = false;
@@ -638,6 +642,13 @@ struct Intel {
     // and cramped for two lines read across a room. 0 keeps exactly what shipped before.
     // Clamped [0, 24].
     int      lineGap      = 0;
+    // Space between a headline and the source credit under it, px, on top of the fonts'
+    // own metrics. Was a hardcoded 2 in three places in intel_view.cpp, which is fine for a
+    // compact sans and far too tight for a display serif: at 24 px Playfair Display the
+    // descenders of g and y ran straight into the credit line. Whether 2 px is enough is a
+    // question about the TYPEFACE, so it cannot be a constant. 2 is the default, so a theme
+    // that says nothing is laid out exactly as before. Clamped [0, 24].
+    int      sourceGap    = 2;
     // The "just now" age line, a full text field like every other one in Studio: its own
     // colour, compiled type size, position and glow. ageColor's default is the exact grey
     // the line borrowed from sourceColor before it had a colour of its own, so an untouched

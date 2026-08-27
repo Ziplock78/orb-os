@@ -668,6 +668,10 @@ void load() {
                 const int g = doc["lineGap"].as<int>();
                 s_intel.lineGap = g < 0 ? 0 : (g > 24 ? 24 : g);
             }
+            if (doc["sourceGap"].is<int>()) {
+                const int g = doc["sourceGap"].as<int>();
+                s_intel.sourceGap = g < 0 ? 0 : (g > 24 ? 24 : g);
+            }
             if (doc["sourceSize"].is<int>() && fontSizeOk(doc["sourceSize"].as<int>()))
                 s_intel.sourceSize = doc["sourceSize"].as<int>();
             if (doc["ageFmt"].is<const char *>())

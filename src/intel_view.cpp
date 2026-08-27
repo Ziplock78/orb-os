@@ -369,7 +369,7 @@ void render() {
     // the age line (or the bezel, when either is hidden or moved), divided by a block of
     // two wrapped lines plus its credit.
     int step, firstCenter;
-    int blockH = textH + 2 + creditH;
+    int blockH = textH + cfg.sourceGap + creditH;
     if (autoSize) {
         s_visible   = total;
         step        = total > 3 ? ROW_STEP_5 : ROW_STEP_3;
@@ -453,7 +453,7 @@ void render() {
         lv_obj_align(s_rowBox[i], LV_ALIGN_CENTER, box.cx, yCen);
         if (i == 0) { firstTop = yCen - textH / 2; cxFirst = box.cx; }
         // The credit hangs below the box, so the list's real bottom is past it.
-        lastBottom = yCen + textH / 2 + 2 + creditH;
+        lastBottom = yCen + textH / 2 + cfg.sourceGap + creditH;
         cxLast     = box.cx;
         // The second line occupies the bottom lineH of a box textH tall, so within the box
         // its top edge is textH - lineH down from the top.
@@ -462,7 +462,7 @@ void render() {
         // to the label keeps it put: the label inside may be three lines tall and clipped,
         // and a credit chasing the label's real height would sit under text nobody can see.
         lv_obj_set_style_text_font(s_credit[i], creditFont, 0);
-        lv_obj_align_to(s_credit[i], s_rowBox[i], LV_ALIGN_OUT_BOTTOM_MID, 0, 2);
+        lv_obj_align_to(s_credit[i], s_rowBox[i], LV_ALIGN_OUT_BOTTOM_MID, 0, cfg.sourceGap);
     }
 
     style_chevrons(total, lastBottom, firstTop, cxLast, cxFirst);
