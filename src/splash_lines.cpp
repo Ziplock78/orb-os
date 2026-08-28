@@ -30,7 +30,7 @@ lv_img_dsc_t s_glassDsc{};
 
 // The address line. Held here rather than read from elsewhere because it arrives late: the
 // splash is on screen well before WiFi has an IP, and About can be opened before or after.
-char s_net[64] = "capsuleradar.local";
+char s_net[64] = ORB_MDNS_ADDR;
 
 lv_color_t rgb(uint32_t v) {
     return lv_color_make((uint8_t)(v >> 16), (uint8_t)(v >> 8), (uint8_t)v);

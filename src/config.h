@@ -7,7 +7,7 @@
 // "1.4.2", said "up to date", and left an Orb missing everything in that list. THEME_CAPS
 // exists because this stopped moving; it covers theme settings and nothing else, so a new
 // command or a deleted screen is invisible to it. Move this too.
-#define FW_VERSION "1.39.0"   // shown on the web config page + Stats screen
+#define FW_VERSION "1.40.0"   // shown on the web config page + Stats screen
 // Edit pins below: replace every -1 with the value from the Waveshare factory demo
 // (see docs/HARDWARE.md and docs/SETUP.md). Do NOT guess them.
 
@@ -118,6 +118,21 @@ static const float RANGE_STEPS_KM[] = {10.0f, 20.0f, 30.0f, 50.0f, 100.0f};
 // zionbrock.com/orb rather than the workers.dev address on purpose: this string is
 // compiled into every Orb ever flashed and an API operator may read it years from now, so
 // it has to be the address that will still be his. The deployment behind it can move.
+// The Orb's name on the local network. ONE definition, because this was nine separately
+// typed copies of the same string across the firmware and one of them would have been
+// missed. ORB_MDNS_ADDR is built from it so the two can never disagree.
+//
+// Renamed from `capsuleradar` in 1.40. Deliberately NOT kept as a second name: ESPmDNS
+// registers one hostname, and the IDF call that could add another is for advertising OTHER
+// devices and wants a fixed address list, so an alias built on it would go stale on the
+// next DHCP renewal. An address that confidently resolves to the wrong place is worse than
+// one that stops existing.
+//
+// Unrelated to the `capsuleradar` NVS namespace, which is invisible, holds every setting,
+// and must never be renamed.
+#define ORB_MDNS_HOST       "theorb"
+#define ORB_MDNS_ADDR       ORB_MDNS_HOST ".local"
+
 #define ORB_USER_AGENT      "TheOrbOS/" FW_VERSION " (ESP32-S3 hobby; +https://zionbrock.com/orb)"
 // Named after one feed and used by nine clients: aircraft, weather, weather radar, cloud
 // imagery, route lookup, photos and the news gateway. Kept as an alias rather than renamed

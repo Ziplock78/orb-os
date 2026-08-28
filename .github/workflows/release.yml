@@ -53,5 +53,5 @@ jobs:
             - Or: `esptool.py --chip esp32s3 write_flash 0x0 TheOrbOS-esp32s3.bin`
 
             **Update over WiFi (no cable):** `TheOrbOS-ota.bin` — the app-only image.
-            Open `http://capsuleradar.local/update` on the device and upload this file.
+            Open `http://theorb.local/update` on the device and upload this file.
             (Do **not** upload the merged image there.)

@@ -30,7 +30,7 @@ namespace splash_lines {
 void attach(lv_obj_t *parent);
 
 // The config-page address, once the network knows it. Before that the line reads
-// capsuleradar.local, which is true from the moment mDNS is up and does not need an IP.
+// theorb.local, which is true from the moment mDNS is up and does not need an IP.
 void setNetwork(const char *line);
 
 // Drop the canvas and the decoded overlay. The canvas is a full-screen RGB565+alpha

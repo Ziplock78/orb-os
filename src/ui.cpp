@@ -713,7 +713,7 @@ void ui_splash_show(void) {
 
     // The same three lines the About page shows, from the same theme data and the same
     // module: the version, the address and the data credits, with the glass composited over
-    // them. The address reads capsuleradar.local here, which is true from the moment mDNS
+    // them. The address reads theorb.local here, which is true from the moment mDNS
     // is up and does not need an IP the board cannot have yet at this point in boot.
     splash_lines::attach(cont);
 

@@ -61,7 +61,7 @@
 #include <Preferences.h>            // NVS (persist theme/settings)
 #include <time.h>                   // NTP/RTC clock + date
 #include <WebServer.h>              // configuration web page
-#include <ESPmDNS.h>                // http://capsuleradar.local
+#include <ESPmDNS.h>                // http://theorb.local
 // Wireless firmware update (ArduinoOTA + the browser upload page). Needs a second app
 // partition to write the incoming image into, and partitions_16MB_themeart.csv gives
 // that 6.25 MB to pre-baked theme art instead. Flip this and the partition table
@@ -285,7 +285,7 @@ static void adsb_task(void*) {
             Serial.printf("[adsb] WiFi up, IP %s\n", WiFi.localIP().toString().c_str());
             diag::log("wifi up %s", WiFi.localIP().toString().c_str());
             configTzTime(g_tz.c_str(), "pool.ntp.org", "time.nist.gov");  // local time (web-configurable TZ)
-            Serial.println("[web] config: http://capsuleradar.local/  (or the IP above)");
+            Serial.println("[web] config: http://" ORB_MDNS_ADDR "/  (or the IP above)");
             nextWeatherAt = millis() + 5000UL; // let the first ADS-B poll complete before weather TLS
             nextWxRadarAt = millis() + 12000UL;
             // mDNS + OTA are started on core 1 (loop) to keep all mDNS use on one core
@@ -1383,9 +1383,9 @@ static void handleRoot() {
         // The "Firmware update" link only exists when there is an OTA partition to write
         // into; otherwise it would advertise a page that 404s.
 #if ORB_OTA_ENABLED
-        "<p class=ft>Reach me at <code>capsuleradar.local</code> &middot; <a href=/update style='color:#9affc8'>Firmware update</a> &middot; v" FW_VERSION "</p>"
+        "<p class=ft>Reach me at <code>" ORB_MDNS_ADDR "</code> &middot; <a href=/update style='color:#9affc8'>Firmware update</a> &middot; v" FW_VERSION "</p>"
 #else
-        "<p class=ft>Reach me at <code>capsuleradar.local</code> &middot; Update over USB &middot; v" FW_VERSION "</p>"
+        "<p class=ft>Reach me at <code>" ORB_MDNS_ADDR "</code> &middot; Update over USB &middot; v" FW_VERSION "</p>"
 #endif
         "<script>"
         "var C=[%.5f,%.5f];var MAP=L.map('map').setView(C,10);"
@@ -2383,7 +2383,7 @@ void setup() {
     // justifying the size. 8 KB keeps roughly double the observed peak as margin and returns
     // 8 KB of internal RAM, which is the exact resource the feed is starved for.
 
-    // configuration web page (http://capsuleradar.local/)
+    // configuration web page (http://theorb.local/)
     g_web.on("/diag", []{ g_web.send(200, "text/plain", diag::text()); });
     // Per-task and heap-fragmentation detail, added for the 2026-08-22 investigation into
     // why ADS-B reads start timing out a minute or two into Flight Tracker. /health already
@@ -2643,21 +2643,21 @@ void loop() {
     }
 
     // mDNS (and OTA, when it is compiled in): set up once WiFi is up.
-    // ArduinoOTA::setHostname() used to be what registered capsuleradar.local, because it
+    // ArduinoOTA::setHostname() used to be what registered the .local name, because it
     // calls MDNS.begin() internally. Compiling OTA out therefore took the device's whole
     // .local name with it and broke Launch Kit's pushes, which address it by name.
     // MDNS.begin() is now called here explicitly and does not depend on OTA at all.
     static bool mdnsUp = false;
     if (!mdnsUp && WiFi.status() == WL_CONNECTED) {
-        if (!MDNS.begin("capsuleradar")) Serial.println("[mdns] begin failed");
+        if (!MDNS.begin(ORB_MDNS_HOST)) Serial.println("[mdns] begin failed");
         MDNS.addService("http", "tcp", 80);            // advertise the config web page
 #if ORB_OTA_ENABLED
-        ArduinoOTA.setHostname("capsuleradar");
+        ArduinoOTA.setHostname(ORB_MDNS_HOST);
         ArduinoOTA.begin();
         Serial.println("[ota] ready: pio run -e esp32-s3-amoled-175-ota -t upload");
 #endif
         mdnsUp = true;
-        Serial.println("[mdns] http://capsuleradar.local/");
+        Serial.println("[mdns] http://" ORB_MDNS_ADDR "/");
     }
 #if ORB_OTA_ENABLED
     if (mdnsUp) ArduinoOTA.handle();
@@ -2819,7 +2819,7 @@ void loop() {
         char net[112];
         if (WiFi.status() == WL_CONNECTED)
             // IP + the active centre point (helps users verify what actually got saved)
-            snprintf(net, sizeof(net), "Configure at\ncapsuleradar.local\n%s  |  %.5f, %.5f",
+            snprintf(net, sizeof(net), "Configure at\n" ORB_MDNS_ADDR "\n%s  |  %.5f, %.5f",
                      WiFi.localIP().toString().c_str(), g_settings.homeLat, g_settings.homeLon);
         else
             snprintf(net, sizeof(net), "WiFi setup:\njoin \"The Orb Setup\"");

@@ -131,7 +131,7 @@ void cmd_hello() {
 //
 // This exists because of the cable-free theme route. Themes reach the card either over this
 // serial link or over the Orb's OWN web page, and the second one is better in every way
-// except that you have to know where the Orb is. mDNS gives capsuleradar.local, which some
+// except that you have to know where the Orb is. mDNS gives theorb.local, which some
 // networks quietly refuse to resolve, so the raw address has to be obtainable too.
 //
 // `up` is the whole answer to "did WiFi setup actually work". Before this, a tool could
@@ -149,7 +149,7 @@ void cmd_wifi() {
         out_json_string(WiFi.localIP().toString().c_str());
         out_fmt(",\"rssi\":%d", (int)WiFi.RSSI());
         out_str(",\"host\":");
-        out_json_string("capsuleradar.local");
+        out_json_string(ORB_MDNS_ADDR);
     }
     out_str("}");
 #else

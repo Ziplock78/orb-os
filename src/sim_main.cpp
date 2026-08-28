@@ -1179,7 +1179,7 @@ int main(int argc, char **argv) {
             ui_set_status(true, true, -58, clk);   // mock: connected, fresh, strong signal
             ui_set_battery(78, false, true);   // mock battery
             ui_set_date("08 Jun 2026");        // mock date
-            settingsview::setNetInfo("Configure at\ncapsuleradar.local\n192.168.1.42");  // mock net info
+            settingsview::setNetInfo("Configure at\n" ORB_MDNS_ADDR "\n192.168.1.42");  // mock net info
         }
         // fulfil route lookups with a mock (the sim has no network)
         char wc[12];

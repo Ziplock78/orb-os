@@ -20,7 +20,7 @@ identical. What the simulator cannot tell you: frame time, PSRAM behaviour, SD r
 latency, real network conditions, and AMOLED colour/gamma. Those five still need a
 check on real hardware.
 
-An OTA env (`esp32-s3-amoled-175-ota`) flashes over WiFi to `capsuleradar.local`.
+An OTA env (`esp32-s3-amoled-175-ota`) flashes over WiFi to `theorb.local`.
 
 ## Input model
 
