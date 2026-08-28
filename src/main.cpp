@@ -1711,7 +1711,7 @@ static void handleUpdatePage() {
         "#fill{height:100%;width:0;background:#1dff86;transition:width .2s}#msg{margin-top:10px;color:#9affc8;font-size:13px}"
         "a{color:#1dff86}p{color:#9affc8;font-size:13px}"
         "</style></head><body><h1>Firmware update (OTA)</h1><div class=card>"
-        "<p>Upload the <b>app firmware</b> <code>CapsuleRadar-ota.bin</code> from the GitHub release. "
+        "<p>Upload the <b>app firmware</b> <code>TheOrbOS-ota.bin</code> from the GitHub release. "
         "Do NOT use the merged flash image here.</p>"
         "<input type=file id=f accept='.bin'>"
         "<button onclick=u()>Update over WiFi</button>"

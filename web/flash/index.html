@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Capsule Radar — Web Flasher</title>
+<title>The Orb OS — Web Flasher</title>
 <script type="module" src="https://unpkg.com/esp-web-tools@10/dist/web/install-button.js?module"></script>
 <style>
   :root { --green:#1dff86; --soft:#9affc8; --ink:#eafff3; }
@@ -36,13 +36,13 @@
 </head>
 <body>
   <div class="radar"></div>
-  <h1>Capsule Radar</h1>
+  <h1>The Orb OS</h1>
   <div class="sub">Live ADS-B aircraft radar · Waveshare ESP32-S3-Touch-AMOLED-1.75</div>
 
   <div class="card">
     <p style="margin-top:0">Flash the firmware straight from your browser — no toolchain, no PlatformIO.</p>
     <esp-web-install-button manifest="manifest.json">
-      <button slot="activate">⚡ Install Capsule Radar</button>
+      <button slot="activate">⚡ Install The Orb OS</button>
       <span slot="unsupported">Use Chrome or Edge on desktop (Web Serial required).</span>
       <span slot="not-allowed">Serve this page over HTTPS to flash.</span>
     </esp-web-install-button>
@@ -54,14 +54,15 @@
       <li>Plug the board into your computer with a <b>USB-C data cable</b>.</li>
       <li>Click <b>Install</b> and pick the <code>USB JTAG/serial</code> (or <code>USB Serial</code>) port.</li>
       <li>Choose <b>Erase device + Install</b> on first flash.</li>
-      <li>When it reboots, join the <b>CapsuleRadar-Setup</b> WiFi from your phone to enter your network and home location.</li>
+      <li>When it reboots, join the <b>The Orb Setup</b> WiFi from your phone to enter your network and home location.</li>
       <li>Fine-tune anything later at <code>http://capsuleradar.local/</code>.</li>
     </ol>
   </div>
 
   <div class="note">
     Educational / non-commercial project · data from airplanes.live &amp; adsbdb.com<br>
-    Source &amp; build instructions: <a href="https://github.com/socquique/capsule-radar">GitHub repository</a>
+    More about the Orb: <a href="https://zionbrock.com/orb">zionbrock.com/orb</a><br>
+    Built on Capsule Radar by Quique Tortosa · MIT licensed
   </div>
 </body>
 </html>

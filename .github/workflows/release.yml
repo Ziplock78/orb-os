@@ -32,26 +32,26 @@ jobs:
         run: |
           B=.pio/build/esp32-s3-amoled-175
           BOOT_APP0="$(find "$HOME/.platformio/packages" -name boot_app0.bin -path '*framework-arduinoespressif32*' | head -1)"
-          python -m esptool --chip esp32s3 merge_bin -o CapsuleRadar-esp32s3.bin \
+          python -m esptool --chip esp32s3 merge_bin -o TheOrbOS-esp32s3.bin \
             --flash_mode dio --flash_freq 80m --flash_size 16MB \
             0x0     "$B/bootloader.bin" \
             0x8000  "$B/partitions.bin" \
             0xe000  "$BOOT_APP0" \
             0x10000 "$B/firmware.bin"
-          cp "$B/firmware.bin" CapsuleRadar-ota.bin   # app-only image for the device's web OTA page
+          cp "$B/firmware.bin" TheOrbOS-ota.bin   # app-only image for the device's web OTA page
 
       - name: Publish release
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            CapsuleRadar-esp32s3.bin
-            CapsuleRadar-ota.bin
+            TheOrbOS-esp32s3.bin
+            TheOrbOS-ota.bin
           generate_release_notes: true
           body: |
-            **First flash (USB):** `CapsuleRadar-esp32s3.bin` — the full merged image (offset `0x0`).
-            - Browser, no toolchain: https://socquique.github.io/capsule-radar/
-            - Or: `esptool.py --chip esp32s3 write_flash 0x0 CapsuleRadar-esp32s3.bin`
+            **First flash (USB):** `TheOrbOS-esp32s3.bin` — the full merged image (offset `0x0`).
+            - Browser, no toolchain: https://zionbrock.com/orb
+            - Or: `esptool.py --chip esp32s3 write_flash 0x0 TheOrbOS-esp32s3.bin`
 
-            **Update over WiFi (no cable):** `CapsuleRadar-ota.bin` — the app-only image.
+            **Update over WiFi (no cable):** `TheOrbOS-ota.bin` — the app-only image.
             Open `http://capsuleradar.local/update` on the device and upload this file.
             (Do **not** upload the merged image there.)

@@ -7,7 +7,7 @@
 // "1.4.2", said "up to date", and left an Orb missing everything in that list. THEME_CAPS
 // exists because this stopped moving; it covers theme settings and nothing else, so a new
 // command or a deleted screen is invisible to it. Move this too.
-#define FW_VERSION "1.34.0"   // shown on the web config page + Stats screen
+#define FW_VERSION "1.35.0"   // shown on the web config page + Stats screen
 // Edit pins below: replace every -1 with the value from the Waveshare factory demo
 // (see docs/HARDWARE.md and docs/SETUP.md). Do NOT guess them.
 
@@ -105,7 +105,24 @@ static const float RANGE_STEPS_KM[] = {10.0f, 20.0f, 30.0f, 50.0f, 100.0f};
 // slow spells (a 32.2 s TCP connect measured 2026-08-22) are felt directly by the scope.
 #define ADSB_PRIMARY_HOST   "api.adsb.lol"          // GET /v2/point/{lat}/{lon}/{radius_nm}
 #define ADSB_PRIMARY_TLS    0
-#define ADSB_USER_AGENT     "CapsuleRadar/1.0 (ESP32-S3 hobby; +https://github.com/socquique/capsule-radar)"
+// Who this device says it is, to every service it calls.
+//
+// Not a cosmetic string. A User-Agent is how an API operator sees who is calling and where
+// to complain, and this one named the upstream project and linked to its author's
+// repository. Every request this Orb made was attributed to him: a rate limit earned here
+// would have been counted against his project, and anyone at adsb.lol wanting to reach the
+// maintainer would have reached the wrong person.
+//
+// Version comes from FW_VERSION by string concatenation, so it can never go stale the way a
+// hand-written "1.0" did while the firmware climbed to 1.34.
+// zionbrock.com/orb rather than the workers.dev address on purpose: this string is
+// compiled into every Orb ever flashed and an API operator may read it years from now, so
+// it has to be the address that will still be his. The deployment behind it can move.
+#define ORB_USER_AGENT      "TheOrbOS/" FW_VERSION " (ESP32-S3 hobby; +https://zionbrock.com/orb)"
+// Named after one feed and used by nine clients: aircraft, weather, weather radar, cloud
+// imagery, route lookup, photos and the news gateway. Kept as an alias rather than renamed
+// at all nine call sites, which would be a large diff to say one small thing.
+#define ADSB_USER_AGENT     ORB_USER_AGENT
 #define ADSB_HTTPS_INSECURE 1               // 1 = setInsecure() (hobby). 0 = use pinned root CA.
 // How many distinct addresses to keep for the feed. Rate limiting is per-edge, so having
 // somewhere else to ask is worth more than any backoff. Learned by DNS at runtime.

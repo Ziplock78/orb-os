@@ -13,7 +13,9 @@
 #include <TJpg_Decoder.h>
 #include <esp_heap_caps.h>
 
-#define PS_UA "CapsuleRadar/1.0 (+https://github.com/socquique/capsule-radar)"
+// The same identity every other client sends. It used to be a second, separately written
+// string, which is how one of them ends up updated and the other does not.
+#define PS_UA ORB_USER_AGENT
 
 // JPEG decode target (set just before drawJpg)
 static lv_color_t *s_dst = nullptr;

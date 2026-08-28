@@ -101,7 +101,7 @@ void host_set_location_named(const char *name, double lat, double lon) {
 bool host_locate_current() {
     std::string body;
     if (!native_https_get("http://ip-api.com/json/?fields=status,message,city,region,lat,lon,offset",
-                          "CapsuleRadar/1.0 (esp32; contact: device)", body, 6000)) return false;
+                          ORB_USER_AGENT, body, 6000)) return false;
     JsonDocument doc;
     if (deserializeJson(doc, body)) return false;
     if (strcmp(doc["status"] | "", "success") != 0) return false;
@@ -129,7 +129,7 @@ int host_geocode(const char *query, char names[][40], double *lats, double *lons
              "https://geocoding-api.open-meteo.com/v1/search?name=%s&count=%d&language=en&format=json",
              q.c_str(), maxN);
     std::string body;
-    if (!native_https_get(url, "CapsuleRadar/1.0 (esp32; contact: device)", body, 6000)) return 0;
+    if (!native_https_get(url, ORB_USER_AGENT, body, 6000)) return 0;
     JsonDocument doc;
     if (deserializeJson(doc, body)) return 0;
     JsonArrayConst results = doc["results"].as<JsonArrayConst>();

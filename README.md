@@ -1,14 +1,25 @@
-# Capsule Radar 🛩️
+# The Orb OS
 
 <p align="center">
-  <a href="https://socquique.github.io/capsule-radar/"><img src="https://img.shields.io/badge/Flash%20in%20browser-FF6D00?logo=googlechrome&logoColor=white" alt="Flash in browser"></a>
-  <a href="https://makerworld.com/en/models/2907695-capsule-radar-live-flight-radar-desk-gadget"><img src="https://img.shields.io/badge/MakerWorld-3D%20case-1A8917?logo=bambulab&logoColor=white" alt="MakerWorld – 3D case"></a>
+  <a href="https://zionbrock.com/orb"><img src="https://img.shields.io/badge/The%20Orb-zionbrock.com%2Forb-B5713E" alt="The Orb"></a>
   <img src="https://img.shields.io/badge/board-ESP32--S3%20round%20AMOLED-E7352C?logo=espressif&logoColor=white" alt="Board: ESP32-S3 round AMOLED">
-  <a href="https://github.com/socquique/capsule-radar/releases"><img src="https://img.shields.io/github/v/tag/socquique/capsule-radar?label=firmware&color=7B42BC" alt="Firmware version"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/code-MIT-2088FF" alt="License: MIT"></a>
-  <img src="https://img.shields.io/github/languages/count/socquique/capsule-radar?label=languages&color=FFC107" alt="Languages">
-  <a href="https://github.com/socquique/capsule-radar/stargazers"><img src="https://img.shields.io/github/stars/socquique/capsule-radar?style=social" alt="GitHub stars"></a>
 </p>
+
+Firmware for **The Orb**, a round-AMOLED desk instrument: a clock, a live flight tracker,
+weather radar, and a news screen, all dressed by SD-card themes designed in Orb Studio.
+
+> **The rest of this README, and `docs/LISTING.md`, `docs/MAKERWORLD.md` and
+> `docs/FEATURES.md`, are INHERITED from the upstream project and still describe Quique
+> Tortosa's Capsule Radar flight-radar gadget rather than The Orb. They are stale here and
+> are waiting to be rewritten or dropped. The badges above replaced a row of them that
+> linked to upstream's flasher, MakerWorld model, releases and star count, which is not
+> what this repository is.
+>
+> Note that one reference further down credits **@alexzogh**'s port by its own name. That
+> is a third party's project and must keep its name whatever happens to the rest.
+
+The Orb OS began as a fork of Capsule Radar and is MIT licensed. See `LICENSE`.
 
 <p align="center">
   <img src="docs/img/device.JPG" width="330" alt="Capsule Radar — a live flight on the device">

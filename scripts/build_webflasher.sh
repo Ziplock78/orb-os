@@ -10,7 +10,7 @@ cd "$(dirname "$0")/.."
 
 ENV=esp32-s3-amoled-175
 B=".pio/build/$ENV"
-OUT="web/flash/CapsuleRadar-esp32s3.bin"
+OUT="web/flash/TheOrbOS-esp32s3.bin"
 
 echo "==> Building firmware ($ENV)"
 pio run -e "$ENV"

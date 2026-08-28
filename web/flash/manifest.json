@@ -1,12 +1,12 @@
 {
-  "name": "Capsule Radar",
+  "name": "The Orb OS",
   "version": "__FWVER__",
   "new_install_prompt_erase": true,
   "builds": [
     {
       "chipFamily": "ESP32-S3",
       "parts": [
-        { "path": "CapsuleRadar-esp32s3.bin", "offset": 0 }
+        { "path": "TheOrbOS-esp32s3.bin", "offset": 0 }
       ]
     }
   ]
