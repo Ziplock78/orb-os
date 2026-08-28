@@ -2192,7 +2192,8 @@ void setup() {
     psram_mark("after display+radar");
     clockview::init();
     psram_mark("after clockview");
-    app_shell::add(clockview::screen(), theme_style::names().clock, nullptr, nullptr, false, nullptr, clockview::onExit, !theme_style::apps().clock);  // answers neither a turn nor a press; onExit frees a custom face's decoded PSRAM
+    // onEnter takes the canvas, onExit gives it back. It answers neither a turn nor a press.
+    app_shell::add(clockview::screen(), theme_style::names().clock, nullptr, nullptr, false, clockview::onEnter, clockview::onExit, !theme_style::apps().clock);
     app_shell::add(radarScreen, theme_style::names().flight, radar_press_custom_or_theme, radar_turn_select, false, radar_show_home_custom, radar_exit_release_style, !theme_style::apps().flight);
     app_shell::add(radarScreen, theme_style::names().weather,  weather_press_cycle, nullptr, false, radar_show_weather, nullptr, !theme_style::apps().weather);
     spycamview::init();

@@ -22,6 +22,7 @@ static bool getLocalTime(struct tm *info, uint32_t = 0) {
 }
 static struct { void printf(const char *fmt, ...) const { va_list a; va_start(a, fmt); vprintf(fmt, a); va_end(a); } void println(const char *s) const { puts(s); } } Serial;
 static void *heap_caps_malloc(size_t sz, int) { return malloc(sz); }
+static void  heap_caps_free(void *p) { free(p); }
 #define MALLOC_CAP_SPIRAM 0
 #define MALLOC_CAP_8BIT 0
 #endif
@@ -1049,8 +1050,29 @@ static void apply_face() {
 // (up to ~1 MB for a photo-background design) goes back to whatever's shown next;
 // custom_plate()/custom_overlay()/custom_hand() re-decode lazily the next time
 // draw_custom() runs (see the timing it logs).
+// Allocate the canvas here rather than in init(). See the header for the measurement that
+// prompted it. Safe to call repeatedly: it only allocates what is missing.
+void clockview::onEnter() {
+    if (!s_screen) return;
+    if (!s_buf) {
+        const size_t bufBytes = (size_t)SCREEN_W * SCREEN_H * sizeof(lv_color_t);
+        s_buf = (lv_color_t *)heap_caps_malloc(bufBytes, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        if (!s_buf) { Serial.println("[clock] PSRAM alloc for clock canvas failed"); return; }
+        if (!s_canvas) s_canvas = lv_canvas_create(s_screen);
+        lv_canvas_set_buffer(s_canvas, s_buf, SCREEN_W, SCREEN_H, LV_IMG_CF_TRUE_COLOR);
+        lv_obj_center(s_canvas);
+        lv_obj_move_background(s_canvas);
+    }
+}
+
 void clockview::onExit() {
     custom_sprite_release();
+    // The canvas and the rotation cache go too. The canvas object stays, pointing at
+    // nothing until the next onEnter refills it: deleting and rebuilding an LVGL object
+    // every switch is churn, and its z-order is re-asserted there anyway.
+    if (s_canvas) lv_canvas_set_buffer(s_canvas, nullptr, 1, 1, LV_IMG_CF_TRUE_COLOR);
+    if (s_buf)      { heap_caps_free(s_buf);      s_buf = nullptr; }
+    if (s_rotCache) { heap_caps_free(s_rotCache); s_rotCache = nullptr; }
 }
 
 // ---- build ------------------------------------------------------------------
@@ -1064,16 +1086,10 @@ void clockview::init() {
     lv_obj_set_style_bg_opa(s_screen, LV_OPA_COVER, 0);
     lv_obj_clear_flag(s_screen, LV_OBJ_FLAG_SCROLLABLE);
 
-    const size_t bufBytes = (size_t)SCREEN_W * SCREEN_H * sizeof(lv_color_t);
-    s_buf = (lv_color_t *)heap_caps_malloc(bufBytes, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    if (s_buf) {
-        s_canvas = lv_canvas_create(s_screen);
-        lv_canvas_set_buffer(s_canvas, s_buf, SCREEN_W, SCREEN_H, LV_IMG_CF_TRUE_COLOR);
-        lv_obj_center(s_canvas);
-        lv_canvas_fill_bg(s_canvas, office ? app_theme::palette().bg : COL_BLACK, LV_OPA_COVER);
-    } else {
-        Serial.println("[clock] PSRAM alloc for clock canvas failed");
-    }
+    // The canvas is NOT allocated here any more; onEnter() takes it when the app is shown
+    // and onExit() gives it back. This is the boot app, so it is taken moments later
+    // regardless, and the difference is that it is released the moment you leave.
+    (void)office;
 
     // Drop shadows: pre-blurred black silhouettes of the hand sprites (see
     // hand_hour_shadow_img.h / hand_min_shadow_img.h — soft gaussian-blurred alpha edges,

@@ -585,7 +585,7 @@ static void sim_register_apps(lv_obj_t *radarScreen) {
     // Same lineup + same hidden-app subset as the device (custom_apps.h): every app
     // is registered so indices line up, but the ones a theme flash turns off are
     // skipped when the knob cycles the menu.
-    app_shell::add(clockview::screen(), theme_style::names().clock, nullptr, nullptr, false, nullptr, nullptr, !theme_style::apps().clock);   // the clock answers neither a turn nor a press
+    app_shell::add(clockview::screen(), theme_style::names().clock, nullptr, nullptr, false, clockview::onEnter, clockview::onExit, !theme_style::apps().clock);   // the clock answers neither a turn nor a press; it does take and give back its canvas
     // Exact same knob state machine as the device (main.cpp) — both wire the
     // shared radar::knob* handlers, so the simulator and Orb behave identically:
     // default view (knob released, a turn opens the switcher), push to enter
