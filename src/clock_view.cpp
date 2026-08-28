@@ -1058,10 +1058,11 @@ void clockview::onEnter() {
         const size_t bufBytes = (size_t)SCREEN_W * SCREEN_H * sizeof(lv_color_t);
         s_buf = (lv_color_t *)heap_caps_malloc(bufBytes, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
         if (!s_buf) { Serial.println("[clock] PSRAM alloc for clock canvas failed"); return; }
-        if (!s_canvas) s_canvas = lv_canvas_create(s_screen);
+        s_canvas = lv_canvas_create(s_screen);
         lv_canvas_set_buffer(s_canvas, s_buf, SCREEN_W, SCREEN_H, LV_IMG_CF_TRUE_COLOR);
         lv_obj_center(s_canvas);
         lv_obj_move_background(s_canvas);
+        lv_canvas_fill_bg(s_canvas, COL_BLACK, LV_OPA_COVER);
     }
 }
 
@@ -1070,7 +1071,14 @@ void clockview::onExit() {
     // The canvas and the rotation cache go too. The canvas object stays, pointing at
     // nothing until the next onEnter refills it: deleting and rebuilding an LVGL object
     // every switch is churn, and its z-order is re-asserted there anyway.
-    if (s_canvas) lv_canvas_set_buffer(s_canvas, nullptr, 1, 1, LV_IMG_CF_TRUE_COLOR);
+    // DELETE the object, do not hand it a null buffer.
+    //
+    // The first version called lv_canvas_set_buffer(s_canvas, nullptr, 1, 1, ...) to detach
+    // it before freeing. LVGL does not accept that: it hung the UI thread on the very next
+    // switch to another app, twice, while core 0 carried on logging happily, which is what
+    // a wedged LVGL task looks like from the outside. Deleting the object costs one
+    // allocation on the way back in and cannot be misread by the library.
+    if (s_canvas) { lv_obj_del(s_canvas); s_canvas = nullptr; }
     if (s_buf)      { heap_caps_free(s_buf);      s_buf = nullptr; }
     if (s_rotCache) { heap_caps_free(s_rotCache); s_rotCache = nullptr; }
 }

@@ -33,6 +33,49 @@ static uint16_t *alloc_pixels(void) {
 #endif
 }
 
+// The counterpart to alloc_pixels(). Native gets malloc/free, the device gets the PSRAM
+// allocator, and no caller has to know which.
+static inline void wx_free(void *p) {
+#ifdef ARDUINO
+    heap_caps_free(p);
+#else
+    free(p);
+#endif
+}
+
+// Give the frame buffers back.
+//
+// ONLY EVER CALLED FROM THE NETWORK TASK, and that is the whole design. The buffers used to
+// be taken once at boot and held for the life of the device, ~1.5 MB reserved before
+// anything else had asked; taking them on entry and giving them back on exit is the
+// contract every screen here is meant to keep.
+//
+// The first attempt let the UI thread free them on app exit. That hung the device inside a
+// minute: the network task writes a decoded frame straight into these buffers without
+// holding a lock for the duration, so freeing one out from under it is a write to memory
+// that no longer belongs to us. Gating new fetches was not enough, because it did nothing
+// about the fetch already in flight.
+//
+// So the UI only ever ASKS, by setting the flag below, and the task that owns the writing
+// does the freeing at a moment when it knows it is not writing. There is no window.
+void wx_radar_release(void) {
+    std::lock_guard<std::mutex> lock(s_mutex);
+    for (int i = 0; i < WX_RADAR_FRAMES; ++i) {
+        if (s_frames[i]) { wx_free(s_frames[i]); s_frames[i] = nullptr; }
+        s_slotGen[i] = 0;
+        s_slotTime[i] = 0;
+    }
+    if (s_back) { wx_free(s_back); s_back = nullptr; }
+    // s_latestGen is deliberately NOT reset: it only ever increases, and the UI asks "is
+    // this slot from generation N". Restarting it would let a stale slot answer yes.
+    s_haveCenter = false;
+#ifdef ARDUINO
+    Serial.printf("[wxradar] released; PSRAM free now %u\n", (unsigned)ESP.getFreePsram());
+#endif
+}
+
+bool wx_radar_ready(void) { return s_back != nullptr; }
+
 void wx_radar_begin(void) {
     // Each of the WX_RADAR_FRAMES+1 buffers is a full 360x360 RGB565 frame (~253KB). This
     // pool is shared with the Surveillance video buffer (~2.5MB) and everything else in

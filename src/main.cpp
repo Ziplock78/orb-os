@@ -106,6 +106,14 @@ static uint32_t              g_idleDimMs = IDLE_DIM_MS;              // dim afte
 static bool                  g_showSweep = true;                     // rotating sweep line on/off (web/NVS)
 static int                   g_units = 0;                            // 0=Aviation 1=Metric 2=Imperial (web/NVS)
 static int                   g_wxUnits = 0;                          // Weather app only: 0=Auto 1=Metric 2=Imperial (Settings/NVS)
+// The weather app's two requests to the network task, which owns the frame buffers.
+//
+// The UI never allocates or frees them. It says "I have been opened" and "I have been
+// closed", and the task acts on that between fetches, when it knows it is not writing into
+// them. Freeing from the UI thread hung the device inside a minute: a decode already in
+// flight kept writing into memory that had just been handed back.
+static volatile bool         g_wxOpened   = false;
+static volatile bool         g_wxClosed   = false;
 static int                   g_wxZoomTier = 0;                       // Weather map range: 0=50mi 1=100mi (Settings/NVS)
 static volatile bool         g_wxZoomChanged = false;                // set on cycle so adsb_task refetches immediately
 static bool                  g_showAirports = true;                  // airport markers on/off (web/NVS)
@@ -471,7 +479,22 @@ static void adsb_task(void*) {
                 g_wxZoomChanged = false;
                 wxFillIdx = 0; ++wxGen; nextWxRadarAt = nowMs;
             }
-            if (wxFillIdx >= WX_RADAR_FRAMES && (int32_t)(nowMs - nextWxRadarAt) >= 0) {
+            // Opened: take the buffers and start a cycle NOW rather than waiting out the
+            // five-minute refresh in front of somebody who just asked to see the weather.
+            if (g_wxOpened) {
+                g_wxOpened = false;
+                if (theme_style::apps().weather) wx_radar_begin();
+                wxFillIdx = 0; ++wxGen; nextWxRadarAt = nowMs;
+            }
+            // Closed: give them back, but only from here, and only while idle. wxFillIdx ==
+            // WX_RADAR_FRAMES means no frame is part-way through, which is the only moment
+            // it is safe: this task is the one that writes into them.
+            if (g_wxClosed && wxFillIdx >= WX_RADAR_FRAMES) {
+                g_wxClosed = false;
+                wx_radar_release();
+            }
+            if (wxFillIdx >= WX_RADAR_FRAMES && (int32_t)(nowMs - nextWxRadarAt) >= 0
+                && wx_radar_ready()) {
                 wxFillIdx = 0; ++wxGen;                // periodic refresh: start a new loop
             }
             if (wxFillIdx < WX_RADAR_FRAMES && (int32_t)(nowMs - nextWxRadarAt) >= 0) {
@@ -740,7 +763,18 @@ static void applyBrightness() {
 // App-shell onEnter hooks: flip the radar screen's tileview between the radar view
 // and the original app's weather view (radar / clouds / forecast).
 static void radar_show_home()    { ui_show_view(0); }
-static void radar_show_weather() { ui_show_view(1); }   // tile 1 since list/stats went
+// Entering and leaving the weather app. Both only ASK: the network task owns the buffers
+// and does the work, because it is the one that writes into them. See g_wxOpened above.
+static void radar_show_weather() {
+    g_wxClosed = false;
+    g_wxOpened = true;
+    ui_show_view(1);   // tile 1 since list/stats went
+}
+
+static void radar_hide_weather() {
+    g_wxOpened = false;
+    g_wxClosed = true;
+}
 
 // A Launch Kit push with a custom selection design changes what the knob does on
 // Flight Tracker: turning cycles the selected aircraft (see selectNext()'s "none"
@@ -2195,7 +2229,7 @@ void setup() {
     // onEnter takes the canvas, onExit gives it back. It answers neither a turn nor a press.
     app_shell::add(clockview::screen(), theme_style::names().clock, nullptr, nullptr, false, clockview::onEnter, clockview::onExit, !theme_style::apps().clock);
     app_shell::add(radarScreen, theme_style::names().flight, radar_press_custom_or_theme, radar_turn_select, false, radar_show_home_custom, radar_exit_release_style, !theme_style::apps().flight);
-    app_shell::add(radarScreen, theme_style::names().weather,  weather_press_cycle, nullptr, false, radar_show_weather, nullptr, !theme_style::apps().weather);
+    app_shell::add(radarScreen, theme_style::names().weather,  weather_press_cycle, nullptr, false, radar_show_weather, radar_hide_weather, !theme_style::apps().weather);
     spycamview::init();
     psram_mark("after spycamview");
     app_shell::add(spycamview::screen(), theme_style::names().surveillance, spycamview::onPress, spycamview::onTurn, false, nullptr, nullptr, !theme_style::apps().surveillance);  // push cycles cams; clip loads lazily on commit
@@ -2357,8 +2391,10 @@ void setup() {
     // active theme has Weather Radar switched off. Same reasoning as the Surveillance
     // clip buffer: an app you cannot reach should not be holding a quarter of the memory
     // the visible screens are competing for.
-    if (theme_style::apps().weather) wx_radar_begin();
-    else Serial.println("[wxradar] app disabled by theme - skipping ~1 MB of frame buffers");
+    // NOT here, for either branch. The weather app takes its buffers when it is opened,
+    // from the network task that owns them (see radar_show_weather), and an app the theme
+    // has switched off can never be opened, so it never asks. The skip is implicit.
+
     // cloud_image_begin() intentionally not called: the satellite-cloud view was dropped
     // from the Weather app's knob cycle, so its two full-frame PSRAM buffers (~0.5MB) would
     // just sit unused. That memory goes to the Weather Radar animation frames instead.

@@ -30,7 +30,11 @@
                                  // frames cuts both the resident PSRAM and the per-cycle internal-heap
                                  // churn that starves the weather radar's own TLS handshake (-32512).
 
-void wx_radar_begin(void);
+void wx_radar_begin(void);   // take the frame buffers
+// Give them back. MUST be called from the network task only: see the note in wx_radar.cpp.
+// The UI asks for this by flag; it never calls it.
+void wx_radar_release(void);
+bool wx_radar_ready(void);   // true while the buffers exist, so a fetch has somewhere to go
 uint16_t *wx_radar_back_buffer(void);                    // scratch: the client decodes one frame here
 
 // Commit the scratch buffer as frame `slot` (0 = oldest, FRAMES-1 = newest) of refresh
