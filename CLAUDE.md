@@ -5,10 +5,11 @@
 > mDNS name became `theorb.local` in 1.40, and the repo folder is still `capsule-radar`.
 > See the note on the namespace in main.cpp before touching any of those.
 >
-> `README.md`, `docs/LISTING.md` and `docs/MAKERWORLD.md` are INHERITED from the
-> upstream project and still describe Quique Tortosa's flight-radar gadget rather than
-> The Orb. Do not rename them into Orb documents: several references in them are
-> correctly about upstream, including a third party's port that carries its own name.
+> The inherited product documents are gone as of 1.42: `docs/LISTING.md`,
+> `docs/MAKERWORLD.md` and `docs/FEATURES.md` described Quique Tortosa's flight-radar
+> gadget, not this, and README's body has been rewritten. One reference remains and is
+> deliberate: the community port credited at the bottom of README carries its own name,
+> because it is a third party's project.
 
 Master context for Claude Code. Read this first, then `docs/` for detail.
 
@@ -22,9 +23,16 @@ Master context for Claude Code. Read this first, then `docs/` for detail.
 ## What we're building
 A live ADS-B aircraft radar for the **Waveshare ESP32-S3-Touch-AMOLED-1.75** (round 466×466 AMOLED, capacitive touch). It's an evolution of the classic 240×240 GC9A01 "plane radar": same idea (pull nearby aircraft from an online ADS-B feed over WiFi, plot them on a radar scope centered on the user), but redesigned for a full-color high-res round AMOLED with touch, IMU, RTC and a speaker.
 
-Centered on **Dénia, Spain** by default (configurable). Target end-result: a polished, MakerWorld-publishable desk gadget (3D-printed enclosure + this firmware).
+There is NO fixed visual target any more, and this is the single biggest way this project
+has diverged from the one it forked. `assets/plane_radar_2.0_mockup.html` is upstream's
+mockup of a phosphor-green radar scope and it is kept only as history: it describes one of
+several stock skins, not the look of this firmware.
 
-The visual target is in `assets/plane_radar_2.0_mockup.html` — open it in a browser. That mockup is the source of truth for the look & feel (phosphor-green radar on true black, aircraft glyphs rotated by heading, altitude color-coding, fading trails, animated sweep, tap-to-inspect detail card, emergency highlight).
+The look is the THEME's, and the theme is a folder on the SD card designed in Orb Studio.
+Backgrounds, glass, typefaces, colours, opacity, glow, layer order and layout all belong to
+the design rather than to the code. When something on screen looks wrong, the first question
+is whether the firmware drew it wrong or the theme asked for it, and the second is whether
+Orb Studio's preview agreed with either.
 
 ## Hardware (summary — full detail in docs/HARDWARE.md)
 - MCU: ESP32-S3R8, 8 MB PSRAM, 16 MB flash, dual-core 240 MHz, WiFi + BLE5.
@@ -84,11 +92,10 @@ plane-radar-2.0/
 │  ├─ adding-a-screen.md  ← READ BEFORE BUILDING A SCREEN: the standard parts checklist
 │  ├─ HARDWARE.md
 │  ├─ DATA_SOURCE.md
-│  ├─ FEATURES.md
 │  ├─ ARCHITECTURE.md
 │  └─ SETUP.md
 └─ assets/
-   └─ plane_radar_2.0_mockup.html   ← visual target
+   └─ plane_radar_2.0_mockup.html   ← upstream's mockup, kept as history, not a target
 ```
 
 ## Build / flash

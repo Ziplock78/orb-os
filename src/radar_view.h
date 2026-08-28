@@ -1,6 +1,7 @@
 #pragma once
 // Scope rendering API (M1 scope, M2 aircraft, M3 selection). See docs/ARCHITECTURE.md.
-// Visual reference: assets/plane_radar_2.0_mockup.html
+// Visual reference: upstream's assets/plane_radar_2.0_mockup.html, which describes the STOCK
+// phosphor skin only. Everything a theme controls is in theme_style.h.
 #include <vector>
 #include "aircraft.h"
 

@@ -1,5 +1,6 @@
 // Radar scope (M1) + aircraft (M2) + selection (M3) + selectable themes (M4).
-// Pure LVGL, portable. Visual reference: assets/plane_radar_2.0_mockup.html
+// Pure LVGL, portable. Visual reference: upstream's mockup describes the STOCK skin only;
+// a theme redraws nearly all of this from theme_style.h.
 //   THEME_ORB   : Orb scope: green gradient, square grid, the 7 nearest
 //                    aircraft as yellow balls (emitting waves) + off-range arrows.
 #include "radar_view.h"
