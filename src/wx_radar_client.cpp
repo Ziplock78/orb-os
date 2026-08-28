@@ -76,6 +76,52 @@ static uint16_t *s_nativeBuf = nullptr;   // PSRAM, WX_RADAR_SIZE x WX_RADAR_SIZ
 
 // Bresenham, clipped to the same circle the precipitation crop uses, so a road segment
 // that crosses the boundary doesn't leave a stray line poking past the display's edge.
+// The roads, as one bit per pixel, rasterised ONCE per location.
+//
+// They were redrawn into every frame: ~20,000 polylines, Bresenham-stepped, each pixel a
+// bounds check and a scattered 16-bit write into PSRAM. Three frames a cycle meant three
+// helpings of that, and it showed. The sweep is timed on the other core and its own log
+// says what it cost: 100/101/114 ms and 13 ms of spread while idle, against 100/104/373 ms
+// and 273 ms of spread while frames were landing. A third of a second of frozen sweep,
+// three times per refresh.
+//
+// Roads are static for a given centre and they are drawn in ONE colour, so all that work
+// produced the same shape every time and the shape fits in a bitmap: 360 x 360 bits is
+// 16,200 bytes, against 253 KB for another full frame buffer. Per frame it becomes a
+// linear scan of that bitmap, mostly zero bytes, which is both far less work and far
+// kinder to the cache than scattered writes along diagonal lines.
+#define ROAD_MASK_BYTES ((WX_RADAR_SIZE * WX_RADAR_SIZE + 7) / 8)
+static uint8_t *s_roadMask = nullptr;
+// Bumped whenever the projection is recomputed; the mask is stale until it matches. Two
+// counters rather than re-comparing lat/lon/tier, so a cycle where the mask could not be
+// allocated retries on the next one instead of being remembered as done.
+static uint32_t s_roadStamp   = 0;
+static uint32_t s_roadMaskFor = 0;
+
+static inline void road_mask_set(int x, int y) {
+    const size_t bit = (size_t)y * WX_RADAR_SIZE + (size_t)x;
+    s_roadMask[bit >> 3] |= (uint8_t)(1u << (bit & 7));
+}
+
+// Same Bresenham, same clipping, writing a bit instead of a pixel.
+static void mask_road_line(lv_point_t a, lv_point_t b, int c) {
+    int x0 = a.x, y0 = a.y, x1 = b.x, y1 = b.y;
+    const int dx = abs(x1 - x0), sx = x0 < x1 ? 1 : -1;
+    const int dy = -abs(y1 - y0), sy = y0 < y1 ? 1 : -1;
+    int err = dx + dy;
+    for (;;) {
+        const int ddx = x0 - c, ddy = y0 - c;
+        if (x0 >= 0 && x0 < WX_RADAR_SIZE && y0 >= 0 && y0 < WX_RADAR_SIZE &&
+            ddx * ddx + ddy * ddy <= (c - 2) * (c - 2)) {
+            road_mask_set(x0, y0);
+        }
+        if (x0 == x1 && y0 == y1) break;
+        const int e2 = 2 * err;
+        if (e2 >= dy) { err += dy; x0 += sx; }
+        if (e2 <= dx) { err += dx; y0 += sy; }
+    }
+}
+
 static void draw_road_line(uint16_t *dst, lv_point_t a, lv_point_t b, int c) {
     int x0 = a.x, y0 = a.y, x1 = b.x, y1 = b.y;
     const int dx = abs(x1 - x0), sx = x0 < x1 ? 1 : -1;
@@ -105,6 +151,14 @@ static void draw_roads(double lat, double lon, int tier) {
     if (!s_roadPts) s_roadPts = (lv_point_t *)heap_caps_malloc(ROAD_MAX_PTS * sizeof(lv_point_t), MALLOC_CAP_SPIRAM);
     if (!s_roadPolyLen) s_roadPolyLen = (uint16_t *)heap_caps_malloc(ROAD_MAX_POLYS * sizeof(uint16_t), MALLOC_CAP_SPIRAM);
     if (!s_roadPts || !s_roadPolyLen) return;
+    // ORBNOMASK=1 forces the old per-frame polyline path, so the two can be rendered from
+    // the SAME frames and diffed. An optimisation that changes what is drawn is not an
+    // optimisation, and "it looks about right" is not a check.
+#ifndef ARDUINO
+    static const bool noMask = getenv("ORBNOMASK") != nullptr;
+    if (noMask) { /* leave s_roadMask null: the fallback below draws per frame */ } else
+#endif
+    if (!s_roadMask) s_roadMask = (uint8_t *)heap_caps_malloc(ROAD_MASK_BYTES, MALLOC_CAP_SPIRAM);
 
     if (lat != s_roadLat || lon != s_roadLon || tier != s_roadTier) {
         const float c = WX_RADAR_SIZE / 2.0f;
@@ -116,15 +170,47 @@ static void draw_roads(double lat, double lon, int tier) {
             ? roads_wide_project_flat(lat, lon, rangeKm, c, c, c - 2, s_roadPts, ROAD_MAX_PTS, s_roadPolyLen, ROAD_MAX_POLYS)
             : roads_project_flat(lat, lon, rangeKm, c, c, c - 2, s_roadPts, ROAD_MAX_PTS, s_roadPolyLen, ROAD_MAX_POLYS);
         s_roadLat = lat; s_roadLon = lon; s_roadTier = tier;
+        ++s_roadStamp;   // the mask below is stale whenever this changes
         Serial.printf("[wxradar] roads: %u polylines near this center (tier=%d)\n", (unsigned)s_roadPolyCount, tier);
     }
 
     const int c = WX_RADAR_SIZE / 2;
-    size_t idx = 0;
-    for (size_t poly = 0; poly < s_roadPolyCount; ++poly) {
-        const uint16_t n = s_roadPolyLen[poly];
-        for (uint16_t i = 1; i < n; ++i) draw_road_line(dst, s_roadPts[idx + i - 1], s_roadPts[idx + i], c);
-        idx += n;
+    // Rasterise into the mask only when the projection actually moved. s_roadMaskFor is
+    // separate from the s_roadLat/s_roadLon triple above so that a failed allocation on one
+    // cycle is retried on the next rather than being remembered as done.
+    if (s_roadMask && s_roadMaskFor != s_roadStamp) {
+        memset(s_roadMask, 0, ROAD_MASK_BYTES);
+        size_t idx = 0;
+        for (size_t poly = 0; poly < s_roadPolyCount; ++poly) {
+            const uint16_t n = s_roadPolyLen[poly];
+            for (uint16_t i = 1; i < n; ++i) mask_road_line(s_roadPts[idx + i - 1], s_roadPts[idx + i], c);
+            idx += n;
+        }
+        s_roadMaskFor = s_roadStamp;
+        Serial.println("[wxradar] roads rasterised into the mask (once for this centre)");
+    }
+
+    if (!s_roadMask) {   // allocation failed: fall back to the old per-frame draw
+        size_t idx = 0;
+        for (size_t poly = 0; poly < s_roadPolyCount; ++poly) {
+            const uint16_t n = s_roadPolyLen[poly];
+            for (uint16_t i = 1; i < n; ++i) draw_road_line(dst, s_roadPts[idx + i - 1], s_roadPts[idx + i], c);
+            idx += n;
+        }
+        return;
+    }
+
+    // The frame's share of the work: one linear pass, and the great majority of these bytes
+    // are zero, so the inner loop is skipped outright for most of them.
+    size_t bit = 0;
+    for (size_t byteIdx = 0; byteIdx < ROAD_MASK_BYTES; ++byteIdx, bit += 8) {
+        const uint8_t m = s_roadMask[byteIdx];
+        if (!m) continue;
+        for (int b = 0; b < 8; ++b) {
+            if (!(m & (1u << b))) continue;
+            const size_t px = bit + (size_t)b;
+            if (px < (size_t)WX_RADAR_SIZE * WX_RADAR_SIZE) dst[px] = ROAD_COLOR;
+        }
     }
 }
 
