@@ -480,10 +480,29 @@ namespace {
         // Show each theme's display name, never its folder slug. The theme shown as
         // "Modern" lives in a folder called `the-office` (its former name), and putting
         // the slug on screen made the two look like different themes.
+        //
+        // UNLESS two of them say the same thing, which happens more than it should: Studio
+        // gives a new theme a new folder, so saving a design twice under one name leaves two
+        // folders on the card, both calling themselves Aviator. Two identical rows and no
+        // way to tell which is which is worse than showing a folder name, so a name that
+        // collides earns its slug in brackets and a name that does not is left alone.
         for (int i = 0; i < s_designCount; ++i) {
             char label[32];
             theme_style::labelFor(s_designSlugs[i], label, sizeof(label));
-            lv_label_set_text(s_designItems[i], label);
+            bool clash = false;
+            for (int j = 0; j < s_designCount && !clash; ++j) {
+                if (j == i) continue;
+                char other[32];
+                theme_style::labelFor(s_designSlugs[j], other, sizeof(other));
+                clash = strcmp(label, other) == 0;
+            }
+            if (clash) {
+                char shown[64];
+                snprintf(shown, sizeof(shown), "%.20s (%.16s)", label, s_designSlugs[i]);
+                lv_label_set_text(s_designItems[i], shown);
+            } else {
+                lv_label_set_text(s_designItems[i], label);
+            }
         }
         lv_label_set_text(s_designItems[s_designCount], "Back");
         for (int i = s_designCount + 1; i < theme_select::MAX_THEMES + 1; ++i) lv_label_set_text(s_designItems[i], "");

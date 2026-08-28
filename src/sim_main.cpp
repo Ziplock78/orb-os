@@ -1285,6 +1285,18 @@ int main(int argc, char **argv) {
             } else if (setStep == 2 && now - setAt > 600) {
                 char path[300]; snprintf(path, sizeof(path), "%s-bottom.bmp", setShot);
                 sim_save_frame(path);
+                // Back up three rows from Back to Theme and open it, so the picker gets
+                // captured too. Two themes on a card can carry the same display name, and
+                // two identical rows with no way to tell them apart is the thing this
+                // second shot exists to check.
+                for (int q = 0; q < 3; ++q) input_router::dispatch(-1, false);
+                setStep = 3; setAt = now;
+            } else if (setStep == 3 && now - setAt > 400) {
+                input_router::dispatch(0, true);
+                setStep = 4; setAt = now;
+            } else if (setStep == 4 && now - setAt > 800) {
+                char path[300]; snprintf(path, sizeof(path), "%s-themes.bmp", setShot);
+                sim_save_frame(path);
                 run = false;
             }
         }
