@@ -170,10 +170,8 @@ static lv_obj_t   *s_themeLabel      = nullptr;   // "AVIATOR" etc. banner, show
 static lv_timer_t *s_themeLabelTimer = nullptr;   // one-shot: hides the banner after ~2s
 static lv_obj_t  *s_parent   = nullptr;
 static lv_obj_t  *s_gridLayer = nullptr;
-// Where the sweep lives when nothing has borrowed it: the scope's own parent, remembered
-// at init() so sweepAttachTo(nullptr) has somewhere to put it back.
-static lv_obj_t  *s_homeParent = nullptr;
 static lv_obj_t  *s_sweep     = nullptr;
+static lv_obj_t  *s_wxSweep   = nullptr;   // the weather map's own, on its own tile
 static lv_obj_t  *s_sweepImg  = nullptr;   // the sweep's "image" type — rotated live, replaces s_sweep's vector wedge when active
 static lv_obj_t  *s_acLayer   = nullptr;
 static lv_obj_t  *s_flowCanvas = nullptr;
@@ -581,6 +579,52 @@ static inline float sweepTrailDeg() { return customStyled() ? (float)theme_style
 // forward-declaration pattern apply_grid_visibility() already uses in this file.
 static void draw_glow(lv_draw_ctx_t *d, lv_point_t pos, float baseR, float glowPx, lv_color_t color);
 
+// The weather map's sweep. Its own object, its own colours, its own settings file.
+//
+// Written separately rather than by parameterising the Flight Tracker's, deliberately. The
+// scope's sweep is the one that took days to get smooth and is the one thing on this device
+// most worth not breaking; threading a second look through it to save thirty lines would
+// put that at risk for nothing. The two also diverge: no hub here, no aircraft, no
+// selection, and this one will grow its own image slot.
+//
+// What IS shared is the only thing that ever mattered for smoothness: s_sweepDeg, advanced
+// by real elapsed time in sweep_timer_cb, on a timer created once and never paused. Two
+// objects hang off that as easily as one when only one is ever visible.
+static void wx_sweep_draw_cb(lv_event_t *e) {
+    const theme_style::Weather &ws = theme_style::weather();
+    if (!ws.sweepEnabled) return;
+    lv_draw_ctx_t *dctx = lv_event_get_draw_ctx(e);
+    const lv_point_t center = { s_cx, s_cy };
+    const float R = (float)(ws.sweepLength < 20 ? 20 : (ws.sweepLength > 233 ? 233 : ws.sweepLength));
+    const float trailDeg = (float)(ws.sweepTrailDeg < 1 ? 1 : (ws.sweepTrailDeg > 180 ? 180 : ws.sweepTrailDeg));
+    const float trailOpaMax = (float)ws.sweepOpacity * 2.55f;
+    // Clamped rather than trusted: a theme is a file on an SD card and a zero here would
+    // divide by zero two lines down.
+    const int steps = ws.sweepTrailSteps < 1 ? 1 : (ws.sweepTrailSteps > 60 ? 60 : ws.sweepTrailSteps);
+
+    lv_draw_line_dsc_t ld;
+    lv_draw_line_dsc_init(&ld);
+    ld.color = lv_color_hex(ws.sweepColor);
+    ld.width = (lv_coord_t)(ws.sweepTrailWidth < 1 ? 1 : ws.sweepTrailWidth);
+    ld.round_start = 1; ld.round_end = 1;
+    for (int i = steps; i >= 1; --i) {
+        const float frac = 1.0f - (float)i / (float)steps;
+        const float ang  = s_sweepDeg - (float)i * (trailDeg / (float)steps);
+        ld.opa = (lv_opa_t)(frac * frac * trailOpaMax);
+        if (ld.opa < 2) continue;
+        lv_point_t p2 = rim_point(ang, R);
+        lv_draw_line(dctx, &ld, &center, &p2);
+    }
+    lv_draw_line_dsc_t le;
+    lv_draw_line_dsc_init(&le);
+    le.color = lv_color_hex(ws.sweepLeadColor);
+    le.width = (lv_coord_t)(ws.sweepLeadWidth < 1 ? 1 : ws.sweepLeadWidth);
+    le.opa = 217;
+    le.round_start = 1; le.round_end = 1;
+    lv_point_t lead = rim_point(s_sweepDeg, R);
+    lv_draw_line(dctx, &le, &center, &lead);
+}
+
 static void sweep_draw_cb(lv_event_t *e) {
     if (s_loadingPending) return;   // no hand until there is something to sweep over
     if (!customStyled() && orb()) return;
@@ -835,6 +879,9 @@ static void sweep_timer_cb(lv_timer_t *t) {
     // vector wedge's manual bounding-box invalidation below.
     if (customStyled() && theme_style::radar().sweepTypeImage) {
         if (s_sweepImg) lv_img_set_angle(s_sweepImg, (int16_t)lroundf(s_sweepDeg * 10.0f));
+        // The weather map's sweep rides the same angle off the same timer. Invalidating an
+        // object on a tile that is not showing costs nothing: LVGL discards it.
+        if (s_wxSweep) lv_obj_invalidate(s_wxSweep);
         return;
     }
     if (!s_sweep) return;
@@ -1614,7 +1661,6 @@ void init(void *lv_parent) {
     lv_obj_center(s_ringsImg);
     lv_obj_add_flag(s_ringsImg, LV_OBJ_FLAG_HIDDEN);
 
-    s_homeParent = (lv_obj_t *)lv_parent;
     s_sweep     = make_layer(parent, sweep_draw_cb);
     s_acLayer   = make_layer(parent, ac_draw_cb);
 
@@ -2829,15 +2875,20 @@ void noteSelectionDetailArrived() {
 // Ordering: foreground within its new parent, so it sits over the precipitation image the
 // way it sits over the scope's rings. Callers that put anything above it re-assert that
 // afterwards, the same as everywhere else on this device.
-void sweepAttachTo(void *lv_parent) {
+// Build the weather map its OWN sweep, on its own tile, from its own settings.
+//
+// This started out as "move the scope's sweep across", which worked and was wrong: the
+// weather map then wore the Flight Tracker's brass, because it was literally the Flight
+// Tracker's object. They are separate apps that happen to be built the same way.
+//
+// What is shared is the timer and s_sweepDeg, which is the only part smoothness ever
+// depended on. Nothing else crosses between them: not the colour, not the artwork, not the
+// speed, not the on/off switch.
+void buildWeatherSweep(void *lv_parent) {
     lv_obj_t *parent = (lv_obj_t *)lv_parent;
-    if (!parent) parent = s_homeParent;         // nullptr means "back where you came from"
-    if (!parent) return;
-    for (lv_obj_t *o : { s_sweep, s_sweepImg }) {
-        if (!o) continue;
-        if (lv_obj_get_parent(o) != parent) lv_obj_set_parent(o, parent);
-        lv_obj_move_foreground(o);
-    }
+    if (!parent || s_wxSweep) return;
+    s_wxSweep = make_layer(parent, wx_sweep_draw_cb);
+    lv_obj_move_foreground(s_wxSweep);
 }
 
 } // namespace radar

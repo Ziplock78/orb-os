@@ -666,16 +666,7 @@ static void build_card(void) {
 
 void ui_show_view(int idx) {
     if (s_tv && idx >= 0 && idx <= 1) lv_obj_set_tile_id(s_tv, (uint32_t)idx, 0, LV_ANIM_OFF);
-    // The sweep follows the visible tile, so the weather map gets one too.
-    //
-    // It is the SAME object, not a copy: see radar::sweepAttachTo. The weather map is a
-    // separate tile of this tileview and simply had no sweep on it, and building a second
-    // one would mean a second rotating object on a second timer, which is precisely how the
-    // stutter that took days to get out of the first one would come back.
-    //
-    // A theme that switches the sweep off switches it off here too, because it is the same
-    // sweep and the same setting. Nothing to keep in step.
-    radar::sweepAttachTo(idx == 1 ? s_tileWeather : nullptr);
+
 }
 
 // ------------------------------------------------------------------- splash
@@ -910,6 +901,13 @@ void ui_create(void) {
     lv_obj_align(s_wxCanvas, LV_ALIGN_TOP_MID, 0, 52);
     lv_obj_add_flag(s_wxCanvas, LV_OBJ_FLAG_HIDDEN);
     lv_obj_move_background(s_wxCanvas);
+
+    // This app's OWN sweep, built here on this tile, drawn from weather_style.json, driven
+    // by the timer that already turns the scope's. It briefly borrowed the Flight Tracker's
+    // object outright, which worked and meant the weather map wore the Flight Tracker's
+    // brass: two separate apps sharing one look because they shared one object. They share
+    // an angle now and nothing else.
+    radar::buildWeatherSweep(wp);
 
     s_wxStatus = lv_label_create(wp);
     lv_obj_set_style_text_font(s_wxStatus, F14(), 0);

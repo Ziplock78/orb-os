@@ -36,6 +36,7 @@ namespace {
 
 Clock    s_clock;
 Radar    s_radar;
+Weather  s_weather;
 Menu     s_menu;
 Settings s_settings;
 Intel    s_intel;
@@ -415,6 +416,30 @@ void load() {
                     s_clock.shadowDY = sh["dy"] | 0;
                 }
             }
+        }
+    }
+    {
+        // The weather map's own file. Separate from radar_style.json on purpose: it is a
+        // separate app, and the moment the two shared a file somebody's aircraft scope
+        // would start changing when they dressed their weather map.
+        JsonDocument doc;
+        if (read_style_json(slug, "weather_style.json", doc)) {
+            if (doc["bg"].is<uint32_t>()) s_weather.bg = doc["bg"].as<uint32_t>();
+            if (doc["sweepEnabled"].is<bool>()) s_weather.sweepEnabled = doc["sweepEnabled"].as<bool>();
+            if (doc["sweepTypeImage"].is<bool>()) s_weather.sweepTypeImage = doc["sweepTypeImage"].as<bool>();
+            if (doc["sweepColor"].is<uint32_t>()) s_weather.sweepColor = doc["sweepColor"].as<uint32_t>();
+            if (doc["sweepLeadColor"].is<uint32_t>()) s_weather.sweepLeadColor = doc["sweepLeadColor"].as<uint32_t>();
+            if (doc["sweepTrailDeg"].is<int>()) s_weather.sweepTrailDeg = doc["sweepTrailDeg"].as<int>();
+            if (doc["sweepOpacity"].is<int>()) s_weather.sweepOpacity = doc["sweepOpacity"].as<int>();
+            if (doc["sweepLength"].is<int>()) s_weather.sweepLength = doc["sweepLength"].as<int>();
+            if (doc["sweepSpeed"].is<int>()) s_weather.sweepSpeed = doc["sweepSpeed"].as<int>();
+            if (doc["sweepTrailWidth"].is<int>()) s_weather.sweepTrailWidth = doc["sweepTrailWidth"].as<int>();
+            if (doc["sweepLeadWidth"].is<int>()) s_weather.sweepLeadWidth = doc["sweepLeadWidth"].as<int>();
+            if (doc["sweepTrailSteps"].is<int>()) s_weather.sweepTrailSteps = doc["sweepTrailSteps"].as<int>();
+            if (doc["ringColor"].is<uint32_t>()) s_weather.ringColor = doc["ringColor"].as<uint32_t>();
+            if (doc["ringsEnabled"].is<bool>()) s_weather.ringsEnabled = doc["ringsEnabled"].as<bool>();
+            if (doc["roadColor"].is<uint32_t>()) s_weather.roadColor = doc["roadColor"].as<uint32_t>();
+            if (doc["roadsEnabled"].is<bool>()) s_weather.roadsEnabled = doc["roadsEnabled"].as<bool>();
         }
     }
     {
@@ -853,6 +878,7 @@ void load() {
 
 const Clock &clock() { return s_clock; }
 const Radar &radar() { return s_radar; }
+const Weather &weather() { return s_weather; }
 const Menu &menu() { return s_menu; }
 const Settings &settings() { return s_settings; }
 const Intel &intel() { return s_intel; }

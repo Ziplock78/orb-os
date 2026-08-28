@@ -50,7 +50,7 @@ void init(void* lv_parent);                 // pass lv_obj_t*
 // whichever tile is on screen, keeps every property it has.
 //
 // Pass nullptr to put it back on the scope.
-void sweepAttachTo(void *lv_parent);        // pass lv_obj_t*
+void buildWeatherSweep(void *lv_parent);    // pass lv_obj_t*
 
 // Rebuild the aircraft layer from the latest snapshot. Call at poll cadence.
 void update(const std::vector<Aircraft>& aircraft, const RadarSettings& s);

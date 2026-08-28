@@ -187,7 +187,12 @@ namespace theme_style {
 //      device can vary, so bold-when-selected is a second file or it is nothing. An Orb
 //      below this level has no slot to load it into and draws every row in the one weight,
 //      which is what the theme looked like before anybody asked for two.
-constexpr int THEME_CAPS = 22;
+//  23  the weather map as its own app, with weather_style.json: its own background, its
+//      own sweep and its own colours. It had none of these and was borrowing the Flight
+//      Tracker's sweep OBJECT outright, so it wore the Flight Tracker's artwork. An Orb
+//      below this level ignores the file and draws the weather map as it always did, which
+//      is with no sweep at all.
+constexpr int THEME_CAPS = 23;
 
 struct ClockText {
     bool     show   = false;
@@ -346,6 +351,37 @@ struct RadarStatic {
     int   y = 233;
     int   opacity = 255;
     float scale = 1.0f;
+};
+
+// The weather map's OWN look. Its own background, its own sweep, its own colours.
+//
+// It is a separate app that happens to be built the same way, and it was briefly sharing
+// the Flight Tracker's sweep object outright, which meant it also wore the Flight Tracker's
+// brass. Reuse the ENGINEERING, not the assets: the sweep here is a second object driven by
+// the SAME timer, because the smoothness never came from sharing the object. It came from
+// one timer that advances by real elapsed time and is never paused, and two objects can
+// hang off that as easily as one when only ever one of them is visible.
+//
+// Defaults are deliberately NOT the Flight Tracker's green: a weather map that arrives
+// looking like the aircraft scope is the cross-contamination this struct exists to end.
+struct Weather {
+    uint32_t bg              = 0x000000;
+    bool     sweepEnabled    = true;
+    bool     sweepTypeImage  = false;   // a theme's own sweep_wx.png, when it ships one
+    uint32_t sweepColor      = 0x7FB2D9;   // a cool grey-blue, not the scope's phosphor
+    uint32_t sweepLeadColor  = 0xDCEBF7;
+    int      sweepTrailDeg   = 38;
+    int      sweepOpacity    = 55;      // 0..100
+    int      sweepLength     = 233;
+    int      sweepSpeed      = 45;      // deg/sec
+    int      sweepTrailWidth = 5;
+    int      sweepLeadWidth  = 2;
+    int      sweepTrailSteps = 20;
+    // The rings and the road overlay, which the map draws for itself rather than borrowing.
+    uint32_t ringColor       = 0x1E3A2E;
+    bool     ringsEnabled    = true;
+    uint32_t roadColor       = 0x4A4A4A;
+    bool     roadsEnabled    = true;
 };
 
 struct Radar {
@@ -826,6 +862,7 @@ void load();
 
 const Clock    &clock();
 const Radar     &radar();
+const Weather   &weather();
 const Menu      &menu();
 const Settings  &settings();
 const Intel     &intel();
