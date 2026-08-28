@@ -699,6 +699,10 @@ int main(int argc, char **argv) {
     // The "Ready" notice, for the same reason: it exists for a few seconds on real
     // hardware after an update and there is no other way to look at it.
     const char *readyShot  = (argc >= 3 && strcmp(argv[1], "--readyshot")  == 0) ? argv[2] : NULL;
+    // The bake screen, for the same reason as the two above: on hardware it exists only for
+    // the fifteen seconds after picking a theme, and it is three labels at fixed offsets,
+    // which is exactly the layout that quietly overlaps when one of them gains a line.
+    const char *bakeShot   = (argc >= 3 && strcmp(argv[1], "--bakeshot")   == 0) ? argv[2] : NULL;
     // --newsshot <prefix> drives the News screen the way a person does and captures both
     // halves of it: <prefix>-list.bmp with the knob turned twice (so the selection is on the
     // third headline and the two above it are dimmed) and <prefix>-brief.bmp after a press.
@@ -714,7 +718,7 @@ int main(int argc, char **argv) {
     // --newsshot is headless but drives the KNOB, so it needs the full app lineup that only
     // interactive mode registers. It is the one capture that walks the shell rather than
     // putting a single screen up directly.
-    const bool  interactive = !shotPath && !gifPath && !updateShot && !readyShot;   // live knob/app-shell only outside headless capture
+    const bool  interactive = !shotPath && !gifPath && !updateShot && !readyShot && !bakeShot;   // live knob/app-shell only outside headless capture
     (void)setShot;
 
     SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "linear");   // smooth up/downscale (both the
@@ -1252,11 +1256,12 @@ int main(int argc, char **argv) {
         // headless capture of the firmware-update overlay (--updateshot <path>) or the
         // ready notice (--readyshot <path>). Same block: both are the same panel.
         static bool updateSaved = false;
-        if ((updateShot || readyShot) && !updateSaved && now - start > 1800) {
+        if ((updateShot || readyShot || bakeShot) && !updateSaved && now - start > 1800) {
             updateSaved = true;
-            if (readyShot) update_ui::ready(true);           // the after-an-update variant
-            else           update_ui::firmware_incoming();   // paints and calls lv_refr_now itself
-            sim_save_frame(readyShot ? readyShot : updateShot);
+            if (readyShot)     update_ui::ready(true);           // the after-an-update variant
+            else if (bakeShot) { update_ui::bake_begin(12); update_ui::bake_progress("clock_plate.png", 3, 12); }
+            else               update_ui::firmware_incoming();   // paints and calls lv_refr_now itself
+            sim_save_frame(readyShot ? readyShot : bakeShot ? bakeShot : updateShot);
             run = false;
         }
 

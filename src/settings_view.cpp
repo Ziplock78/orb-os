@@ -71,7 +71,7 @@ namespace {
     // "default selection", so an older theme may now open Settings on a neighbouring
     // item. Cosmetic only, and DEFAULT_SEL below still clamps anything out of range.
     enum { ITEM_DISPLAY = 0, ITEM_LOCATION, ITEM_SOUND, ITEM_UNITS, ITEM_RANGE, ITEM_WIFI, ITEM_DESIGN, ITEM_ABOUT, ITEM_RESET, ITEM_BACK, ITEM_COUNT };
-    const char *ITEM_LABELS[ITEM_COUNT] = { "Display", "Location", "Sound", "Units", "Range", "WiFi", "Design", "About", "Reset", "Back" };
+    const char *ITEM_LABELS[ITEM_COUNT] = { "Display", "Location", "Sound", "Units", "Range", "WiFi", "Theme", "About", "Reset", "Back" };
     // A Launch Kit push's "Default selection" (was editor-preview-only; now baked
     // in) — which item the main menu opens on, both at first boot and every time
     // the app switcher hands control back to Settings. Out-of-range (a stale
@@ -1381,7 +1381,7 @@ void settingsview::init() {
     lv_obj_set_size(s_designPage, SCREEN_W, SCREEN_H); lv_obj_center(s_designPage);
     lv_obj_clear_flag(s_designPage, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_t *designtitle = lv_label_create(s_designPage);
-    lv_label_set_text(designtitle, "Design");
+    lv_label_set_text(designtitle, "Theme");
     lv_obj_set_style_text_color(designtitle, C_DIM, 0);
     lv_obj_set_style_text_font(designtitle, &lv_font_montserrat_16, 0);
     lv_obj_align(designtitle, LV_ALIGN_CENTER, 0, -122);

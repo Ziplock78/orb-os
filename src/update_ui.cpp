@@ -262,9 +262,14 @@ void firmware_incoming() {
 void bake_begin(int totalAssets) {
     ensure();
     s_lastActivity = millis();
-    lv_label_set_text(s_title, "Installing update");
-    char b[64];
-    snprintf(b, sizeof(b), "Step 3 of 3 - preparing artwork\n0 of %d", totalAssets);
+    // "Installing update, Step 3 of 3" was the language of a Studio install, which really
+    // does have three steps. This screen also runs when somebody picks a theme from the
+    // knob, where there is no install, no computer involved and no three steps: the Orb is
+    // reading its own SD card and writing its own flash. Saying "update" there sent someone
+    // looking for what their computer was doing. This wording is true in both cases.
+    lv_label_set_text(s_title, "Preparing theme");
+    char b[96];
+    snprintf(b, sizeof(b), "Rebuilding from the SD card\n0 of %d", totalAssets);
     lv_label_set_text(s_sub, b);
     // Blocking work follows (the bake), so paint now rather than waiting for a timer
     // tick that will not come.
@@ -277,8 +282,9 @@ void bake_begin(int totalAssets) {
 void bake_progress(const char *assetName, int done, int totalAssets) {
     if (!s_panel) return;
     s_lastActivity = millis();
-    char b[96];
-    snprintf(b, sizeof(b), "Step 3 of 3 - preparing artwork\n%d of %d  %.32s", done, totalAssets, assetName ? assetName : "");
+    char b[128];
+    snprintf(b, sizeof(b), "Rebuilding from the SD card\n%d of %d  %.24s",
+             done, totalAssets, assetName ? assetName : "");
     lv_label_set_text(s_sub, b);
     lv_refr_now(NULL);
 }
