@@ -170,6 +170,9 @@ static lv_obj_t   *s_themeLabel      = nullptr;   // "AVIATOR" etc. banner, show
 static lv_timer_t *s_themeLabelTimer = nullptr;   // one-shot: hides the banner after ~2s
 static lv_obj_t  *s_parent   = nullptr;
 static lv_obj_t  *s_gridLayer = nullptr;
+// Where the sweep lives when nothing has borrowed it: the scope's own parent, remembered
+// at init() so sweepAttachTo(nullptr) has somewhere to put it back.
+static lv_obj_t  *s_homeParent = nullptr;
 static lv_obj_t  *s_sweep     = nullptr;
 static lv_obj_t  *s_sweepImg  = nullptr;   // the sweep's "image" type — rotated live, replaces s_sweep's vector wedge when active
 static lv_obj_t  *s_acLayer   = nullptr;
@@ -1611,6 +1614,7 @@ void init(void *lv_parent) {
     lv_obj_center(s_ringsImg);
     lv_obj_add_flag(s_ringsImg, LV_OBJ_FLAG_HIDDEN);
 
+    s_homeParent = (lv_obj_t *)lv_parent;
     s_sweep     = make_layer(parent, sweep_draw_cb);
     s_acLayer   = make_layer(parent, ac_draw_cb);
 
@@ -2811,6 +2815,29 @@ void setSweepFrameMs(uint32_t ms) {
 
 void noteSelectionDetailArrived() {
     if (s_selectMode) s_selActivityMs = lv_tick_get();
+}
+
+// The SAME sweep, on another tile. See the header for why this is not a second one.
+//
+// The scope is tile 0 of a tileview and the weather map is tile 1, so the sweep built here
+// simply is not on the weather tile: it had no sweep at all. Moving the object costs a
+// re-parent and nothing else, because the timer that turns it is created once in init() and
+// never paused, and it advances by real elapsed time rather than by ticks. It therefore
+// keeps turning at the same rate through the move, and arrives at the right angle rather
+// than starting again from zero.
+//
+// Ordering: foreground within its new parent, so it sits over the precipitation image the
+// way it sits over the scope's rings. Callers that put anything above it re-assert that
+// afterwards, the same as everywhere else on this device.
+void sweepAttachTo(void *lv_parent) {
+    lv_obj_t *parent = (lv_obj_t *)lv_parent;
+    if (!parent) parent = s_homeParent;         // nullptr means "back where you came from"
+    if (!parent) return;
+    for (lv_obj_t *o : { s_sweep, s_sweepImg }) {
+        if (!o) continue;
+        if (lv_obj_get_parent(o) != parent) lv_obj_set_parent(o, parent);
+        lv_obj_move_foreground(o);
+    }
 }
 
 } // namespace radar

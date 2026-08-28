@@ -703,6 +703,10 @@ int main(int argc, char **argv) {
     // the fifteen seconds after picking a theme, and it is three labels at fixed offsets,
     // which is exactly the layout that quietly overlaps when one of them gains a line.
     const char *bakeShot   = (argc >= 3 && strcmp(argv[1], "--bakeshot")   == 0) ? argv[2] : NULL;
+    // --wxshot <prefix> opens the weather map and captures it, twice, a moment apart. Two
+    // frames because the thing being checked is that the sweep is THERE and MOVING: one
+    // picture cannot tell a turning sweep from a stuck one.
+    const char *wxShot     = (argc >= 3 && strcmp(argv[1], "--wxshot")     == 0) ? argv[2] : NULL;
     // --newsshot <prefix> drives the News screen the way a person does and captures both
     // halves of it: <prefix>-list.bmp with the knob turned twice (so the selection is on the
     // third headline and the two above it are dimmed) and <prefix>-brief.bmp after a press.
@@ -718,7 +722,8 @@ int main(int argc, char **argv) {
     // --newsshot is headless but drives the KNOB, so it needs the full app lineup that only
     // interactive mode registers. It is the one capture that walks the shell rather than
     // putting a single screen up directly.
-    const bool  interactive = !shotPath && !gifPath && !updateShot && !readyShot && !bakeShot;   // live knob/app-shell only outside headless capture
+    const bool  interactive = !shotPath && !gifPath && !updateShot && !readyShot && !bakeShot;
+    (void)wxShot;   // live knob/app-shell only outside headless capture
     (void)setShot;
 
     SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "linear");   // smooth up/downscale (both the
@@ -1271,6 +1276,23 @@ int main(int argc, char **argv) {
         // waits on the network: the brief is a real request to the real worker, and a state
         // machine that fires on frame numbers would photograph "Getting the story..." on a
         // slow morning and call it a pass.
+        static int wxStep = 0;
+        static Uint32 wxAt = 0;
+        if (wxShot) {
+            if (wxStep == 0 && now - start > 3000) {
+                app_shell::selectApp(app_shell::APP_WEATHER);
+                wxStep = 1; wxAt = now;
+            } else if (wxStep == 1 && now - wxAt > 6000) {
+                char path[300]; snprintf(path, sizeof(path), "%s-a.bmp", wxShot);
+                sim_save_frame(path);
+                wxStep = 2; wxAt = now;
+            } else if (wxStep == 2 && now - wxAt > 1200) {
+                char path[300]; snprintf(path, sizeof(path), "%s-b.bmp", wxShot);
+                sim_save_frame(path);
+                run = false;
+            }
+        }
+
         static int setStep = 0;
         static Uint32 setAt = 0;
         if (setShot) {

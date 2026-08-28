@@ -666,6 +666,16 @@ static void build_card(void) {
 
 void ui_show_view(int idx) {
     if (s_tv && idx >= 0 && idx <= 1) lv_obj_set_tile_id(s_tv, (uint32_t)idx, 0, LV_ANIM_OFF);
+    // The sweep follows the visible tile, so the weather map gets one too.
+    //
+    // It is the SAME object, not a copy: see radar::sweepAttachTo. The weather map is a
+    // separate tile of this tileview and simply had no sweep on it, and building a second
+    // one would mean a second rotating object on a second timer, which is precisely how the
+    // stutter that took days to get out of the first one would come back.
+    //
+    // A theme that switches the sweep off switches it off here too, because it is the same
+    // sweep and the same setting. Nothing to keep in step.
+    radar::sweepAttachTo(idx == 1 ? s_tileWeather : nullptr);
 }
 
 // ------------------------------------------------------------------- splash

@@ -41,6 +41,17 @@ namespace radar {
 // Build the radar scope (rings, crosshair, rose, sweep, center) under `parent`.
 void init(void* lv_parent);                 // pass lv_obj_t*
 
+// Move the sweep onto another parent, so the weather map gets the SAME sweep.
+//
+// Not a second sweep. The one in this file advances by real elapsed time on a timer that
+// is created once and never paused, and the comments around it are emphatic that variable
+// per-frame cost is the thing it cannot tolerate: a second rotating object with a second
+// timer is how the stutter that took days to remove comes back. One object, moved to
+// whichever tile is on screen, keeps every property it has.
+//
+// Pass nullptr to put it back on the scope.
+void sweepAttachTo(void *lv_parent);        // pass lv_obj_t*
+
 // Rebuild the aircraft layer from the latest snapshot. Call at poll cadence.
 void update(const std::vector<Aircraft>& aircraft, const RadarSettings& s);
 
