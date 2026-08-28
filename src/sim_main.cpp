@@ -706,10 +706,16 @@ int main(int argc, char **argv) {
     // seconds of stillness, and the briefing needs a real answer from the gateway to have
     // anything in it. This makes the same two round trips the Orb makes.
     const char *newsShot   = (argc >= 3 && strcmp(argv[1], "--newsshot")   == 0) ? argv[2] : NULL;
+    // --settingsshot <prefix> walks the Settings wheel to the bottom of the list and
+    // captures it. The bug this exists for only appears at the far end of a long list, and
+    // it appears there because rows more than a quarter turn away were CLAMPED onto the top
+    // of the dial instead of being dropped, so five of them drew on the same pixel.
+    const char *setShot    = (argc >= 3 && strcmp(argv[1], "--settingsshot") == 0) ? argv[2] : NULL;
     // --newsshot is headless but drives the KNOB, so it needs the full app lineup that only
     // interactive mode registers. It is the one capture that walks the shell rather than
     // putting a single screen up directly.
     const bool  interactive = !shotPath && !gifPath && !updateShot && !readyShot;   // live knob/app-shell only outside headless capture
+    (void)setShot;
 
     SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "linear");   // smooth up/downscale (both the
                                                               // frame photo and the live LVGL
@@ -1260,6 +1266,24 @@ int main(int argc, char **argv) {
         // waits on the network: the brief is a real request to the real worker, and a state
         // machine that fires on frame numbers would photograph "Getting the story..." on a
         // slow morning and call it a pass.
+        static int setStep = 0;
+        static Uint32 setAt = 0;
+        if (setShot) {
+            if (setStep == 0 && now - start > 2500) {
+                app_shell::selectApp(app_shell::APP_SETTINGS);
+                setStep = 1; setAt = now;
+            } else if (setStep == 1 && now - setAt > 1200) {
+                // All the way to the bottom of the ten-row list, which is where every row
+                // above the last two used to pile up.
+                for (int q = 0; q < 12; ++q) input_router::dispatch(1, false);
+                setStep = 2; setAt = now;
+            } else if (setStep == 2 && now - setAt > 600) {
+                char path[300]; snprintf(path, sizeof(path), "%s-bottom.bmp", setShot);
+                sim_save_frame(path);
+                run = false;
+            }
+        }
+
         static int newsStep = 0;
         static Uint32 newsAt = 0;
         if (newsShot) {

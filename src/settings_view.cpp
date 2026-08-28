@@ -326,6 +326,24 @@ namespace {
         for (int i = 0; i < count; ++i) {
             const int d = i - sel;
             const float angleDeg = fabsf((float)d) * WHEEL_STEP_DEG;
+            // Past a quarter turn there is no more dial to put anything on.
+            //
+            // This angle used to be CLAMPED to 90 rather than cut off, which is what made a
+            // long list pile up: at 22 degrees a step, everything five or more rows from the
+            // selection got exactly 90, sin(90) is 1 for all of them, and they landed on the
+            // same pixel at the top of the wheel drawn over one another. On the ten-row main
+            // list, scrolling to the bottom stacked five labels in one place.
+            //
+            // They were supposed to be invisible by then, and on paper they are: cos(90) is
+            // 0, so the falloff below is 0. In floating point cosf(M_PI/2) is about -4.4e-8,
+            // a tiny NEGATIVE number, and powf(negative, fractional) is NaN. Any Fade that
+            // is not a whole or half number makes that exponent fractional, and the NaN cast
+            // to lv_opa_t is whatever the conversion happens to produce. So the row that
+            // should have been invisible was drawn, at an opacity nobody chose.
+            //
+            // Cut off rather than clamped, and the falloff floored at 0 so no value of Fade
+            // can produce a NaN.
+            const bool offDial = angleDeg >= 90.0f;
             const float angleRad = fminf(angleDeg, 90.0f) * (float)M_PI / 180.0f;
             const float sy = WHEEL_CY + (d < 0 ? -1.0f : 1.0f) * WHEEL_R * sinf(angleRad);
             const float sx = WHEEL_RX * (1.0f - cosf(angleRad));
@@ -338,7 +356,9 @@ namespace {
             // stock-look-only (a Launch Kit push draws one uniform size — see
             // settings_text::draw_item below), and unrelated to the fade itself.
             const int ad = abs(d);
-            const lv_opa_t opa = (lv_opa_t)lroundf(255.0f * powf(cosf(angleRad), 2.0f * WHEEL_FADE));
+            const float fall = fmaxf(0.0f, cosf(angleRad));
+            const lv_opa_t opa = offDial ? 0
+                               : (lv_opa_t)lroundf(255.0f * powf(fall, 2.0f * WHEEL_FADE));
             const lv_font_t *font;
             if      (ad == 0) font = &lv_font_montserrat_20;
             else if (ad == 1) font = &lv_font_montserrat_16;
@@ -351,6 +371,9 @@ namespace {
               ((i == sel) ? theme_style::settings().selOpa : theme_style::settings().itemOpa) / 255);
           if (settings_text::available()) {
             lv_obj_set_style_text_opa(items[i], LV_OPA_TRANSP, 0);   // the native label draws nothing; the canvas draws the real glyphs below
+            // Positioned above like every other row, so anything reading these objects'
+            // geometry still finds them where it expects; simply not drawn.
+            if (offDial) continue;
             const theme_style::Settings &sg = theme_style::settings();
             settings_text::draw_item(lv_label_get_text(items[i]), 233.0f + sx, 233.0f + sy,
                                      lv_color_hex(i == sel ? sg.selColor : sg.itemColor), rowOpa,
