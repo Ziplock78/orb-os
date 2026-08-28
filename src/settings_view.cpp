@@ -351,8 +351,11 @@ namespace {
               ((i == sel) ? theme_style::settings().selOpa : theme_style::settings().itemOpa) / 255);
           if (settings_text::available()) {
             lv_obj_set_style_text_opa(items[i], LV_OPA_TRANSP, 0);   // the native label draws nothing; the canvas draws the real glyphs below
+            const theme_style::Settings &sg = theme_style::settings();
             settings_text::draw_item(lv_label_get_text(items[i]), 233.0f + sx, 233.0f + sy,
-                                     i == sel ? lv_color_hex(theme_style::settings().selColor) : lv_color_hex(theme_style::settings().itemColor), rowOpa);
+                                     lv_color_hex(i == sel ? sg.selColor : sg.itemColor), rowOpa,
+                                     i == sel ? sg.selGlow : sg.itemGlow,
+                                     lv_color_hex(i == sel ? sg.selGlowColor : sg.itemGlowColor));
           } else {
             // No canvas (either it could not be allocated, or the theme asks for no glow
             // so we deliberately skipped it). Draw with plain labels, but still using the
@@ -841,7 +844,16 @@ void settingsview::onTurn(int delta) {
         if (s_designSel < 0) s_designSel = 0;
         if (s_designSel >= total) s_designSel = total - 1;
         wheel_layout(s_designItems, total, s_designSel, s_designHl);   // rescanning the card every turn would be wasteful — just re-layout
-    } else if (s_mode == MODE_ABOUT || s_mode == MODE_WIFI_STATUS || s_mode == MODE_THEME_NOTICE || s_mode == MODE_DESIGN_NOTICE) {
+    } else if (s_mode == MODE_ABOUT) {
+        // Turning backs out to the list, the same way the reset confirmation does.
+        //
+        // This page used to ignore the knob entirely, and a page that ignores the knob is
+        // the one place on this device where the only control does nothing. Pressing left
+        // to the app switcher, which is a fine way out of Settings but the wrong way out of
+        // ONE PAGE of it: you came here from the list and the list is where back means.
+        s_sel = ITEM_ABOUT;      // land on the row you left from, not at the top
+        show_page(MODE_MENU);
+    } else if (s_mode == MODE_WIFI_STATUS || s_mode == MODE_THEME_NOTICE || s_mode == MODE_DESIGN_NOTICE) {
         // static pages — turning does nothing here
     } else if (s_mode == MODE_RESET_CONFIRM) {
         s_sel = ITEM_RESET;      // turning either way backs out — this page is confirm/cancel only

@@ -99,7 +99,8 @@ void acquire() {
     // The ONLY thing this canvas buys over plain LVGL labels is glow. If the active
     // theme asks for none, do not allocate at all: available() then returns false and
     // wheel_layout() keeps the ordinary labels, which cost a few KB instead of ~868.
-    if (theme_style::settings().glow <= 0) return;
+    const theme_style::Settings &ss = theme_style::settings();
+    if (ss.selGlow <= 0 && ss.itemGlow <= 0) return;
     const size_t sz = LV_CANVAS_BUF_SIZE_TRUE_COLOR_ALPHA(SCREEN_W, SCREEN_H);
 #if defined(ESP_PLATFORM)
     s_buf = (lv_color_t *)heap_caps_malloc(sz, MALLOC_CAP_SPIRAM);
@@ -151,7 +152,8 @@ void begin_frame() {
 #endif
 }
 
-void draw_item(const char *str, float x, float y, lv_color_t color, lv_opa_t opa) {
+void draw_item(const char *str, float x, float y, lv_color_t color, lv_opa_t opa,
+               int glow, lv_color_t glowCol) {
 #if CUSTOM_HAS_SETTINGS
     if (!s_canvas || !str || !str[0] || opa == 0) return;
     const lv_font_t *font = theme_font::settings_item();
@@ -165,7 +167,7 @@ void draw_item(const char *str, float x, float y, lv_color_t color, lv_opa_t opa
     const float startX = x - total / 2.0f;
     const float lineH = (float)lv_font_get_line_height(font), desc = (float)font->base_line;
     const float halfMid = (lineH - 2.0f * desc) * 0.5f;
-    const lv_color_t glowCol = lv_color_hex(theme_style::settings().glowColor);
+
     float cx = startX;
     for (int i = 0; i < cap; ++i) {
         lv_font_glyph_dsc_t g;
@@ -174,7 +176,7 @@ void draw_item(const char *str, float x, float y, lv_color_t color, lv_opa_t opa
             if (bmp && g.box_w && g.box_h) {
                 const float destCx = cx + (float)g.ofs_x + (float)g.box_w * 0.5f;
                 const float destCy = y + halfMid - (float)g.ofs_y - (float)g.box_h * 0.5f;
-                blit_glyph_glow(bmp, g.box_w, g.box_h, destCx, destCy, glowCol, theme_style::settings().glow, opa);
+                blit_glyph_glow(bmp, g.box_w, g.box_h, destCx, destCy, glowCol, glow, opa);
                 blit_glyph(bmp, g.box_w, g.box_h, destCx, destCy, color, opa);
             }
         }

@@ -571,6 +571,21 @@ void load() {
             s_settings.itemOpa = opa_of(doc["itemOpa"], s_settings.itemOpa);
             if (doc["glow"].is<int>()) s_settings.glow = doc["glow"].as<int>();
             if (doc["glowColor"].is<uint32_t>()) s_settings.glowColor = doc["glowColor"].as<uint32_t>();
+            // THEME_CAPS 21. Read the shared pair FIRST and seed both halves from it, so a
+            // theme written before the split keeps the single glow it asked for on both
+            // rows. Then let an explicit per-row value win where one was sent.
+            s_settings.selGlow = s_settings.itemGlow = s_settings.glow;
+            s_settings.selGlowColor = s_settings.itemGlowColor = s_settings.glowColor;
+            if (doc["selGlow"].is<int>()) {
+                const int v = doc["selGlow"].as<int>();
+                s_settings.selGlow = v < 0 ? 0 : (v > 40 ? 40 : v);
+            }
+            if (doc["selGlowColor"].is<uint32_t>()) s_settings.selGlowColor = doc["selGlowColor"].as<uint32_t>();
+            if (doc["itemGlow"].is<int>()) {
+                const int v = doc["itemGlow"].as<int>();
+                s_settings.itemGlow = v < 0 ? 0 : (v > 40 ? 40 : v);
+            }
+            if (doc["itemGlowColor"].is<uint32_t>()) s_settings.itemGlowColor = doc["itemGlowColor"].as<uint32_t>();
             if (doc["hlShow"].is<bool>()) s_settings.hlShow = doc["hlShow"].as<bool>();
             if (doc["hlColor"].is<uint32_t>()) s_settings.hlColor = doc["hlColor"].as<uint32_t>();
             if (doc["hlOpacity"].is<int>()) s_settings.hlOpacity = doc["hlOpacity"].as<int>();

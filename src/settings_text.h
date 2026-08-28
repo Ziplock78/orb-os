@@ -26,7 +26,11 @@ void begin_frame();
 
 // Draw one item's text centered at (x,y) in screen coordinates. No-op if the
 // canvas hasn't been created (stock builds keep using plain lv_label text).
-void draw_item(const char *str, float x, float y, lv_color_t color, lv_opa_t opa);
+// `glow` and `glowCol` are the caller's now rather than read from the theme in here: the
+// selected row and the rest carry their own, and this renderer draws both. Passing them in
+// also means the one place that knows which row is which is the one place that decides.
+void draw_item(const char *str, float x, float y, lv_color_t color, lv_opa_t opa,
+               int glow, lv_color_t glowCol);
 
 // False when the canvas could not be allocated (PSRAM pressure). Callers must then keep
 // the plain labels visible, or Settings becomes unreadable and unnavigable.

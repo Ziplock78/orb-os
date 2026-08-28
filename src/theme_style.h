@@ -177,7 +177,12 @@ namespace theme_style {
 //      and level on the device with nothing saying why. LVGL has left, centre and right
 //      and no justify, so justify is not offered here rather than being offered and
 //      silently centred.
-constexpr int THEME_CAPS = 20;
+//  21  a separate glow for the Settings wheel's selected row and for the rest. There was
+//      one, applied to every row, so the one setting that could not mark which row is
+//      selected was the one people reached for to do it. An Orb below this level reads only
+//      the shared pair, which Studio still sends as the larger of the two, so an old device
+//      shows one halo rather than none.
+constexpr int THEME_CAPS = 21;
 
 struct ClockText {
     bool     show   = false;
@@ -533,8 +538,17 @@ struct Settings {
     int      selOpa       = 255;   // 0..255, see THEME_CAPS 18
     uint32_t itemColor    = 0x6A7078;
     int      itemOpa      = 255;
+    // THEME_CAPS 21. One glow became two, because the selected row and the rest are the
+    // two things this screen is made of and a halo on all of them at once is the one
+    // setting that cannot mark which is which. `glow`/`glowColor` stay as the value a
+    // theme written before this sent, and both new fields default to it, so an old theme
+    // looks exactly as it did.
     int      glow         = 0;
     uint32_t glowColor    = 0xFFFFFF;
+    int      selGlow      = 0;
+    uint32_t selGlowColor = 0xFFFFFF;
+    int      itemGlow     = 0;
+    uint32_t itemGlowColor = 0xFFFFFF;
     bool     hlShow       = true;
     uint32_t hlColor      = 0x232A36;
     int      hlOpacity    = 255;
