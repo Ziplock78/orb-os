@@ -30,7 +30,7 @@ void begin_frame();
 // selected row and the rest carry their own, and this renderer draws both. Passing them in
 // also means the one place that knows which row is which is the one place that decides.
 void draw_item(const char *str, float x, float y, lv_color_t color, lv_opa_t opa,
-               int glow, lv_color_t glowCol);
+               int glow, lv_color_t glowCol, const lv_font_t *font);
 
 // False when the canvas could not be allocated (PSRAM pressure). Callers must then keep
 // the plain labels visible, or Settings becomes unreadable and unnavigable.

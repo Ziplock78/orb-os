@@ -182,7 +182,12 @@ namespace theme_style {
 //      selected was the one people reached for to do it. An Orb below this level reads only
 //      the shared pair, which Studio still sends as the larger of the two, so an old device
 //      shows one halo rather than none.
-constexpr int THEME_CAPS = 21;
+//  22  a second weight for the Settings wheel's selected row, shipped as its own converted
+//      face (font_settings_sel.bin). Weight is baked into a font rather than something the
+//      device can vary, so bold-when-selected is a second file or it is nothing. An Orb
+//      below this level has no slot to load it into and draws every row in the one weight,
+//      which is what the theme looked like before anybody asked for two.
+constexpr int THEME_CAPS = 22;
 
 struct ClockText {
     bool     show   = false;

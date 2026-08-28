@@ -378,14 +378,16 @@ namespace {
             settings_text::draw_item(lv_label_get_text(items[i]), 233.0f + sx, 233.0f + sy,
                                      lv_color_hex(i == sel ? sg.selColor : sg.itemColor), rowOpa,
                                      i == sel ? sg.selGlow : sg.itemGlow,
-                                     lv_color_hex(i == sel ? sg.selGlowColor : sg.itemGlowColor));
+                                     lv_color_hex(i == sel ? sg.selGlowColor : sg.itemGlowColor),
+                                     i == sel ? theme_font::settings_sel() : theme_font::settings_item());
           } else {
             // No canvas (either it could not be allocated, or the theme asks for no glow
             // so we deliberately skipped it). Draw with plain labels, but still using the
             // THEME's font and colours: the canvas only ever added glow on top of those,
             // and falling back to the stock font stepping made a themed device suddenly
             // render Settings in the wrong size and weight.
-            lv_obj_set_style_text_font(items[i], theme_font::settings_item(), 0);
+            lv_obj_set_style_text_font(items[i],
+                i == sel ? theme_font::settings_sel() : theme_font::settings_item(), 0);
             lv_obj_set_style_text_opa(items[i], rowOpa, 0);
             lv_obj_set_style_text_color(items[i],
                 lv_color_hex(i == sel ? theme_style::settings().selColor

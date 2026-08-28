@@ -41,6 +41,11 @@ const lv_font_t *menu_current();
 const lv_font_t *menu_prev();
 const lv_font_t *menu_next();
 const lv_font_t *settings_item();
+// The selected row, which a theme may set to a different WEIGHT from the rest. Weight is
+// baked into a converted face rather than something the device can vary, so a second
+// weight means a second file; a theme that wants one weight ships one and this returns the
+// same face as settings_item(). See THEME_CAPS 22.
+const lv_font_t *settings_sel();
 const lv_font_t *radar_text(int idx);      // idx 0..3, clamped
 // The Headlines screen's four text slots. Each returns nullptr-free: the theme's face when
 // one loaded, LV_FONT_DEFAULT otherwise. A caller that also has a SIZE to honour should

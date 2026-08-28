@@ -34,7 +34,7 @@ struct Asset { const char *name; bool alpha; };
 const char *FONT_ASSETS[] = {
     "font_menu_current.bin", "font_menu_prev.bin", "font_menu_next.bin",
     "font_clock1.bin", "font_clock2.bin",
-    "font_settings.bin",
+    "font_settings.bin", "font_settings_sel.bin",
     "font_radar1.bin", "font_radar2.bin", "font_radar3.bin", "font_radar4.bin",
 };
 constexpr size_t FONT_ASSET_N = sizeof(FONT_ASSETS) / sizeof(FONT_ASSETS[0]);

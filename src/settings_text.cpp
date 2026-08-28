@@ -153,10 +153,12 @@ void begin_frame() {
 }
 
 void draw_item(const char *str, float x, float y, lv_color_t color, lv_opa_t opa,
-               int glow, lv_color_t glowCol) {
+               int glow, lv_color_t glowCol, const lv_font_t *font) {
 #if CUSTOM_HAS_SETTINGS
     if (!s_canvas || !str || !str[0] || opa == 0) return;
-    const lv_font_t *font = theme_font::settings_item();
+    // The face is the caller's now: the selected row may be a different WEIGHT, which is a
+    // different converted file, and only the caller knows which row this is.
+    if (!font) font = theme_font::settings_item();
     const int n = (int)strlen(str), cap = n < 40 ? n : 40;
     float w[40], total = 0.0f;
     for (int i = 0; i < cap; ++i) {

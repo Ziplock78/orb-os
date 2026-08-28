@@ -70,7 +70,7 @@ bool        s_ready = false;
 int         s_loaded = 0;
 
 // One slot per place a theme can style text. Order matches the accessors below.
-enum Slot { S_CLOCK1, S_CLOCK2, S_MENU_CUR, S_MENU_PREV, S_MENU_NEXT, S_SETTINGS,
+enum Slot { S_CLOCK1, S_CLOCK2, S_MENU_CUR, S_MENU_PREV, S_MENU_NEXT, S_SETTINGS, S_SETTINGS_SEL,
             S_RADAR1, S_RADAR2, S_RADAR3, S_RADAR4,
             S_INTEL_TITLE, S_INTEL_TEXT, S_INTEL_SOURCE, S_INTEL_AGE, S_COUNT };
 
@@ -79,7 +79,7 @@ enum Slot { S_CLOCK1, S_CLOCK2, S_MENU_CUR, S_MENU_PREV, S_MENU_NEXT, S_SETTINGS
 const char *SLOT_FILE[S_COUNT] = {
     "font_clock1.bin", "font_clock2.bin",
     "font_menu_current.bin", "font_menu_prev.bin", "font_menu_next.bin",
-    "font_settings.bin",
+    "font_settings.bin", "font_settings_sel.bin",
     "font_radar1.bin", "font_radar2.bin", "font_radar3.bin", "font_radar4.bin",
     "font_intel_title.bin", "font_intel_text.bin", "font_intel_source.bin", "font_intel_age.bin",
 };
@@ -100,6 +100,10 @@ const lv_font_t *compiled(Slot s) {
         case S_MENU_PREV: return CUSTOM_MENU_PREV_FONT;
         case S_MENU_NEXT: return CUSTOM_MENU_NEXT_FONT;
         case S_SETTINGS:  return CUSTOM_SETTINGS_FONT;
+        // The selected row falls back to the same compiled face as the rest. A theme that
+        // does not ask for a second weight ships no second file, and this slot then IS the
+        // other one: same face, same size, same weight, and nothing on screen changes.
+        case S_SETTINGS_SEL: return CUSTOM_SETTINGS_FONT;
 #if CUSTOM_HAS_RTEXT1
         case S_RADAR1: return CUSTOM_RTEXT1_FONT;
 #endif
@@ -172,6 +176,14 @@ const lv_font_t *menu_current()  { return get(S_MENU_CUR); }
 const lv_font_t *menu_prev()     { return get(S_MENU_PREV); }
 const lv_font_t *menu_next()     { return get(S_MENU_NEXT); }
 const lv_font_t *settings_item() { return get(S_SETTINGS); }
+// Falls back to the LIST's face, NOT through get() to the compiled one.
+//
+// get() answers "this slot's file, or what the firmware was built with", which is right for
+// every slot that stands alone. This one does not: a theme wanting a single weight ships
+// only font_settings.bin, and the selected row has to be THAT face. Through get() it would
+// have been the compiled stock face instead, so every theme in existence would have drawn
+// one row of its Settings list in the wrong typeface the moment this slot was added.
+const lv_font_t *settings_sel()  { return s_font[S_SETTINGS_SEL] ? s_font[S_SETTINGS_SEL] : settings_item(); }
 // The Headlines screen had no slots at all until THEME_CAPS 15 and drew compiled
 // Montserrat throughout, which made it the one screen whose type a design could not touch.
 // Its compiled fallback is deliberately LV_FONT_DEFAULT rather than a CUSTOM_* macro: no
