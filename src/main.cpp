@@ -1,4 +1,4 @@
-// Capsule Radar — entry point / glue. SKELETON: TODOs mark what to implement.
+// The Orb OS — entry point / glue. SKELETON: TODOs mark what to implement.
 // Order of work is in CLAUDE.md (milestones). Bring up the Waveshare demo first.
 #include <Arduino.h>
 #include <WiFi.h>
@@ -1317,7 +1317,7 @@ static void handleRoot() {
     snprintf(buf, BUFSZ,
         "<!DOCTYPE html><html><head><meta charset=utf-8>"
         "<meta name=viewport content='width=device-width,initial-scale=1'>"
-        "<title>Capsule Radar</title>"
+        "<title>The Orb OS</title>"
         "<link rel=stylesheet href='https://unpkg.com/leaflet@1.9.4/dist/leaflet.css'>"
         "<script src='https://unpkg.com/leaflet@1.9.4/dist/leaflet.js'></script>"
         "<style>"
@@ -1344,7 +1344,7 @@ static void handleRoot() {
         ".sec{background:#0c1a12!important;color:#1dff86!important;border:1px solid #2a4a39!important}"
         "#map{height:220px;border-radius:10px;margin:6px 0 8px;border:1px solid #2a4a39;z-index:0}"
         "</style></head><body>"
-        "<div class=hd><div class=dot></div><div><h1>Capsule Radar</h1><p class=sub>Live ADS-B radar &middot; configuration</p></div></div>"
+        "<div class=hd><div class=dot></div><div><h1>The Orb OS</h1><p class=sub>Live ADS-B radar &middot; configuration</p></div></div>"
         "<div class=card><div class=t>Location &amp; range</div><form method=POST action=/save>"
         "<label>Center point &mdash; tap the map or drag the pin</label>"
         "<div id=map></div>"
@@ -1700,7 +1700,7 @@ static void handleUpdatePage() {
     g_web.send(200, "text/html",
         "<!DOCTYPE html><html><head><meta charset=utf-8>"
         "<meta name=viewport content='width=device-width,initial-scale=1'>"
-        "<title>Capsule Radar - Update</title><style>"
+        "<title>The Orb OS - Update</title><style>"
         "body{background:radial-gradient(circle at 50% -10%,#0a1f15,#04100a 70%);color:#cdd6d1;"
         "font-family:system-ui,sans-serif;margin:0 auto;padding:20px;max-width:480px;min-height:100vh}"
         "h1{color:#1dff86;font-size:20px}.card{background:rgba(10,20,14,.85);border:1px solid #1f3a2b;border-radius:14px;padding:16px}"
@@ -2028,7 +2028,7 @@ void setup() {
     Serial.setRxBufferSize(4096);
     Serial.begin(115200);
     delay(200);
-    Serial.println("\nCapsule Radar boot");
+    Serial.println("\nThe Orb OS boot");
     orb_link::begin();
     orb_link::setThemeRequestHook(request_theme_switch);
     diag::boot();   // print + continue the RTC-memory event history across this reboot
@@ -2296,7 +2296,7 @@ void setup() {
     // First boot opens the "The Orb Setup" AP to enter WiFi creds. Non-blocking
     // so the radar keeps animating while you configure WiFi from your phone.
     g_wm.setConfigPortalBlocking(false);
-    g_wm.setTitle("Capsule Radar");
+    g_wm.setTitle("The Orb OS");
     // light phosphor-green theme for the captive portal (small CSS, injected into <head>)
     g_wm.setCustomHeadElement(
         "<style>"

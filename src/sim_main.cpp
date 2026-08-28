@@ -1,4 +1,4 @@
-// Native (Mac/Linux) LVGL simulator for Capsule Radar.
+// Native (Mac/Linux) LVGL simulator for The Orb OS.
 // Runs the SAME LVGL UI (include/lv_conf.h + ui_boot) in an SDL2 window — no
 // hardware, no Arduino_GFX. Only compiled for the `native` PlatformIO env.
 //
@@ -743,7 +743,7 @@ int main(int argc, char **argv) {
     }
     // Open in the top-left corner (small margin so the title bar clears the macOS
     // menu bar) rather than centred, so it doesn't hide behind the browser.
-    s_win = SDL_CreateWindow("Capsule Radar (sim)",
+    s_win = SDL_CreateWindow("The Orb OS (sim)",
                              24, 44,
                              reqW, reqH, SDL_WINDOW_ALLOW_HIGHDPI);
     s_ren = SDL_CreateRenderer(s_win, -1, SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
@@ -853,7 +853,7 @@ int main(int argc, char **argv) {
     if (interactive) app_shell::selectApp(app_shell::APP_FLIGHT);
 #endif
     if (interactive) build_updating_overlay();
-    printf("[sim] Capsule Radar simulator running (%dx%d) with 6 mock aircraft.\n", SIM_W, SIM_H);
+    printf("[sim] The Orb OS simulator running (%dx%d) with 6 mock aircraft.\n", SIM_W, SIM_H);
     if (interactive)
         printf("[sim] controls: click Scroll left / Select / Scroll right (or arrows + Enter). T = theme, Esc = quit\n");
 
@@ -1138,7 +1138,11 @@ int main(int argc, char **argv) {
         // simulator that stutters for the length of one HTTP request is a fair trade for one
         // that can show what the screen really does; the alternative is a thread this file
         // has no other reason to own.
-        {
+        //
+        // Only when the apps were actually registered. The headless capture modes put a
+        // single screen up directly and never build the shell, so there is nothing here for
+        // a fetched headline to be drawn into, and no reason to spend the request.
+        if (interactive || newsShot) {
             static Uint32 lastNet = 0;
             if (now - lastNet > 400) {
                 lastNet = now;

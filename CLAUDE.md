@@ -1,4 +1,14 @@
-# Capsule Radar (formerly "Plane Radar 2.0") — CLAUDE.md
+# The Orb OS — CLAUDE.md
+
+> Named Capsule Radar until August 2026, and Plane Radar 2.0 before that. The rename
+> is display-only: the NVS namespace is still `capsuleradar` and always will be, the
+> mDNS name is still `capsuleradar.local`, and the repo folder is still `capsule-radar`.
+> See the note on the namespace in main.cpp before touching any of those.
+>
+> `README.md`, `docs/LISTING.md` and `docs/MAKERWORLD.md` are INHERITED from the
+> upstream project and still describe Quique Tortosa's flight-radar gadget rather than
+> The Orb. Do not rename them into Orb documents: several references in them are
+> correctly about upstream, including a third party's port that carries its own name.
 
 Master context for Claude Code. Read this first, then `docs/` for detail.
 

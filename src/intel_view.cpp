@@ -378,6 +378,16 @@ void set_fade(int row, bool cropped, int w, int lastLineTop, int lineH) {
 // merged: with scrolling, which items the row widgets hold and where the rows sit are
 // one decision, not two.
 void render() {
+    // Nothing to draw into until init() has built it.
+    //
+    // Every widget on this screen is null before then, and the empty-state branch below
+    // writes to s_age without asking. That was unreachable while the only caller was the
+    // app shell, which cannot show a screen it never registered. It stopped being
+    // unreachable when the simulator started running the network step in its main loop:
+    // --shot mode registers no apps at all, so init() never ran, the fetch landed anyway,
+    // and the process died on the first repaint. One guard here rather than a condition at
+    // each call site, because the next caller will not know to add one either.
+    if (!s_screen) return;
     const theme_style::Intel &cfg = theme_style::intel();
     uint32_t fetchedMs = 0;
     int total = 0;

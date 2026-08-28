@@ -3,10 +3,16 @@ MIT License
 Copyright (c) 2026 Quique Tortosa (socquique)
 Copyright (c) 2026 Zion Brock (Ziplock78)
 
-This project began as a fork of Quique Tortosa's Capsule Radar. The original
-copyright above is retained, as MIT requires. Substantial later work is Zion
-Brock's: the clock, menu, settings and startup screens, the SD-card theme
-engine, the Orb Studio serial and WiFi protocols, and the flash art pipeline.
+The Orb OS began as a fork of Quique Tortosa's Capsule Radar, and was called
+Capsule Radar itself until August 2026. The original copyright above is
+retained, as MIT requires. Substantial later work is Zion Brock's: the clock,
+menu, settings, news and startup screens, the SD-card theme engine, the Orb
+Studio serial and WiFi protocols, and the flash art pipeline.
+
+The rename does not change any of the above. MIT permits modifying and
+renaming, and says nothing about what a derived work may be called; what it
+requires is that this notice travels with the software, which it does. The
+lineage is recorded here precisely BECAUSE the name no longer carries it.
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal

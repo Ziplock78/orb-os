@@ -1,5 +1,5 @@
 #pragma once
-// Capsule Radar — build & user configuration.
+// The Orb OS — build & user configuration.
 
 // Bump this whenever a build goes out that a device could be BEHIND. That is not only
 // releases: 1.4.2 sat still through the Intel screen being rebuilt, an app being deleted,
@@ -7,7 +7,7 @@
 // "1.4.2", said "up to date", and left an Orb missing everything in that list. THEME_CAPS
 // exists because this stopped moving; it covers theme settings and nothing else, so a new
 // command or a deleted screen is invisible to it. Move this too.
-#define FW_VERSION "1.33.0"   // shown on the web config page + Stats screen
+#define FW_VERSION "1.34.0"   // shown on the web config page + Stats screen
 // Edit pins below: replace every -1 with the value from the Waveshare factory demo
 // (see docs/HARDWARE.md and docs/SETUP.md). Do NOT guess them.
 

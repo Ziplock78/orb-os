@@ -58,7 +58,7 @@ void repaint() {
     memset(s_buf, 0, CANVAS_BYTES);          // fully transparent; the picture shows through
     const theme_style::Splash &sp = theme_style::splash();
     char ver[48];
-    snprintf(ver, sizeof(ver), "Capsule Radar v%s", FW_VERSION);
+    snprintf(ver, sizeof(ver), "The Orb OS v%s", FW_VERSION);
     one_line(sp.version, ver);
     one_line(sp.network, s_net);
     // Two sources, two lines. draw_straight lays one line, so the newline is walked here
