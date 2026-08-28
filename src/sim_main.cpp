@@ -462,8 +462,21 @@ static void mock_init() {
     // to the repo, same "/roads/r{lat}_{lon}.bin" tile layout tools/gen_road_tiles.py
     // writes for the real card, so the simulator and the Orb behave identically.
     roads_sd::set_root("sim/sdcard");
+    // ORBLAT / ORBLON put the simulator somewhere else for one run:
+    //
+    //   ORBLAT=27.95 ORBLON=-82.46 .pio/build/native/program --wxshot out
+    //
+    // Added because the weather radar cannot be checked from a place with no weather. The
+    // owner's Orb sits in Phoenix, which in August is reliably clear, so "does the
+    // precipitation draw, animate and tell heavy from light" was untestable on the only
+    // hardware there is. RainViewer is global and the simulator fetches the same tiles the
+    // device does, so pointing it at a storm answers the question honestly.
     g_set.homeLat = SIM_HOME_LAT;
     g_set.homeLon = SIM_HOME_LON;
+    if (const char *e = getenv("ORBLAT")) g_set.homeLat = atof(e);
+    if (const char *e = getenv("ORBLON")) g_set.homeLon = atof(e);
+    if (getenv("ORBLAT") || getenv("ORBLON"))
+        printf("[sim] home overridden to %.4f, %.4f\n", g_set.homeLat, g_set.homeLon);
     g_set.rangeKm = RANGE_KM_DEFAULT;
 #if CUSTOM_HAS_RADAR_RANGE
     g_set.rangeKm = CUSTOM_RADAR_RANGE_KM;   // a pushed design's own Range slider, matching main.cpp
@@ -814,7 +827,10 @@ int main(int argc, char **argv) {
     }
     weather_store(forecast);   // still-mock forecast panel (multi-day temps) — not the radar image itself
     wx_radar_begin();
-    sim_refresh_weather(SIM_HOME_LAT, SIM_HOME_LON);   // real RainViewer fetch, see above
+    // g_set, not the compiled constants: ORBLAT/ORBLON override it, and the weather fetch
+    // has to follow the home the rest of the simulator is using or the override silently
+    // moves the map and not the weather.
+    sim_refresh_weather(g_set.homeLat, g_set.homeLon);   // real RainViewer fetch, see above
     // Representative Meteosat-style mock. The native simulator doesn't yet have a native
     // JPEG decode path (TJpg_Decoder pulls in Arduino.h), so unlike the rain radar above,
     // this satellite/cloud view is still a placeholder — populate the shared satellite
