@@ -257,7 +257,24 @@ static int load_frame_list(void) {
     JsonArrayConst past = doc["radar"]["past"].as<JsonArrayConst>();
     if (!host[0] || past.size() == 0) { Serial.println("[wxradar] no radar frames"); return 0; }
 
-    snprintf(s_host, sizeof(s_host), "%s", host);
+    // FORCE PLAIN HTTP, whatever the index says.
+    //
+    // RainViewer's weather-maps.json returns "host": "https://tilecache.rainviewer.com",
+    // and this used to copy it verbatim. Every tile request was therefore an https:// URL
+    // handed to https_get_string, which despite its name opens a plain WiFiClient, because
+    // this board cannot do TLS at all: it cannot raise the two contiguous ~16 KB internal
+    // blocks a handshake needs, which is why every other feed on this device was moved to
+    // plain HTTP in August.
+    //
+    // So the metadata fetch above succeeded, being hardcoded to http://, and then EVERY
+    // TILE FAILED, silently and forever. The screen showed "UPDATING" and never came off it.
+    //
+    // The tiles are served over plain HTTP by the same host: verified 200 with a real PNG
+    // body. Rewriting the scheme here rather than at the call site means it cannot be
+    // missed if another URL is ever built from s_host.
+    if (!strncmp(host, "https://", 8)) snprintf(s_host, sizeof(s_host), "http://%s", host + 8);
+    else                               snprintf(s_host, sizeof(s_host), "%s", host);
+    Serial.printf("[wxradar] tile host %s\n", s_host);
     const int total = (int)past.size();
     const int avail = total < WX_RADAR_FRAMES ? total : WX_RADAR_FRAMES;
     const int first = total - avail;   // take the newest `avail` frames, keep them time-ordered
