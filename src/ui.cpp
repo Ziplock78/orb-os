@@ -365,7 +365,10 @@ static bool wx_anim_current(const uint16_t **px, uint32_t *ft) {
 // rather than a fast blur. Runs only while the Weather Radar view is on screen and no
 // "UPDATING" overlay is pending. Cheap: swaps the canvas to an already-decoded PSRAM
 // buffer, it does not rebuild the tile.
-static constexpr uint32_t WX_ANIM_STEP_MS = 2000;   // dwell on each intermediate frame
+// One second a frame, which is the cadence he described: an hour of weather going past in
+// six seconds. It was 2000, chosen when there were three frames and the whole loop was
+// eleven seconds; at six frames that would have been twenty-two.
+static constexpr uint32_t WX_ANIM_STEP_MS = 1000;   // dwell on each intermediate frame
 static constexpr uint32_t WX_ANIM_HOLD_MS = 5000;   // dwell on the newest frame before looping
 static void wx_anim_cb(lv_timer_t *t) {
     if (!s_wxCanvas || !s_tv) return;
@@ -991,7 +994,7 @@ void ui_create(void) {
         lv_label_set_text(s_wxUpdateOverlay, b);
     }, 400, nullptr);
 
-    lv_timer_create(wx_anim_cb, WX_ANIM_STEP_MS, nullptr);   // 2s/frame, 5s hold on newest (see wx_anim_cb)
+    lv_timer_create(wx_anim_cb, WX_ANIM_STEP_MS, nullptr);   // 1s/frame, 5s hold on newest (see wx_anim_cb)
 
     s_wxFooter = lv_label_create(wp);
     lv_obj_set_width(s_wxFooter, 360);

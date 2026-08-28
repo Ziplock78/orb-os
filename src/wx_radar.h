@@ -4,7 +4,16 @@
 
 #define WX_RADAR_SIZE 360
 #define WX_RADAR_SOURCE_SIZE 512
-#define WX_RADAR_FRAMES 3        // past ~30 min of precipitation, one frame per ~10 min, cycled for motion.
+#define WX_RADAR_FRAMES 6        // the past hour of precipitation, one frame per ~10 min, cycled for motion.
+                                 // Raised from 3 when the owner asked to watch an hour go by. RainViewer
+                                 // offers 12 to 13 past frames, so the source has always been able to
+                                 // supply it; 3 was a memory decision, not a data one.
+                                 //
+                                 // +3 buffers is +760 KB of PSRAM held permanently. It fits because the
+                                 // Surveillance app, which owns a ~2.5 MB video buffer out of the same
+                                 // pool, now defaults OFF. wx_radar_begin() counts what actually landed
+                                 // and the UI only shows the slots that filled, so an Orb that cannot
+                                 // find room degrades to fewer frames rather than to a blank screen.
                                  // Reduced from 7 to 3 in the lean-weather-radar redesign (see
                                  // docs/lean-weather-radar-redesign.md): each frame is a full 360x360
                                  // RGB565 PSRAM buffer (~253KB) AND each frame is one more tile fetch
