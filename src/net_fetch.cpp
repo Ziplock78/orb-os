@@ -14,8 +14,21 @@ bool net_fetch_psram(const char *url, const char *userAgent,
     *out = nullptr; *outLen = 0;
     if (WiFi.status() != WL_CONNECTED) return false;
 
-    WiFiClientSecure cli;
-    cli.setInsecure();                        // hobby device (matches the other clients)
+    // The transport follows the URL, which it did not used to. This built a
+    // WiFiClientSecure for every call, and a secure client handshakes on connect whatever
+    // the scheme says, so an http:// URL still did TLS and still failed -32512 on a board
+    // that cannot raise the two contiguous ~16 KB internal blocks a handshake needs.
+    //
+    // Every caller of this helper was therefore dead for the same reason and it looked
+    // like several separate faults: the weather radar's tiles, the photo feed and the
+    // cloud imagery were each written off as "that service forces HTTPS" when the force
+    // was here. An https:// URL still gets a secure client and will still fail, which is
+    // honest, and the log below says which one it was.
+    const bool secure = !strncmp(url, "https://", 8);
+    WiFiClient plain;
+    WiFiClientSecure tls;
+    if (secure) tls.setInsecure();            // hobby device (matches the other clients)
+    WiFiClient &cli = secure ? static_cast<WiFiClient &>(tls) : plain;
     HTTPClient http;
     http.setReuse(false);
     http.setConnectTimeout(connectTimeoutMs);
@@ -24,7 +37,10 @@ bool net_fetch_psram(const char *url, const char *userAgent,
     if (userAgent) http.setUserAgent(userAgent);
 
     const int code = http.GET();
-    if (code != 200) { Serial.printf("[net] HTTP %d\n", code); http.end(); return false; }
+    if (code != 200) {
+        Serial.printf("[net] HTTP %d over %s: %s\n", code, secure ? "TLS" : "plain", url);
+        http.end(); return false;
+    }
 
     const int len = http.getSize();           // >0 = Content-Length; -1 = chunked/unknown
     uint8_t *buf = nullptr;

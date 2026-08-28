@@ -213,9 +213,21 @@ static int radar_png_line(PNGDRAW *draw) {
 // allocation failed" (-32512) / stuck "Updating..." symptom. Opening fresh and closing
 // here releases that RAM between the ~5-min refreshes, giving every feed a fair window.
 #ifdef ARDUINO
-static bool https_get_string(const char *url, std::string &body, int timeoutMs) {
-    WiFiClientSecure client;
-    client.setInsecure();
+static bool http_get_string(const char *url, std::string &body, int timeoutMs) {
+    // PLAIN, and named plainly. This built a WiFiClientSecure unconditionally, which
+    // handshakes on connect whatever the URL scheme says, so every call was a TLS attempt
+    // and every one failed -32512 on a board that cannot raise the two contiguous ~16 KB
+    // internal blocks a handshake needs.
+    //
+    // 1.44 rewrote the tile HOST from https:// to http:// and left this alone, so the
+    // screen still never came off "UPDATING": the scheme in the string was right and the
+    // transport underneath it was still TLS. The old name is most of why, it read as
+    // settled and the fix went looking somewhere else.
+    if (!strncmp(url, "https://", 8)) {
+        Serial.printf("[wxradar] refusing %s: this board cannot do TLS at all\n", url);
+        return false;
+    }
+    WiFiClient client;
     HTTPClient http;
     http.setReuse(false);
     http.setConnectTimeout(3500);
@@ -224,10 +236,11 @@ static bool https_get_string(const char *url, std::string &body, int timeoutMs) 
     http.addHeader("User-Agent", ADSB_USER_AGENT);
     const int status = http.GET();
     if (status != 200) {
-        char tls[128] = "";
-        const int tlsCode = client.lastError(tls, sizeof(tls));
-        Serial.printf("[wxradar] HTTP %d tls=%d '%s' heap=%u largest=%u psram=%u\n",
-                      status, tlsCode, tls, (unsigned)ESP.getFreeHeap(),
+        // No TLS error to report any more: there is no TLS. What used to print here was
+        // always -32512 'SSL - Memory allocation failed', which named the symptom of using
+        // a secure client at all rather than anything about the request.
+        Serial.printf("[wxradar] HTTP %d for %s heap=%u largest=%u psram=%u\n",
+                      status, url, (unsigned)ESP.getFreeHeap(),
                       (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL),
                       (unsigned)ESP.getFreePsram());
         http.end(); return false;
@@ -238,7 +251,7 @@ static bool https_get_string(const char *url, std::string &body, int timeoutMs) 
     return !body.empty();
 }
 #else
-static bool https_get_string(const char *url, std::string &body, int timeoutMs) {
+static bool http_get_string(const char *url, std::string &body, int timeoutMs) {
     return native_https_get(url, ADSB_USER_AGENT, body, timeoutMs);
 }
 #endif
@@ -248,7 +261,7 @@ static bool https_get_string(const char *url, std::string &body, int timeoutMs) 
 // (0 on failure).
 static int load_frame_list(void) {
     std::string meta;
-    if (!https_get_string("http://api.rainviewer.com/public/weather-maps.json", meta, 6500)) {
+    if (!http_get_string("http://api.rainviewer.com/public/weather-maps.json", meta, 6500)) {
         Serial.println("[wxradar] metadata fetch failed"); return 0;
     }
     JsonDocument doc;
@@ -261,7 +274,7 @@ static int load_frame_list(void) {
     //
     // RainViewer's weather-maps.json returns "host": "https://tilecache.rainviewer.com",
     // and this used to copy it verbatim. Every tile request was therefore an https:// URL
-    // handed to https_get_string, which despite its name opens a plain WiFiClient, because
+    // handed to a helper that ALWAYS opened a secure client, whatever the scheme said, because
     // this board cannot do TLS at all: it cannot raise the two contiguous ~16 KB internal
     // blocks a handshake needs, which is why every other feed on this device was moved to
     // plain HTTP in August.
