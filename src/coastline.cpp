@@ -140,7 +140,7 @@ size_t geo_project_polylines_flat(const int16_t *srcPts, int srcNumPolys, const 
     // spycamview::init()'s one-time world projection into a many-second stall at boot
     // (found live: boot hung between "[knob] ready" and "[shell] app 1/6" after this
     // filter was first dropped during the segment-clipping rewrite). Local datasets like
-    // roads.h are already small enough that this reject rarely fires, so it's free there.
+    // the road tiles are already small enough that this reject rarely fires, so it's free there.
     const double rangeDeg  = rangeKm / 111.0;
     const double latMargin = rangeDeg * 1.20;
     const double cosLat    = cos(centerLat * M_PI / 180.0);
@@ -173,7 +173,7 @@ size_t geo_project_polylines_flat(const int16_t *srcPts, int srcNumPolys, const 
     // survive the bbox reject. In a dense metro area a long run of consecutive survivors
     // can pack thousands of full-trig points between yields — at the old value of 2000 that
     // worst-case run measured close enough to the 5s watchdog limit that it started tripping
-    // and rebooting (backtrace: adsb_task -> wx_radar_fetch_frame -> roads_project_flat ->
+    // and rebooting (backtrace: adsb_task -> wx_radar_fetch_frame -> the road projection ->
     // sin). 256 keeps the gap between yields comfortably sub-second even in the densest
     // region, at the cost of only a fraction of a second more on the one-time projection.
     size_t yieldCounter = 0;

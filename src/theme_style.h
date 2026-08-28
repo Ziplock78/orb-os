@@ -192,7 +192,11 @@ namespace theme_style {
 //      Tracker's sweep OBJECT outright, so it wore the Flight Tracker's artwork. An Orb
 //      below this level ignores the file and draws the weather map as it always did, which
 //      is with no sweep at all.
-constexpr int THEME_CAPS = 23;
+//  24  a coastline on the weather map, and a road colour that is finally the theme's own.
+//      The weather map drew roads at a hard-coded grey and had no coastline at all, so a
+//      theme could set roadColor and roadsEnabled and watch neither do anything. An Orb
+//      below this level draws no coastline and keeps the fixed grey.
+constexpr int THEME_CAPS = 24;
 
 struct ClockText {
     bool     show   = false;
@@ -382,6 +386,11 @@ struct Weather {
     bool     ringsEnabled    = true;
     uint32_t roadColor       = 0x4A4A4A;
     bool     roadsEnabled    = true;
+    // The coastline, on its own switch and its own colour. Roads are worldwide now, but a
+    // shoreline is what makes a place recognisable on a map this small: on the Florida
+    // peninsula the roads alone read as scribble until the coast puts them somewhere.
+    uint32_t coastColor      = 0x2B4A63;
+    bool     coastEnabled    = true;
 };
 
 struct Radar {

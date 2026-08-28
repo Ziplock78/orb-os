@@ -42,6 +42,16 @@ void init();
 void project(double homeLat, double homeLon, double rangeKm,
             float cx, float cy, float rOuterPx);
 
+// The same roads projected into buffers the CALLER owns, for a screen drawing at its own
+// size. Mirrors coastline_project_flat() beside coastline_project(). Returns the polyline
+// count; `ok` reports whether a projection actually ran, which is not the same as finding
+// nothing, so a caller that caches per location does not record an empty result for a cycle
+// that was locked out or short of memory.
+size_t project_flat(double lat, double lon, double rangeKm,
+                    float cx, float cy, float rOuterPx,
+                    lv_point_t *outPts, size_t maxPts,
+                    uint16_t *outPolyLen, size_t maxPolys, bool &ok);
+
 // Draw whatever's currently cached. Cheap — no file I/O, mirrors coastline_draw().
 void draw(lv_draw_ctx_t *ctx, lv_color_t color, lv_opa_t opa, lv_coord_t width);
 

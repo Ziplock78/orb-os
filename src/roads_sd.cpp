@@ -8,6 +8,8 @@
 #include <Arduino.h>
 #include <SD.h>
 #include <esp_heap_caps.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/semphr.h>
 #include "sdcard.h"
 #else
 #include <string>
@@ -53,6 +55,37 @@ constexpr size_t MAX_POLYS = 15000;   // output polylines (~30KB)
 // Per-tile scratch, reused for every tile (never the whole tile at once):
 constexpr size_t MAX_TILE_POLYS = 16000;  // a tile's polyLen[] table (~32KB)
 constexpr size_t MAX_LINE_PTS   = 2048;   // points in one polyline before project (~8KB)
+
+// WHERE a projection is being accumulated. project() aims this at the module's own cache;
+// project_flat() aims it at the caller's buffers. One streamer, two destinations, so the
+// flight scope and the weather map cannot drift in what they read off the same card.
+struct Sink {
+    lv_point_t *pts;
+    uint16_t   *polyLen;
+    size_t      maxPts;
+    size_t      maxPolys;
+    size_t      numPts   = 0;
+    size_t      numPolys = 0;
+};
+
+// Both callers -- the scope, and the weather map -- run on the UI thread, and they must
+// keep doing so: this reads the SD card, and the Arduino SD driver cannot be called from two
+// tasks at once. read_exact() also funnels every read through one shared 4 KB static and
+// copies out of it, so two readers here would quietly hand each other's bytes back as road
+// geometry even if the driver survived it.
+//
+// The lock is not what makes that safe; being on one thread is. It is here so that a caller
+// added later on another task degrades to "no roads this cycle" -- the same answer this
+// module already gives for a missing tile or tight PSRAM -- instead of corrupting the map or
+// deadlocking the card. The timeout means it can never become a place to hang.
+#ifdef ARDUINO
+SemaphoreHandle_t s_lock = nullptr;
+bool lock()   { if (!s_lock) return true; return xSemaphoreTake(s_lock, pdMS_TO_TICKS(250)) == pdTRUE; }
+void unlock() { if (s_lock) xSemaphoreGive(s_lock); }
+#else
+bool lock()   { return true; }   // the simulator projects from one thread
+void unlock() {}
+#endif
 
 lv_point_t *s_pts      = nullptr;   // output points  (PSRAM, boot-reserved)
 uint16_t   *s_polyLen  = nullptr;   // output polyline lengths (PSRAM)
@@ -122,6 +155,9 @@ void set_root(const char *root) { s_simRoot = root; }
 #endif
 
 void init() {
+#ifdef ARDUINO
+    if (!s_lock) s_lock = xSemaphoreCreateMutex();
+#endif
     const bool ok = ensure_buffers();
 #ifdef ARDUINO
     Serial.printf("[roads_sd] init: buffers %s (PSRAM free %u)\n",
@@ -136,7 +172,7 @@ void init() {
 // as it arrives so only one polyline is ever held in RAM. Returns silently on
 // any malformed/short read (missing tiles are normal near the edge of coverage).
 static void stream_tile(const char *path, double homeLat, double homeLon,
-                        double rangeKm, float cx, float cy, float rOuterPx) {
+                        double rangeKm, float cx, float cy, float rOuterPx, Sink &out) {
     TileFile h;
     if (!th_open(path, h)) return;
 
@@ -150,7 +186,7 @@ static void stream_tile(const char *path, double homeLat, double homeLon,
     if (!read_exact(h, (uint8_t *)s_tPolyLen, (size_t)numPolys * 2)) { th_close(h); return; }
 
     for (uint16_t i = 0; i < numPolys; ++i) {
-        if (s_numPolys >= MAX_POLYS || s_numPts >= MAX_PTS) break;   // output full
+        if (out.numPolys >= out.maxPolys || out.numPts >= out.maxPts) break;   // output full
         uint16_t n = s_tPolyLen[i];
         if (n == 0) continue;
         if (n > MAX_LINE_PTS) { read_exact(h, nullptr, (size_t)n * 4); continue; }  // skip, stay aligned
@@ -162,12 +198,12 @@ static void stream_tile(const char *path, double homeLat, double homeLon,
         const size_t got = geo_project_polylines_flat(
             s_tPts, 1, &n, 180,
             homeLat, homeLon, rangeKm, cx, cy, rOuterPx,
-            s_pts + s_numPts, MAX_PTS - s_numPts,
-            s_polyLen + s_numPolys, MAX_POLYS - s_numPolys);
+            out.pts + out.numPts, out.maxPts - out.numPts,
+            out.polyLen + out.numPolys, out.maxPolys - out.numPolys);
         size_t written = 0;
-        for (size_t j = 0; j < got; ++j) written += s_polyLen[s_numPolys + j];
-        s_numPts   += written;
-        s_numPolys += got;
+        for (size_t j = 0; j < got; ++j) written += out.polyLen[out.numPolys + j];
+        out.numPts   += written;
+        out.numPolys += got;
     }
     th_close(h);
 }
@@ -177,25 +213,63 @@ static void stream_tile(const char *path, double homeLat, double homeLon,
 // skips them), so a home near a tile boundary doesn't show a hard cutoff.
 // Called only when home/range changes (see radar_view.cpp), same cadence as
 // coastline_project() — never touches SD/disk per-frame.
+// The home tile plus its eight neighbours, so a location near a tile edge does not show a
+// hard cutoff. Most neighbours simply are not on the card and th_open() skips them.
+static void walk_tiles(double homeLat, double homeLon, double rangeKm,
+                       float cx, float cy, float rOuterPx, Sink &out) {
+    const long latFloor = tile_floor(homeLat, ROAD_TILE_GRID_DEG);
+    const long lonFloor = tile_floor(homeLon, ROAD_TILE_GRID_DEG);
+    for (int dy = -1; dy <= 1; ++dy) {
+        for (int dx = -1; dx <= 1; ++dx) {
+            if (out.numPts >= out.maxPts || out.numPolys >= out.maxPolys) return;  // full
+            char path[48];
+            snprintf(path, sizeof(path), "/roads/r%ld_%ld.bin",
+                    latFloor + dy * (long)ROAD_TILE_GRID_DEG,
+                    lonFloor + dx * (long)ROAD_TILE_GRID_DEG);
+            stream_tile(path, homeLat, homeLon, rangeKm, cx, cy, rOuterPx, out);
+        }
+    }
+}
+
 void project(double homeLat, double homeLon, double rangeKm,
             float cx, float cy, float rOuterPx) {
     s_numPts = 0;
     s_numPolys = 0;
     if (rangeKm <= 0) return;
     if (!ensure_buffers()) return;   // PSRAM tight — draw nothing, never crash
+    if (!lock()) return;             // the other task is mid-read — keep the empty cache
+    Sink out { s_pts, s_polyLen, MAX_PTS, MAX_POLYS };
+    walk_tiles(homeLat, homeLon, rangeKm, cx, cy, rOuterPx, out);
+    unlock();
+    s_numPts   = out.numPts;
+    s_numPolys = out.numPolys;
+}
 
-    const long latFloor = tile_floor(homeLat, ROAD_TILE_GRID_DEG);
-    const long lonFloor = tile_floor(homeLon, ROAD_TILE_GRID_DEG);
-    for (int dy = -1; dy <= 1; ++dy) {
-        for (int dx = -1; dx <= 1; ++dx) {
-            if (s_numPts >= MAX_PTS || s_numPolys >= MAX_POLYS) return;  // cache full
-            char path[48];
-            snprintf(path, sizeof(path), "/roads/r%ld_%ld.bin",
-                    latFloor + dy * (long)ROAD_TILE_GRID_DEG,
-                    lonFloor + dx * (long)ROAD_TILE_GRID_DEG);
-            stream_tile(path, homeLat, homeLon, rangeKm, cx, cy, rOuterPx);
-        }
-    }
+// The same worldwide roads, projected into buffers the CALLER owns, for a screen with its
+// own geometry. Mirrors coastline_project_flat() beside coastline_project(): the scope keeps
+// the cached form because it redraws from it constantly, and anything drawing at a different
+// size gets its own copy rather than fighting over one.
+//
+// The weather map is why this exists. It used to read a separate flash-baked extract that
+// covered Arizona and nothing else, so every Orb outside that box drew no roads at all while
+// still paying to project ~20,000 polylines that all landed off-screen.
+//
+// `ok` says whether a projection actually ran, which is not the same as whether it found
+// anything: a caller that caches per location must not record "no roads here" for a cycle
+// that was simply locked out or short of memory.
+size_t project_flat(double lat, double lon, double rangeKm,
+                    float cx, float cy, float rOuterPx,
+                    lv_point_t *outPts, size_t maxPts,
+                    uint16_t *outPolyLen, size_t maxPolys, bool &ok) {
+    ok = false;
+    if (rangeKm <= 0 || !outPts || !outPolyLen || !maxPts || !maxPolys) return 0;
+    if (!ensure_buffers()) return 0;
+    if (!lock()) return 0;
+    Sink out { outPts, outPolyLen, maxPts, maxPolys };
+    walk_tiles(lat, lon, rangeKm, cx, cy, rOuterPx, out);
+    unlock();
+    ok = true;
+    return out.numPolys;
 }
 
 void draw(lv_draw_ctx_t *ctx, lv_color_t color, lv_opa_t opa, lv_coord_t width) {

@@ -34,6 +34,12 @@ void wx_radar_begin(void);   // take the frame buffers
 // Give them back. MUST be called from the network task only: see the note in wx_radar.cpp.
 // The UI asks for this by flag; it never calls it.
 void wx_radar_release(void);
+
+// Build the map under the weather (major roads and the shoreline) for this centre and zoom.
+// CALL THIS FROM THE UI THREAD ONLY: it reads the SD card, and the Arduino SD driver cannot
+// be called from two tasks at once. Cheap to call repeatedly — it returns immediately unless
+// the centre or zoom actually moved.
+void wx_map_prepare(double lat, double lon, int tier);
 bool wx_radar_ready(void);   // true while the buffers exist, so a fetch has somewhere to go
 uint16_t *wx_radar_back_buffer(void);                    // scratch: the client decodes one frame here
 

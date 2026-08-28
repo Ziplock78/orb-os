@@ -440,6 +440,8 @@ void load() {
             if (doc["ringsEnabled"].is<bool>()) s_weather.ringsEnabled = doc["ringsEnabled"].as<bool>();
             if (doc["roadColor"].is<uint32_t>()) s_weather.roadColor = doc["roadColor"].as<uint32_t>();
             if (doc["roadsEnabled"].is<bool>()) s_weather.roadsEnabled = doc["roadsEnabled"].as<bool>();
+            if (doc["coastColor"].is<uint32_t>()) s_weather.coastColor = doc["coastColor"].as<uint32_t>();
+            if (doc["coastEnabled"].is<bool>()) s_weather.coastEnabled = doc["coastEnabled"].as<bool>();
         }
     }
     {

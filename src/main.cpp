@@ -768,6 +768,10 @@ static void radar_show_home()    { ui_show_view(0); }
 static void radar_show_weather() {
     g_wxClosed = false;
     g_wxOpened = true;
+    // The map under the weather is built HERE, on the UI thread, because it reads road tiles
+    // off the SD card and the driver cannot take that from two tasks at once. The network
+    // task only ever blits the finished masks. Returns immediately if this centre is built.
+    wx_map_prepare(g_settings.homeLat, g_settings.homeLon, g_wxZoomTier);
     ui_show_view(1);   // tile 1 since list/stats went
 }
 
@@ -1465,17 +1469,41 @@ static void handleRoot() {
     g_web.send(200, "text/html", buf);
 }
 
+// Nothing here used to say anything, in either direction. The page answered "Saved.
+// Restarting..." and restarted whether or not a single value had been written, so a save
+// that silently did nothing was indistinguishable from one that worked, and the only clue
+// was the setting still being on its old value afterwards.
+//
+// Every branch reports itself now, and putDouble's return is actually read: it is a byte
+// count, and zero means the store refused the write.
 static void handleSave() {
     Preferences p;
-    p.begin("capsuleradar", false);
+    if (!p.begin("capsuleradar", false)) {
+        Serial.println("[web] save: the settings store would not open; nothing written");
+        g_web.send(500, "text/plain", "settings store unavailable");
+        return;
+    }
+    Serial.printf("[web] save: %d argument(s)\n", g_web.args());
+    for (int i = 0; i < g_web.args(); ++i)
+        Serial.printf("[web]   %s = %s\n", g_web.argName(i).c_str(), g_web.arg(i).c_str());
     // Reject out-of-range coordinates so a typo can't leave the radar unusable.
     if (g_web.hasArg("lat")) {
         const double lat = g_web.arg("lat").toDouble();
-        if (lat >= -90.0 && lat <= 90.0) p.putDouble("homeLat", lat);
+        if (lat >= -90.0 && lat <= 90.0) {
+            const size_t n = p.putDouble("homeLat", lat);
+            Serial.printf("[web] save: homeLat=%.5f -> %u bytes\n", lat, (unsigned)n);
+        } else {
+            Serial.printf("[web] save: homeLat=%.5f out of range, ignored\n", lat);
+        }
     }
     if (g_web.hasArg("lon")) {
         const double lon = g_web.arg("lon").toDouble();
-        if (lon >= -180.0 && lon <= 180.0) p.putDouble("homeLon", lon);
+        if (lon >= -180.0 && lon <= 180.0) {
+            const size_t n = p.putDouble("homeLon", lon);
+            Serial.printf("[web] save: homeLon=%.5f -> %u bytes\n", lon, (unsigned)n);
+        } else {
+            Serial.printf("[web] save: homeLon=%.5f out of range, ignored\n", lon);
+        }
     }
     if (g_web.hasArg("range")) p.putFloat("rangeKm", g_web.arg("range").toFloat());
     if (g_web.hasArg("theme")) p.putInt("theme", g_web.arg("theme").toInt());
@@ -1484,9 +1512,26 @@ static void handleSave() {
         if (i >= 0 && i < TZOPTS_N) p.putString("tz", TZOPTS[i].tz);
     }
     p.end();
-    g_web.send(200, "text/html",
-        "<meta http-equiv=refresh content='4;url=/'><body style='background:#06100a;color:#1dff86;"
-        "font-family:sans-serif;padding:24px'>Saved. Restarting&hellip;</body>");
+    // A Launch Kit design can PIN the location (CUSTOM_HAS_RADAR_HOME), and loadSettings()
+    // then overwrites whatever is in the store on every boot. The coordinates above are
+    // written and immediately outranked. Saying "Saved" and nothing else is how a person
+    // ends up typing their address into this box repeatedly, watching the Orb restart, and
+    // concluding the Orb is broken.
+#if CUSTOM_HAS_RADAR_HOME
+    const bool pinned = g_web.hasArg("lat") || g_web.hasArg("lon");
+    if (pinned) Serial.printf("[web] save: location is pinned by the installed design to "
+                              "%.5f, %.5f — the coordinates above were stored but will not "
+                              "be used\n", (double)CUSTOM_RADAR_HOME_LAT, (double)CUSTOM_RADAR_HOME_LON);
+#else
+    const bool pinned = false;
+#endif
+    String page = "<meta http-equiv=refresh content='6;url=/'><body style='background:#06100a;"
+                  "color:#1dff86;font-family:sans-serif;padding:24px'>Saved. Restarting&hellip;";
+    if (pinned) page += "<p style='color:#ffb23c;max-width:34em;line-height:1.5'>Your centre point "
+                        "comes from the design installed on this Orb, so the latitude and longitude "
+                        "here will not take effect. Change it in the design and push it again.</p>";
+    page += "</body>";
+    g_web.send(200, "text/html", page);
     delay(400);
     ESP.restart();
 }

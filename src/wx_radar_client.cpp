@@ -2,7 +2,9 @@
 #include "wx_radar.h"
 #include "net_fetch.h"
 #include "config.h"
-#include "roads.h"
+#include "roads_sd.h"
+#include "coastline.h"
+#include "theme_style.h"
 #ifdef ARDUINO
 #include <WiFi.h>
 #include <WiFiClientSecure.h>
@@ -50,7 +52,12 @@ static const WxZoomSpec WX_ZOOM[2] = {
     { 80.4672,  6, 150.0 },   // 50mi
     { 160.9344, 5, 300.0 },   // 100mi
 };
-constexpr uint16_t ROAD_COLOR = 0x4A49;   // dim grey — reads as a road, not precipitation
+// 0xRRGGBB down to the 565 these buffers hold. The colour was hard-coded at 0x4A49 before
+// the theme was consulted at all, and that is exactly what this returns for the default
+// 0x4A4A4A, so a theme that says nothing about it draws the map it has always drawn.
+static inline uint16_t rgb565(uint32_t c) {
+    return (uint16_t)((((c >> 19) & 0x1F) << 11) | (((c >> 10) & 0x3F) << 5) | ((c >> 3) & 0x1F));
+}
 constexpr size_t ROAD_MAX_PTS   = 48000;  // baked datasets: narrow ~43k pts/21.4k polys (motorway+trunk+primary), wide ~8.5k pts/4.2k polys — margin
 constexpr size_t ROAD_MAX_POLYS = 24000;
 
@@ -91,20 +98,21 @@ static uint16_t *s_nativeBuf = nullptr;   // PSRAM, WX_RADAR_SIZE x WX_RADAR_SIZ
 // linear scan of that bitmap, mostly zero bytes, which is both far less work and far
 // kinder to the cache than scattered writes along diagonal lines.
 #define ROAD_MASK_BYTES ((WX_RADAR_SIZE * WX_RADAR_SIZE + 7) / 8)
-static uint8_t *s_roadMask = nullptr;
+static uint8_t *s_roadMask  = nullptr;
+static uint8_t *s_coastMask = nullptr;   // the shoreline, its own layer and its own colour
 // Bumped whenever the projection is recomputed; the mask is stale until it matches. Two
 // counters rather than re-comparing lat/lon/tier, so a cycle where the mask could not be
 // allocated retries on the next one instead of being remembered as done.
 static uint32_t s_roadStamp   = 0;
 static uint32_t s_roadMaskFor = 0;
 
-static inline void road_mask_set(int x, int y) {
+static inline void road_mask_set(uint8_t *mask, int x, int y) {
     const size_t bit = (size_t)y * WX_RADAR_SIZE + (size_t)x;
-    s_roadMask[bit >> 3] |= (uint8_t)(1u << (bit & 7));
+    mask[bit >> 3] |= (uint8_t)(1u << (bit & 7));
 }
 
 // Same Bresenham, same clipping, writing a bit instead of a pixel.
-static void mask_road_line(lv_point_t a, lv_point_t b, int c) {
+static void mask_road_line(uint8_t *mask, lv_point_t a, lv_point_t b, int c) {
     int x0 = a.x, y0 = a.y, x1 = b.x, y1 = b.y;
     const int dx = abs(x1 - x0), sx = x0 < x1 ? 1 : -1;
     const int dy = -abs(y1 - y0), sy = y0 < y1 ? 1 : -1;
@@ -113,7 +121,7 @@ static void mask_road_line(lv_point_t a, lv_point_t b, int c) {
         const int ddx = x0 - c, ddy = y0 - c;
         if (x0 >= 0 && x0 < WX_RADAR_SIZE && y0 >= 0 && y0 < WX_RADAR_SIZE &&
             ddx * ddx + ddy * ddy <= (c - 2) * (c - 2)) {
-            road_mask_set(x0, y0);
+            road_mask_set(mask, x0, y0);
         }
         if (x0 == x1 && y0 == y1) break;
         const int e2 = 2 * err;
@@ -122,97 +130,120 @@ static void mask_road_line(lv_point_t a, lv_point_t b, int c) {
     }
 }
 
-static void draw_road_line(uint16_t *dst, lv_point_t a, lv_point_t b, int c) {
-    int x0 = a.x, y0 = a.y, x1 = b.x, y1 = b.y;
-    const int dx = abs(x1 - x0), sx = x0 < x1 ? 1 : -1;
-    const int dy = -abs(y1 - y0), sy = y0 < y1 ? 1 : -1;
-    int err = dx + dy;
-    for (;;) {
-        const int ddx = x0 - c, ddy = y0 - c;
-        if (x0 >= 0 && x0 < WX_RADAR_SIZE && y0 >= 0 && y0 < WX_RADAR_SIZE &&
-            ddx * ddx + ddy * ddy <= (c - 2) * (c - 2)) {
-            dst[y0 * WX_RADAR_SIZE + x0] = ROAD_COLOR;
-        }
-        if (x0 == x1 && y0 == y1) break;
-        const int e2 = 2 * err;
-        if (e2 >= dy) { err += dy; x0 += sx; }
-        if (e2 <= dx) { err += dx; y0 += sy; }
+// The map under the weather: major roads and the shoreline, from the SAME worldwide data
+// the Flight Tracker draws, at the same granularity.
+//
+// This used to read a separate extract baked into flash, and that extract covered a box
+// around Phoenix and nothing else. Point an Orb at Orlando and the map drew no roads at
+// all, while still projecting and rasterising ~20,000 Arizona polylines, every one of which
+// landed off-screen. Two datasets for one kind of thing is how that happens: nothing
+// reports a fault, the map is simply empty, and only somebody who knew both existed would
+// think to compare them.
+//
+// WHICH THREAD DOES WHAT is the load-bearing part of this file, and I got it wrong first.
+//
+// The road data lives on the SD card, and the Arduino SD driver is not safe to call from
+// two tasks at once. My first version read tiles from the network task, which put it in a
+// race with the UI thread loading theme art off the same card on every app switch. It
+// survived a slow walk through the apps and wedged core 0 within seconds of a fast one:
+// the aircraft task carried on logging while the screen, the web server and the USB command
+// handler all stopped together, which is what a locked-up SD driver looks like from outside.
+//
+// So the split is: THE UI THREAD READS THE CARD, in wx_map_prepare(), on the same
+// take-on-enter contract as everything else. The network task only ever reads the finished
+// 1-bit masks, and touches no file and no allocator. The masks are 16 KB each and are kept
+// for the life of the process on purpose: they are the one thing both threads see, and not
+// freeing them is what makes "the network task is mid-blit while the app closes" a
+// non-question rather than a window to be narrowed.
+static void mask_polylines(uint8_t *mask, size_t polys, int c) {
+    memset(mask, 0, ROAD_MASK_BYTES);
+    size_t idx = 0;
+    for (size_t poly = 0; poly < polys; ++poly) {
+        const uint16_t n = s_roadPolyLen[poly];
+        for (uint16_t i = 1; i < n; ++i)
+            mask_road_line(mask, s_roadPts[idx + i - 1], s_roadPts[idx + i], c);
+        idx += n;
     }
 }
 
-// Draws the local major-highway extract (roads.cpp) into the back buffer as a base
-// layer. Re-projected fresh at the tier's true display range (not upscaled along with
-// the coarse precipitation raster — see composite_zoom()), so it stays a crisp line
-// regardless of zoom. Re-projects only when the center or tier actually changed — cheap
-// cache, same pattern coastline.cpp uses for the Radar scope.
-static void draw_roads(double lat, double lon, int tier) {
-    uint16_t *dst = wx_radar_back_buffer();
-    if (!dst) return;
-    if (!s_roadPts) s_roadPts = (lv_point_t *)heap_caps_malloc(ROAD_MAX_PTS * sizeof(lv_point_t), MALLOC_CAP_SPIRAM);
-    if (!s_roadPolyLen) s_roadPolyLen = (uint16_t *)heap_caps_malloc(ROAD_MAX_POLYS * sizeof(uint16_t), MALLOC_CAP_SPIRAM);
-    if (!s_roadPts || !s_roadPolyLen) return;
-    // ORBNOMASK=1 forces the old per-frame polyline path, so the two can be rendered from
-    // the SAME frames and diffed. An optimisation that changes what is drawn is not an
-    // optimisation, and "it looks about right" is not a check.
-#ifndef ARDUINO
-    static const bool noMask = getenv("ORBNOMASK") != nullptr;
-    if (noMask) { /* leave s_roadMask null: the fallback below draws per frame */ } else
-#endif
-    if (!s_roadMask) s_roadMask = (uint8_t *)heap_caps_malloc(ROAD_MASK_BYTES, MALLOC_CAP_SPIRAM);
+void wx_map_prepare(double lat, double lon, int tier) {
+    const theme_style::Weather &wx = theme_style::weather();
+    if (!wx.roadsEnabled && !wx.coastEnabled) return;
+    if (tier < 0 || tier > 1) return;
+    if (lat == s_roadLat && lon == s_roadLon && tier == s_roadTier) return;   // already built
 
-    if (lat != s_roadLat || lon != s_roadLon || tier != s_roadTier) {
-        const float c = WX_RADAR_SIZE / 2.0f;
-        const double rangeKm = WX_ZOOM[tier].displayKm;
-        // 100mi tier (index 1): motorway-only wide extract (trunk roads would be an
-        // illegible tangle at that scale anyway, and the Overpass query for that radius
-        // only completed with motorway-only filtering — see tools/gen_roads.py).
-        s_roadPolyCount = (tier == 1)
-            ? roads_wide_project_flat(lat, lon, rangeKm, c, c, c - 2, s_roadPts, ROAD_MAX_PTS, s_roadPolyLen, ROAD_MAX_POLYS)
-            : roads_project_flat(lat, lon, rangeKm, c, c, c - 2, s_roadPts, ROAD_MAX_PTS, s_roadPolyLen, ROAD_MAX_POLYS);
-        s_roadLat = lat; s_roadLon = lon; s_roadTier = tier;
-        ++s_roadStamp;   // the mask below is stale whenever this changes
-        Serial.printf("[wxradar] roads: %u polylines near this center (tier=%d)\n", (unsigned)s_roadPolyCount, tier);
-    }
+    if (!s_roadMask  && wx.roadsEnabled) s_roadMask  = (uint8_t *)heap_caps_malloc(ROAD_MASK_BYTES, MALLOC_CAP_SPIRAM);
+    if (!s_coastMask && wx.coastEnabled) s_coastMask = (uint8_t *)heap_caps_malloc(ROAD_MASK_BYTES, MALLOC_CAP_SPIRAM);
 
-    const int c = WX_RADAR_SIZE / 2;
-    // Rasterise into the mask only when the projection actually moved. s_roadMaskFor is
-    // separate from the s_roadLat/s_roadLon triple above so that a failed allocation on one
-    // cycle is retried on the next rather than being remembered as done.
-    if (s_roadMask && s_roadMaskFor != s_roadStamp) {
-        memset(s_roadMask, 0, ROAD_MASK_BYTES);
-        size_t idx = 0;
-        for (size_t poly = 0; poly < s_roadPolyCount; ++poly) {
-            const uint16_t n = s_roadPolyLen[poly];
-            for (uint16_t i = 1; i < n; ++i) mask_road_line(s_roadPts[idx + i - 1], s_roadPts[idx + i], c);
-            idx += n;
-        }
-        s_roadMaskFor = s_roadStamp;
-        Serial.println("[wxradar] roads rasterised into the mask (once for this centre)");
-    }
-
-    if (!s_roadMask) {   // allocation failed: fall back to the old per-frame draw
-        size_t idx = 0;
-        for (size_t poly = 0; poly < s_roadPolyCount; ++poly) {
-            const uint16_t n = s_roadPolyLen[poly];
-            for (uint16_t i = 1; i < n; ++i) draw_road_line(dst, s_roadPts[idx + i - 1], s_roadPts[idx + i], c);
-            idx += n;
-        }
+    // The projection scratch is big (~430 KB) and is wanted only for the few milliseconds
+    // this function runs, so it is taken and given back here rather than held all session.
+    s_roadPts     = (lv_point_t *)heap_caps_malloc(ROAD_MAX_PTS * sizeof(lv_point_t), MALLOC_CAP_SPIRAM);
+    s_roadPolyLen = (uint16_t *)heap_caps_malloc(ROAD_MAX_POLYS * sizeof(uint16_t), MALLOC_CAP_SPIRAM);
+    if (!s_roadPts || !s_roadPolyLen) {
+        if (s_roadPts)     { heap_caps_free(s_roadPts);     s_roadPts = nullptr; }
+        if (s_roadPolyLen) { heap_caps_free(s_roadPolyLen); s_roadPolyLen = nullptr; }
+        Serial.println("[wxradar] map: no room to project; leaving the last one up");
         return;
     }
 
-    // The frame's share of the work: one linear pass, and the great majority of these bytes
-    // are zero, so the inner loop is skipped outright for most of them.
-    size_t bit = 0;
-    for (size_t byteIdx = 0; byteIdx < ROAD_MASK_BYTES; ++byteIdx, bit += 8) {
-        const uint8_t m = s_roadMask[byteIdx];
-        if (!m) continue;
-        for (int b = 0; b < 8; ++b) {
-            if (!(m & (1u << b))) continue;
-            const size_t px = bit + (size_t)b;
-            if (px < (size_t)WX_RADAR_SIZE * WX_RADAR_SIZE) dst[px] = ROAD_COLOR;
+    const int    c       = WX_RADAR_SIZE / 2;
+    const float  cf      = WX_RADAR_SIZE / 2.0f;
+    const double rangeKm = WX_ZOOM[tier].displayKm;
+    bool ok = false;
+
+    if (s_roadMask) {
+        const size_t polys = roads_sd::project_flat(lat, lon, rangeKm, cf, cf, cf - 2,
+                                                    s_roadPts, ROAD_MAX_PTS,
+                                                    s_roadPolyLen, ROAD_MAX_POLYS, ok);
+        // `ok` is not the same as "found something": a cycle short of memory must not be
+        // recorded as "there are no roads here", or the map stays empty until the Orb moves.
+        if (ok) {
+            mask_polylines(s_roadMask, polys, c);
+            Serial.printf("[wxradar] roads: %u polylines from the card (tier=%d)\n",
+                          (unsigned)polys, tier);
+        }
+    }
+    if (s_coastMask) {
+        const size_t polys = coastline_project_flat(lat, lon, rangeKm, cf, cf, cf - 2,
+                                                    s_roadPts, ROAD_MAX_PTS,
+                                                    s_roadPolyLen, ROAD_MAX_POLYS);
+        mask_polylines(s_coastMask, polys, c);
+        Serial.printf("[wxradar] coastline: %u polylines\n", (unsigned)polys);
+    }
+
+    heap_caps_free(s_roadPts);     s_roadPts = nullptr;
+    heap_caps_free(s_roadPolyLen); s_roadPolyLen = nullptr;
+    if (ok || !s_roadMask) { s_roadLat = lat; s_roadLon = lon; s_roadTier = tier; }
+}
+
+// The network task's whole share of the map: one linear pass per layer over a bitmap that
+// is mostly zero bytes, so the inner loop is skipped outright for most of them. No file, no
+// allocation, nothing another thread can be in the middle of. Coast first and roads over the
+// top, so a highway crossing an inlet stays continuous.
+static void draw_map() {
+    uint16_t *dst = wx_radar_back_buffer();
+    if (!dst) return;
+    const theme_style::Weather &wx = theme_style::weather();
+    struct Layer { const uint8_t *mask; uint16_t color; };
+    const Layer layers[2] = {
+        { wx.coastEnabled ? s_coastMask : nullptr, rgb565(wx.coastColor) },
+        { wx.roadsEnabled ? s_roadMask  : nullptr, rgb565(wx.roadColor)  },
+    };
+    for (const Layer &L : layers) {
+        if (!L.mask) continue;
+        size_t bit = 0;
+        for (size_t byteIdx = 0; byteIdx < ROAD_MASK_BYTES; ++byteIdx, bit += 8) {
+            const uint8_t m = L.mask[byteIdx];
+            if (!m) continue;
+            for (int b = 0; b < 8; ++b) {
+                if (!(m & (1u << b))) continue;
+                const size_t px = bit + (size_t)b;
+                if (px < (size_t)WX_RADAR_SIZE * WX_RADAR_SIZE) dst[px] = L.color;
+            }
         }
     }
 }
+
 
 // Crops the native-resolution decoded precipitation (radius = fetchRangeKm) down to the
 // tier's true display radius and upscales it (nearest-neighbor) to fill the same circle
@@ -433,7 +464,7 @@ int wx_radar_fetch_frame(double lat, double lon, int zoomTier, uint32_t gen, int
     // Composite: roads (fresh, crisp, at the true display range) as the base layer, then
     // the native precipitation raster cropped/upscaled on top of it.
     memset(wx_radar_back_buffer(), 0, WX_RADAR_SIZE * WX_RADAR_SIZE * sizeof(uint16_t));
-    draw_roads(lat, lon, zoomTier);
+    draw_map();
     composite_zoom(zoomTier);
     wx_radar_commit_frame(slot, gen, s_times[slot], lat, lon);
     Serial.printf("[wxradar] gen %lu frame %d/%d @%lu (tier=%d, %lu px)\n",
