@@ -5,6 +5,14 @@
 #include <math.h>
 #ifdef ARDUINO
 #include <Arduino.h>
+#else
+// The simulator has no Arduino clock and does not need a watchdog either; the pacing below
+// is written once and compiles to a comparison that never fires here.
+#include <chrono>
+static uint32_t millis() {
+    using namespace std::chrono;
+    return (uint32_t)duration_cast<milliseconds>(steady_clock::now().time_since_epoch()).count();
+}
 #endif
 
 // Cached screen-space polylines for the current scope. Rebuilt only when the
@@ -146,6 +154,23 @@ size_t geo_project_polylines_flat(const int16_t *srcPts, int srcNumPolys, const 
     const double cosLat    = cos(centerLat * M_PI / 180.0);
     const double lonMargin = latMargin / (cosLat < 0.15 ? 0.15 : cosLat);
 
+    // Setup for the local projection below. Done once per call rather than per point, which
+    // is the entire trick: the trig that used to run twenty thousand times now runs twice.
+    constexpr double DEG2RAD = M_PI / 180.0;
+    constexpr double KM_PER_DEG_LAT = 111.32;
+    const bool  localFlat = rangeKm <= 400.0;
+    const float sinLat0   = (float)sin(centerLat * DEG2RAD);
+    const float cosLat0   = (float)cosLat;
+    const float pxPerDeg  = (float)((KM_PER_DEG_LAT / rangeKm) * R);
+    // Reciprocal once, so unpacking a stored point is a multiply rather than a division.
+    // Two software double divisions per point does not sound like anything until it is the
+    // first thing that happens to all 293,828 points of the world coastline, almost all of
+    // which are about to be thrown away by the box test below: that alone was most of a
+    // second of the freeze, spent decoding coordinates only to discard them.
+    const float invScale  = 1.0f / (float)srcScale;
+    const float fLatMargin = (float)latMargin, fLonMargin = (float)lonMargin;
+    const float fCenterLat = (float)centerLat, fCenterLon = (float)centerLon;
+
     auto emit = [&](double x, double y) {
         if (ptCount >= maxPts) return;
         outPts[ptCount].x = (lv_coord_t)lroundf((float)(cx + x));
@@ -176,8 +201,24 @@ size_t geo_project_polylines_flat(const int16_t *srcPts, int srcNumPolys, const 
     // and rebooting (backtrace: adsb_task -> wx_radar_fetch_frame -> the road projection ->
     // sin). 256 keeps the gap between yields comfortably sub-second even in the densest
     // region, at the cost of only a fraction of a second more on the one-time projection.
+    //
+    // ...and that is exactly what went wrong when the weather map's projection moved onto
+    // the UI thread. A yield is vTaskDelay(1), which SLEEPS. Counting examined points meant
+    // the world coastline -- 293,828 points, almost all of them thrown out by the bbox
+    // reject above for a few microseconds each -- bought about 1,150 sleeps to do a few tens
+    // of milliseconds of arithmetic. Opening the Weather app froze the whole display for
+    // 5,945 ms, and roughly five seconds of that was the device deliberately doing nothing.
+    //
+    // So the yield is paced by ELAPSED TIME now. The watchdog cares how long we go without
+    // letting the idle task run, which is a question about milliseconds, and counting points
+    // was only ever a guess at it: too eager for a sparse dataset, and the comment above
+    // records it being too slack for a dense one on the same constant. Checking the clock
+    // every 128 points costs one comparison and answers the actual question. A projection
+    // that finishes inside the window now yields zero times.
     size_t yieldCounter = 0;
-    constexpr size_t YIELD_EVERY = 256;
+    constexpr size_t YIELD_CHECK_EVERY = 128;   // points between clock reads
+    constexpr uint32_t YIELD_AFTER_MS  = 100;   // work between yields, well under the 5s limit
+    uint32_t lastYieldMs = millis();
 
     const int16_t *p = srcPts;
     for (int poly = 0; poly < srcNumPolys; ++poly) {
@@ -187,17 +228,23 @@ size_t geo_project_polylines_flat(const int16_t *srcPts, int srcNumPolys, const 
         double prevX = 0, prevY = 0;
 
         for (int i = 0; i < n; ++i) {
-            if (++yieldCounter >= YIELD_EVERY) {
+            if (++yieldCounter >= YIELD_CHECK_EVERY) {
                 yieldCounter = 0;
+                const uint32_t nowMs = millis();
+                if (nowMs - lastYieldMs >= YIELD_AFTER_MS) {
+                    lastYieldMs = nowMs;
 #ifdef ARDUINO
-                vTaskDelay(1);
+                    vTaskDelay(1);
 #endif
+                }
             }
-            const double lat = p[i * 2]     / (double)srcScale;
-            const double lon = p[i * 2 + 1] / (double)srcScale;
-            const double dlon = lon - centerLon;
-            const bool farOut = (fabs(lat - centerLat) > latMargin) ||
-                                (fabs(dlon) > lonMargin && fabs(fabs(dlon) - 360.0) > lonMargin);
+            // Unpacked in float and tested in float: this runs for every point in the
+            // dataset, and for a worldwide one almost every point fails the test.
+            const float fLat  = p[i * 2]     * invScale;
+            const float fLon  = p[i * 2 + 1] * invScale;
+            const float fDlon = fLon - fCenterLon;
+            const bool farOut = (fabsf(fLat - fCenterLat) > fLatMargin) ||
+                                (fabsf(fDlon) > fLonMargin && fabsf(fabsf(fDlon) - 360.0f) > fLonMargin);
             if (farOut) {
                 // No precise coords computed for this point, so it can't anchor a clip on
                 // either side — same as the old vertex-filtering code, it just breaks
@@ -209,11 +256,42 @@ size_t geo_project_polylines_flat(const int16_t *srcPts, int srcNumPolys, const 
                 continue;
             }
 
-            const double dist = geo::haversineKm(centerLat, centerLon, lat, lon);
-            const double brg  = geo::bearingDeg(centerLat, centerLon, lat, lon);
-            const double rPx  = (dist / rangeKm) * R;
-            const double a    = brg * M_PI / 180.0;
-            const double x = rPx * sin(a), y = -rPx * cos(a);
+            // WHERE THE POINT LANDS, in pixels from the centre.
+            //
+            // This was haversine + bearing + sin + cos, in DOUBLE, for every point that got
+            // past the box reject above. The S3 has a single-precision FPU and no double
+            // one, so each of those is a software routine, and about twenty thousand road
+            // points cost 3,443 ms of the 4,918 ms freeze that opening the Weather app had
+            // become. Reading those same points off the SD card took 284 ms of it. The card
+            // was never the slow part; the arithmetic was.
+            //
+            // Locally the sphere is a plane, and a plane is all anything downstream needs:
+            // x, y, and whether the point is inside the circle. Longitude is scaled by the
+            // cosine of the latitude, expanded to first order about the centre so the scale
+            // is right AT the point instead of only in the middle of the view. That second
+            // term is worth keeping: without it the edge of an 80 km map sits about a pixel
+            // off. With it, two multiplies and a subtract replace the lot.
+            //
+            // The exact form stays for wide views, where a flat earth stops being a fair
+            // description of the world: the Surveillance map projects whole continents
+            // through this same function.
+            double x, y;
+            if (localFlat) {
+                double dl = (double)fDlon;              // unwrap the antimeridian
+                if (dl >  180.0) dl -= 360.0;
+                else if (dl < -180.0) dl += 360.0;
+                const float dLat    = fLat - fCenterLat;
+                const float cosHere = cosLat0 - sinLat0 * (dLat * (float)DEG2RAD);
+                x =  (double)((float)dl * cosHere * pxPerDeg);
+                y = -(double)(dLat * pxPerDeg);
+            } else {
+                const double lat = (double)fLat, lon = (double)fLon;
+                const double dist = geo::haversineKm(centerLat, centerLon, lat, lon);
+                const double brg  = geo::bearingDeg(centerLat, centerLon, lat, lon);
+                const double rPx  = (dist / rangeKm) * R;
+                const double a    = brg * M_PI / 180.0;
+                x = rPx * sin(a); y = -rPx * cos(a);
+            }
             const bool inside = (x * x + y * y) <= R2;
             double clip[2][2];
 

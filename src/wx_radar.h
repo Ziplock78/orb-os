@@ -40,6 +40,38 @@ void wx_radar_release(void);
 // be called from two tasks at once. Cheap to call repeatedly — it returns immediately unless
 // the centre or zoom actually moved.
 void wx_map_prepare(double lat, double lon, int tier);
+
+// WHAT THE WEATHER APP IS DOING RIGHT NOW, so the screen can say so.
+//
+// Opening this app cold is not quick and never can be: it takes 1.2 MB of frame buffers,
+// reads road tiles off the SD card, asks RainViewer which frames exist, then downloads and
+// decodes five PNGs one at a time so the aircraft feed is not frozen for half a minute
+// while it happens. That is fifteen to twenty seconds of work.
+//
+// For all of it, the screen used to show one line reading "ACQUIRING WX RADAR..." that was
+// written once at construction and never touched again. A frozen string is exactly what a
+// crashed device looks like, and there was no way to tell "downloading the fourth of five
+// frames" from "the WiFi has gone" from "hung".
+//
+// The network task publishes its phase here and the UI reads it. Plain scalars on purpose:
+// a torn read costs one frame of a slightly wrong progress count on a label that repaints
+// twice a second, and that is a far better trade than putting a lock between two tasks that
+// have no other reason to wait for each other.
+enum WxPhase : uint8_t {
+    WX_PHASE_IDLE = 0,   // app closed; nothing in flight
+    WX_PHASE_MAP,        // projecting roads and coastline for this location
+    WX_PHASE_BUFFERS,    // taking the frame buffers
+    WX_PHASE_INDEX,      // asking which frames exist
+    WX_PHASE_FRAMES,     // downloading and decoding them (done / total)
+    WX_PHASE_READY,      // a full loop is on screen
+    WX_PHASE_NO_WIFI,
+    WX_PHASE_FAILED,     // the service did not answer; a retry is scheduled
+};
+void    wx_phase_set(WxPhase p, int done = 0, int total = 0);
+WxPhase wx_phase_get(int *done, int *total);
+// One line of plain English for the phase, for the screen to show. Never a bare
+// "unavailable": which thing is unwell is the whole point.
+const char *wx_phase_text(void);
 bool wx_radar_ready(void);   // true while the buffers exist, so a fetch has somewhere to go
 uint16_t *wx_radar_back_buffer(void);                    // scratch: the client decodes one frame here
 

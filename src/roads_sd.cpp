@@ -13,6 +13,11 @@
 #include "sdcard.h"
 #else
 #include <string>
+#include <chrono>
+static uint32_t millis() {
+    using namespace std::chrono;
+    return (uint32_t)duration_cast<milliseconds>(steady_clock::now().time_since_epoch()).count();
+}
 #endif
 
 namespace {
@@ -133,8 +138,11 @@ int  th_read(TileFile &h, uint8_t *dst, size_t n) { return (int)fread(dst, 1, n,
 void th_close(TileFile &h) { if (h.f) fclose(h.f); }
 #endif
 
+uint32_t g_ioMs = 0, g_projMs = 0;   // split of where a projection's time actually goes
+
 bool read_exact(TileFile &h, uint8_t *dst, size_t n) {
     static uint8_t chunk[4096];   // internal RAM (DMA-safe); single-task use
+    const uint32_t t0 = millis();
     size_t total = 0;
     while (total < n) {
         const size_t want = (n - total) < sizeof(chunk) ? (n - total) : sizeof(chunk);
@@ -143,6 +151,7 @@ bool read_exact(TileFile &h, uint8_t *dst, size_t n) {
         if (dst) memcpy(dst + total, chunk, (size_t)r);
         total += (size_t)r;
     }
+    g_ioMs += millis() - t0;
     return true;
 }
 
@@ -195,11 +204,13 @@ static void stream_tile(const char *path, double homeLat, double homeLon,
         // Clip+project this single polyline into the cache at the current offset.
         // One input line can clip into several output segments, so ask for the
         // remaining capacity and advance by however many it wrote.
+        const uint32_t tp = millis();
         const size_t got = geo_project_polylines_flat(
             s_tPts, 1, &n, 180,
             homeLat, homeLon, rangeKm, cx, cy, rOuterPx,
             out.pts + out.numPts, out.maxPts - out.numPts,
             out.polyLen + out.numPolys, out.maxPolys - out.numPolys);
+        g_projMs += millis() - tp;
         size_t written = 0;
         for (size_t j = 0; j < got; ++j) written += out.polyLen[out.numPolys + j];
         out.numPts   += written;
@@ -266,8 +277,13 @@ size_t project_flat(double lat, double lon, double rangeKm,
     if (!ensure_buffers()) return 0;
     if (!lock()) return 0;
     Sink out { outPts, outPolyLen, maxPts, maxPolys };
+    g_ioMs = g_projMs = 0;
     walk_tiles(lat, lon, rangeKm, cx, cy, rOuterPx, out);
     unlock();
+#ifdef ARDUINO
+    Serial.printf("[roads_sd] card %lums, projection %lums\n",
+                  (unsigned long)g_ioMs, (unsigned long)g_projMs);
+#endif
     ok = true;
     return out.numPolys;
 }

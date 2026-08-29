@@ -145,3 +145,40 @@ bool wx_radar_center(double *lat, double *lon) {
     if (lon) *lon = s_lon;
     return true;
 }
+
+// ---- what the app is doing, for the screen to say -----------------------------
+//
+// Written by the network task, read by the UI. See the note in wx_radar.h for why these
+// are plain scalars rather than anything guarded.
+static volatile WxPhase s_phase      = WX_PHASE_IDLE;
+static volatile int     s_phaseDone  = 0;
+static volatile int     s_phaseTotal = 0;
+
+void wx_phase_set(WxPhase p, int done, int total) {
+    s_phase = p; s_phaseDone = done; s_phaseTotal = total;
+}
+
+WxPhase wx_phase_get(int *done, int *total) {
+    if (done)  *done  = s_phaseDone;
+    if (total) *total = s_phaseTotal;
+    return s_phase;
+}
+
+const char *wx_phase_text(void) {
+    static char buf[48];
+    const int done = s_phaseDone, total = s_phaseTotal;
+    switch (s_phase) {
+        case WX_PHASE_MAP:     return "DRAWING THE MAP";
+        case WX_PHASE_BUFFERS: return "MAKING ROOM";
+        case WX_PHASE_INDEX:   return "FINDING THE LATEST SCAN";
+        case WX_PHASE_FRAMES:
+            // The one people watch. A bare spinner here is what makes a slow thing feel
+            // broken; a count that moves makes the same wait obviously alive.
+            snprintf(buf, sizeof(buf), "LOADING RAIN  %d/%d", done, total > 0 ? total : WX_RADAR_FRAMES);
+            return buf;
+        case WX_PHASE_NO_WIFI: return "NO WIFI, SO NO RADAR";
+        case WX_PHASE_FAILED:  return "RAINVIEWER IS NOT ANSWERING";
+        case WX_PHASE_READY:   return "";
+        default:               return "ACQUIRING WX RADAR...";
+    }
+}

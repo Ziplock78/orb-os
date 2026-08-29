@@ -19,6 +19,11 @@
 #include <cstdarg>
 #include <cstdlib>
 static struct { void printf(const char *fmt, ...) const { va_list a; va_start(a, fmt); vprintf(fmt, a); va_end(a); } void println(const char *s) const { puts(s); } } Serial;
+#include <chrono>
+static uint32_t millis() {
+    using namespace std::chrono;
+    return (uint32_t)duration_cast<milliseconds>(steady_clock::now().time_since_epoch()).count();
+}
 static void *heap_caps_malloc(size_t sz, int) { return malloc(sz); }
 static void heap_caps_free(void *p) { free(p); }
 #define MALLOC_CAP_SPIRAM 0
@@ -190,6 +195,10 @@ void wx_map_prepare(double lat, double lon, int tier) {
     const float  cf      = WX_RADAR_SIZE / 2.0f;
     const double rangeKm = WX_ZOOM[tier].displayKm;
     bool ok = false;
+    // Timed because this runs on the UI thread and everything else stops while it does.
+    // If it ever grows past a frame or two the answer is to break it up, and the only way
+    // to know that is to have been watching the number all along.
+    const uint32_t t0 = millis();
 
     if (s_roadMask) {
         const size_t polys = roads_sd::project_flat(lat, lon, rangeKm, cf, cf, cf - 2,
@@ -214,6 +223,7 @@ void wx_map_prepare(double lat, double lon, int tier) {
     heap_caps_free(s_roadPts);     s_roadPts = nullptr;
     heap_caps_free(s_roadPolyLen); s_roadPolyLen = nullptr;
     if (ok || !s_roadMask) { s_roadLat = lat; s_roadLon = lon; s_roadTier = tier; }
+    Serial.printf("[wxradar] map built in %lums (UI thread)\n", (unsigned long)(millis() - t0));
 }
 
 // The network task's whole share of the map: one linear pass per layer over a bitmap that

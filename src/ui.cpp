@@ -393,6 +393,43 @@ static void wx_anim_cb(lv_timer_t *t) {
     }
 }
 
+// The loading notice, repainted on its own clock.
+//
+// This label used to be written once, at construction, and never again: "ACQUIRING WX
+// RADAR..." sat there unchanged for the fifteen to twenty seconds a cold open takes, and
+// looked identical whether frames were arriving, the WiFi had dropped, or the thing had
+// hung. It also had no clock of its own, so it could only ever have been refreshed when
+// aircraft data arrived, which is precisely what stops arriving when the network is the
+// problem.
+//
+// Half a second is chosen to be quick enough that the count never looks stuck and slow
+// enough to be free: it is one label write on a hidden-most-of-the-time object.
+static uint32_t s_wxPhaseSince = 0;   // when the current wait began, for the elapsed line
+static WxPhase  s_wxPhaseLast  = WX_PHASE_IDLE;
+
+static void wx_status_paint(void) {
+    if (!s_wxStatus) return;
+    int done = 0, total = 0;
+    const WxPhase ph = wx_phase_get(&done, &total);
+    if (ph != s_wxPhaseLast) { s_wxPhaseLast = ph; s_wxPhaseSince = lv_tick_get(); }
+    if (ph == WX_PHASE_READY || ph == WX_PHASE_IDLE) return;
+
+    const uint32_t secs = (lv_tick_get() - s_wxPhaseSince) / 1000U;
+    char line[80];
+    // The elapsed count only appears once a wait is long enough to worry about. Starting it
+    // at zero on every open would put a stopwatch on loads that finish before it is read,
+    // and turn a fast screen into one that looks like it is always timing itself.
+    if (secs >= 4) snprintf(line, sizeof(line), "%s\n%lus", wx_phase_text(), (unsigned long)secs);
+    else           snprintf(line, sizeof(line), "%s", wx_phase_text());
+    lv_label_set_text(s_wxStatus, line);
+}
+
+static void wx_status_timer_cb(lv_timer_t *) {
+    if (!s_tv || lv_tileview_get_tile_act(s_tv) != s_tileWeather) return;   // not on screen, not our problem
+    if (s_weatherMode == WEATHER_FORECAST) return;
+    if (s_wxStatus && !lv_obj_has_flag(s_wxStatus, LV_OBJ_FLAG_HIDDEN)) wx_status_paint();
+}
+
 static void build_weather(void) {
     if (!s_weatherNow || !s_weatherMeta || !s_weatherDays || !s_wxFooter) return;
     WeatherSnapshot w;
@@ -504,6 +541,7 @@ static void build_weather(void) {
         lv_obj_clear_flag(s_wxStatus, LV_OBJ_FLAG_HIDDEN);
         lv_label_set_text(s_wxAirport, "RADAR CENTRE");
         lv_label_set_text(s_wxAttrib, cloudMode ? "WAITING FOR SATELLITE DATA" : "WAITING FOR RADAR DATA");
+        if (!cloudMode) wx_status_paint();
     }
 
     lv_obj_t *forecastObjs[] = {
@@ -916,6 +954,9 @@ void ui_create(void) {
     lv_obj_set_style_text_font(s_wxStatus, F14(), 0);
     lv_obj_set_style_text_color(s_wxStatus, UI_DIM, 0);
     lv_label_set_text(s_wxStatus, "ACQUIRING WX RADAR...");
+    lv_obj_set_style_text_align(s_wxStatus, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_style_text_line_space(s_wxStatus, 4, 0);
+    lv_timer_create(wx_status_timer_cb, 500, nullptr);
     lv_obj_align(s_wxStatus, LV_ALIGN_TOP_MID, 0, 222);
 
     const int ringSize[3] = { 360, 240, 120 };

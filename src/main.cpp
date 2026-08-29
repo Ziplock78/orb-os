@@ -483,8 +483,10 @@ static void adsb_task(void*) {
             // five-minute refresh in front of somebody who just asked to see the weather.
             if (g_wxOpened) {
                 g_wxOpened = false;
+                wx_phase_set(WX_PHASE_BUFFERS);
                 if (theme_style::apps().weather) wx_radar_begin();
                 wxFillIdx = 0; ++wxGen; nextWxRadarAt = nowMs;
+                wx_phase_set(WiFi.status() == WL_CONNECTED ? WX_PHASE_INDEX : WX_PHASE_NO_WIFI);
             }
             // Closed: give them back, but only from here, and only while idle. wxFillIdx ==
             // WX_RADAR_FRAMES means no frame is part-way through, which is the only moment
@@ -492,6 +494,7 @@ static void adsb_task(void*) {
             if (g_wxClosed && wxFillIdx >= WX_RADAR_FRAMES) {
                 g_wxClosed = false;
                 wx_radar_release();
+                wx_phase_set(WX_PHASE_IDLE);
             }
             if (wxFillIdx >= WX_RADAR_FRAMES && (int32_t)(nowMs - nextWxRadarAt) >= 0
                 && wx_radar_ready()) {
@@ -503,12 +506,20 @@ static void adsb_task(void*) {
                 if (r == 1) {
                     g_wxRadarDirty = true;             // new frame committed
                     wxFillIdx++;
+                    // Only READY once the whole loop is up. Saying so at the first frame
+                    // would clear the notice over a map that still has four frames missing,
+                    // and the animation would visibly stutter into life afterwards.
+                    wx_phase_set(wxFillIdx >= WX_RADAR_FRAMES ? WX_PHASE_READY : WX_PHASE_FRAMES,
+                                 wxFillIdx, WX_RADAR_FRAMES);
                     nextWxRadarAt = millis() + (wxFillIdx >= WX_RADAR_FRAMES ? WX_RADAR_REFRESH_MS : 250UL);
                 } else if (r == 0) {                   // fewer frames than the loop length — cycle done
                     if (wxFillIdx > 0) g_wxRadarDirty = true;
+                    wx_phase_set(wxFillIdx > 0 ? WX_PHASE_READY : WX_PHASE_FAILED, wxFillIdx, WX_RADAR_FRAMES);
                     wxFillIdx = WX_RADAR_FRAMES;
                     nextWxRadarAt = millis() + WX_RADAR_REFRESH_MS;
                 } else {                               // error — retry the whole cycle in 60s
+                    wx_phase_set(WiFi.status() == WL_CONNECTED ? WX_PHASE_FAILED : WX_PHASE_NO_WIFI,
+                                 wxFillIdx, WX_RADAR_FRAMES);
                     wxFillIdx = WX_RADAR_FRAMES;
                     nextWxRadarAt = millis() + 60000UL;
                     Serial.println("[wxradar] fetch failed; retrying in 60s");
@@ -771,6 +782,7 @@ static void radar_show_weather() {
     // The map under the weather is built HERE, on the UI thread, because it reads road tiles
     // off the SD card and the driver cannot take that from two tasks at once. The network
     // task only ever blits the finished masks. Returns immediately if this centre is built.
+    wx_phase_set(WX_PHASE_MAP);
     wx_map_prepare(g_settings.homeLat, g_settings.homeLon, g_wxZoomTier);
     ui_show_view(1);   // tile 1 since list/stats went
 }
