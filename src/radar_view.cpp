@@ -202,6 +202,7 @@ static float       s_wxSweepDeg = 0.0f;
 static uint32_t    s_lastSweepMs = 0;
 static float       s_emaDtMs     = 0.0f;
 static float       s_prevSweepDeg = 0.0f;
+static float       s_wxPrevSweepDeg = 0.0f;
 static float       s_wavePhase = 0.0f;
 static uint32_t    s_lastUpdateMs = 0;       // smooth-motion: cadence + animation clock
 static uint32_t    s_animStartMs  = 0;
@@ -697,9 +698,15 @@ static void sweep_draw_cb(lv_event_t *e) {
     }
 }
 
-static void wedge_bbox(float deg, lv_area_t *out) {
-    const float trailDeg = sweepTrailDeg();
-    const float R = sweepLenPx();
+// The rectangle a wedge of `trailDeg` ending at `deg` actually occupies, walked round the
+// arc rather than guessed at. The centre is always in it, because the wedge starts there.
+//
+// This is what keeps the sweep cheap: without it every step of the hand would mark all
+// 217,156 pixels as needing recomputing, when the hand covers a fraction of that. The
+// rectangle is bigger than the wedge (a diagonal wedge needs a much larger box than a
+// vertical one, since a box has to be axis-aligned), and it is still far smaller than the
+// screen at any angle.
+static void wedge_bbox_at(float deg, float trailDeg, float R, lv_area_t *out) {
     lv_coord_t minx = s_cx, maxx = s_cx, miny = s_cy, maxy = s_cy;
     const int steps = 10;
     for (int i = 0; i <= steps; ++i) {
@@ -710,9 +717,52 @@ static void wedge_bbox(float deg, lv_area_t *out) {
         if (p.y < miny) miny = p.y;
         if (p.y > maxy) maxy = p.y;
     }
+    // Generous on purpose. Describing the changed region even slightly too small does not
+    // fail loudly: it leaves a smear of the previous hand behind, which looks like a fault
+    // in the artwork rather than in the invalidation.
     const lv_coord_t pad = 6;
     out->x1 = minx - pad; out->y1 = miny - pad;
     out->x2 = maxx + pad; out->y2 = maxy + pad;
+}
+
+static void wedge_bbox(float deg, lv_area_t *out) {
+    wedge_bbox_at(deg, sweepTrailDeg(), sweepLenPx(), out);
+}
+
+// The same, for the weather map's sweep, which has its own trail, its own reach and its own
+// angle. Its geometry comes from the weather theme rather than the radar's: two apps.
+static void wx_wedge_bbox(float deg, lv_area_t *out) {
+    const theme_style::Weather &ws = theme_style::weather();
+    const float trailDeg = (float)(ws.sweepTrailDeg < 1 ? 1 : (ws.sweepTrailDeg > 180 ? 180 : ws.sweepTrailDeg));
+    const float R = (float)(ws.sweepLength < 20 ? 20 : (ws.sweepLength > 233 ? 233 : ws.sweepLength));
+    wedge_bbox_at(deg, trailDeg, R, out);
+}
+
+// Ask both sweeps to repaint just the ground their hands covered between the last frame and
+// this one.
+//
+// The weather map's was not being asked AT ALL on this path. The only invalidate it had sat
+// inside the image-sweep branch above, which returns early, so on the ordinary vector path
+// the weather sweep repainted only when a new radar frame happened to redraw the tile
+// underneath it. That is once a second against the timer's dozen, and it is why that hand
+// moved in steps while the Flight Tracker's did not.
+static void invalidate_sweeps(float prevDeg, float deg, float wxPrevDeg, float wxDeg) {
+    lv_area_t a, b, area;
+    if (s_sweep) {
+        wedge_bbox(prevDeg, &a);
+        wedge_bbox(deg, &b);
+        area.x1 = LV_MIN(a.x1, b.x1); area.y1 = LV_MIN(a.y1, b.y1);
+        area.x2 = LV_MAX(a.x2, b.x2); area.y2 = LV_MAX(a.y2, b.y2);
+        lv_obj_invalidate_area(s_sweep, &area);
+    }
+    // Invalidating an object on a tile that is not showing costs nothing: LVGL discards it.
+    if (s_wxSweep) {
+        wx_wedge_bbox(wxPrevDeg, &a);
+        wx_wedge_bbox(wxDeg, &b);
+        area.x1 = LV_MIN(a.x1, b.x1); area.y1 = LV_MIN(a.y1, b.y1);
+        area.x2 = LV_MAX(a.x2, b.x2); area.y2 = LV_MAX(a.y2, b.y2);
+        lv_obj_invalidate_area(s_wxSweep, &area);
+    }
 }
 
 // How far one aircraft's mark can reach from its own position, in px.
@@ -884,6 +934,7 @@ static void sweep_timer_cb(lv_timer_t *t) {
         // The same smoothed dt, so it cannot judder independently of the other one.
         const theme_style::Weather &ws = theme_style::weather();
         const float wxDps = (float)(ws.sweepSpeed < 1 ? 1 : (ws.sweepSpeed > 360 ? 360 : ws.sweepSpeed));
+        s_wxPrevSweepDeg = s_wxSweepDeg;
         s_wxSweepDeg += wxDps * s_emaDtMs / 1000.0f;
         if (s_wxSweepDeg >= 360.0f) s_wxSweepDeg -= 360.0f;
     }
@@ -892,20 +943,13 @@ static void sweep_timer_cb(lv_timer_t *t) {
     // vector wedge's manual bounding-box invalidation below.
     if (customStyled() && theme_style::radar().sweepTypeImage) {
         if (s_sweepImg) lv_img_set_angle(s_sweepImg, (int16_t)lroundf(s_sweepDeg * 10.0f));
-        // The weather map's sweep rides the same angle off the same timer. Invalidating an
-        // object on a tile that is not showing costs nothing: LVGL discards it.
-        if (s_wxSweep) lv_obj_invalidate(s_wxSweep);
+        // The Flight Tracker's hand is an image here and LVGL handles its own invalidation
+        // for a rotation. The weather map's is a vector wedge either way, so it gets the
+        // same box treatment as on the path below rather than a whole-screen repaint.
+        invalidate_sweeps(s_sweepDeg, s_sweepDeg, s_wxPrevSweepDeg, s_wxSweepDeg);
         return;
     }
-    if (!s_sweep) return;
-    lv_area_t a, b, area;
-    wedge_bbox(s_prevSweepDeg, &a);
-    wedge_bbox(s_sweepDeg, &b);
-    area.x1 = LV_MIN(a.x1, b.x1);
-    area.y1 = LV_MIN(a.y1, b.y1);
-    area.x2 = LV_MAX(a.x2, b.x2);
-    area.y2 = LV_MAX(a.y2, b.y2);
-    lv_obj_invalidate_area(s_sweep, &area);
+    invalidate_sweeps(s_prevSweepDeg, s_sweepDeg, s_wxPrevSweepDeg, s_wxSweepDeg);
 }
 
 // =============================== aircraft ====================================
