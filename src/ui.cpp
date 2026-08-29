@@ -534,7 +534,15 @@ static void build_weather(void) {
         time_t ft = (time_t)frameTime; struct tm ti;
         if (frameTime && localtime_r(&ft, &ti)) snprintf(stamp, sizeof(stamp), "%02d:%02d", ti.tm_hour, ti.tm_min);
         char attr[64];
-        snprintf(attr, sizeof(attr), cloudMode ? "SAT %s  |  EUMETSAT" : "RADAR %s  |  RAINVIEWER", stamp);
+        // Once the first frame lands there is a picture to show, so the big notice goes
+        // away -- but four more frames are still arriving and the animation is not whole
+        // yet. Saying so here, in the line that already carries the timestamp, keeps that
+        // honest without putting a second banner over the weather somebody came to look at.
+        int fdone = 0, ftotal = 0;
+        if (!cloudMode && wx_phase_get(&fdone, &ftotal) == WX_PHASE_FRAMES)
+            snprintf(attr, sizeof(attr), "RADAR %s  |  LOADING %d/%d", stamp, fdone, ftotal);
+        else
+            snprintf(attr, sizeof(attr), cloudMode ? "SAT %s  |  EUMETSAT" : "RADAR %s  |  RAINVIEWER", stamp);
         lv_label_set_text(s_wxAttrib, attr);
     } else {
         if (s_wxCanvas) lv_obj_add_flag(s_wxCanvas, LV_OBJ_FLAG_HIDDEN);
@@ -553,6 +561,26 @@ static void build_weather(void) {
         s_fcDayTemp[0], s_fcDayTemp[1], s_fcDayTemp[2],
         s_fcDayRain[0], s_fcDayRain[1], s_fcDayRain[2]
     };
+#ifndef ARDUINO
+    // Simulator only: ORBDUMP prints every child of this tile with its real coordinates.
+    // Added while hunting a 92x3 grey bar that turned out to be drawn by something none of
+    // the show/hide lists mentioned; guessing from a screenshot cost more than this did.
+    if (getenv("ORBDUMP")) {
+        lv_obj_t *par = lv_obj_get_parent(s_wxCanvas);
+        const uint32_t n = lv_obj_get_child_cnt(par);
+        printf("[dump] weather tile has %u children\n", (unsigned)n);
+        for (uint32_t i = 0; i < n; ++i) {
+            lv_obj_t *c = lv_obj_get_child(par, i);
+            const bool hid = lv_obj_has_flag(c, LV_OBJ_FLAG_HIDDEN);
+            printf("[dump] %2u  x=%4d y=%4d w=%4d h=%4d  %s%s\n", (unsigned)i,
+                   (int)lv_obj_get_x(c), (int)lv_obj_get_y(c),
+                   (int)lv_obj_get_width(c), (int)lv_obj_get_height(c),
+                   hid ? "HIDDEN " : "",
+                   lv_obj_check_type(c, &lv_label_class) ? "label" :
+                   lv_obj_check_type(c, &lv_canvas_class) ? "canvas" : "obj");
+        }
+    }
+#endif
     lv_obj_t *radarObjs[] = { s_wxCanvas, s_wxStatus, s_wxAirport, s_wxFooter, s_wxMeta,
                               s_wxAttrib, s_wxNorth, s_wxCenter, s_wxRange,
                               s_wxRings[0], s_wxRings[1], s_wxRings[2],
@@ -936,6 +964,14 @@ void ui_create(void) {
     lv_obj_set_style_radius(s_wxAirport, 6, 0);
     lv_label_set_text(s_wxAirport, "RADAR CENTRE");
     lv_obj_align(s_wxAirport, LV_ALIGN_TOP_MID, 0, 46);
+    // The same backing the title above it and the readouts below it already had. Without
+    // one, the outer range ring and the sweep both draw straight through this line, and it
+    // was the only text on the screen left unprotected.
+    lv_obj_set_style_bg_color(s_wxAirport, lv_color_black(), 0);
+    lv_obj_set_style_bg_opa(s_wxAirport, 170, 0);
+    lv_obj_set_style_pad_hor(s_wxAirport, 8, 0);
+    lv_obj_set_style_pad_ver(s_wxAirport, 2, 0);
+    lv_obj_set_style_radius(s_wxAirport, 4, 0);
 
     s_wxCanvas = lv_canvas_create(wp);
     lv_obj_set_size(s_wxCanvas, WX_RADAR_SIZE, WX_RADAR_SIZE);
@@ -995,7 +1031,11 @@ void ui_create(void) {
     lv_obj_set_style_text_font(s_wxNorth, F12(), 0);
     lv_obj_set_style_text_color(s_wxNorth, UI_GREEN, 0);
     lv_label_set_text(s_wxNorth, "N");
-    lv_obj_align(s_wxNorth, LV_ALIGN_TOP_MID, 0, 58);
+    // Below the airport line, not through it. Both are centred, the airport line occupies
+    // y 46 to 62, and this sat at 58: the compass letter drew straight over the middle of
+    // "O ORL 3 nm E". Sixty-six clears it and still reads as the top of the dial, which is
+    // where a north marker belongs.
+    lv_obj_align(s_wxNorth, LV_ALIGN_TOP_MID, 0, 66);
     s_wxCenter = lv_label_create(wp);
     lv_obj_set_style_text_font(s_wxCenter, &lv_font_montserrat_28, 0);
     lv_obj_set_style_text_color(s_wxCenter, UI_INK, 0);
@@ -1037,8 +1077,15 @@ void ui_create(void) {
 
     lv_timer_create(wx_anim_cb, WX_ANIM_STEP_MS, nullptr);   // 1s/frame, 5s hold on newest (see wx_anim_cb)
 
+    // These three sit ON TOP of the radar picture, and each carries a semi-opaque black
+    // backing so the text stays readable over rain. The backing used to be a fixed 360 px
+    // band while the text inside it was much narrower, which is invisible over the black
+    // parts of the map and turns into a grey slab the moment weather passes under it: it
+    // read as a torn rectangle laid over the storm rather than as anything designed.
+    // Hugging the text makes the same backing read as a chip, and it only ever covers the
+    // pixels it is actually protecting.
     s_wxFooter = lv_label_create(wp);
-    lv_obj_set_width(s_wxFooter, 360);
+    lv_obj_set_width(s_wxFooter, LV_SIZE_CONTENT);
     lv_obj_set_style_text_font(s_wxFooter, F16(), 0);
     lv_obj_set_style_text_color(s_wxFooter, UI_INK, 0);
     lv_obj_set_style_text_align(s_wxFooter, LV_TEXT_ALIGN_CENTER, 0);
@@ -1047,9 +1094,12 @@ void ui_create(void) {
     lv_obj_set_style_bg_color(s_wxFooter, lv_color_black(), 0);
     lv_obj_set_style_bg_opa(s_wxFooter, 185, 0);
     lv_obj_set_style_pad_hor(s_wxFooter, 8, 0);
+    lv_obj_set_style_pad_ver(s_wxFooter, 2, 0);
+    lv_obj_set_style_radius(s_wxFooter, 4, 0);
+    lv_obj_set_style_pad_hor(s_wxFooter, 8, 0);
     lv_obj_set_style_radius(s_wxFooter, 7, 0);
     s_wxMeta = lv_label_create(wp);
-    lv_obj_set_width(s_wxMeta, 360);
+    lv_obj_set_width(s_wxMeta, LV_SIZE_CONTENT);
     lv_obj_set_style_text_font(s_wxMeta, F14(), 0);
     lv_obj_set_style_text_color(s_wxMeta, UI_SOFT, 0);
     lv_obj_set_style_text_align(s_wxMeta, LV_TEXT_ALIGN_CENTER, 0);
@@ -1057,6 +1107,9 @@ void ui_create(void) {
     lv_obj_align(s_wxMeta, LV_ALIGN_TOP_MID, 0, 351);
     lv_obj_set_style_bg_color(s_wxMeta, lv_color_black(), 0);
     lv_obj_set_style_bg_opa(s_wxMeta, 185, 0);
+    lv_obj_set_style_pad_hor(s_wxMeta, 8, 0);
+    lv_obj_set_style_pad_ver(s_wxMeta, 2, 0);
+    lv_obj_set_style_radius(s_wxMeta, 4, 0);
     lv_obj_set_style_pad_hor(s_wxMeta, 8, 0);
     lv_obj_set_style_radius(s_wxMeta, 7, 0);
     s_wxAttrib = lv_label_create(wp);
@@ -1066,6 +1119,9 @@ void ui_create(void) {
     lv_obj_align(s_wxAttrib, LV_ALIGN_TOP_MID, 0, 376);
     lv_obj_set_style_bg_color(s_wxAttrib, lv_color_black(), 0);
     lv_obj_set_style_bg_opa(s_wxAttrib, 170, 0);
+    lv_obj_set_style_pad_hor(s_wxAttrib, 8, 0);
+    lv_obj_set_style_pad_ver(s_wxAttrib, 2, 0);
+    lv_obj_set_style_radius(s_wxAttrib, 4, 0);
     lv_obj_set_style_pad_hor(s_wxAttrib, 6, 0);
     lv_obj_set_style_radius(s_wxAttrib, 6, 0);
 

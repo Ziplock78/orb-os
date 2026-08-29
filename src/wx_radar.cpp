@@ -159,6 +159,17 @@ void wx_phase_set(WxPhase p, int done, int total) {
 }
 
 WxPhase wx_phase_get(int *done, int *total) {
+#ifndef ARDUINO
+    // Simulator only: ORBWXPHASE pins the phase so the loading notice can be photographed.
+    // Every one of these states is a few seconds long on real hardware and some need the
+    // network to be broken in a particular way, which is not a thing to arrange by hand
+    // each time somebody changes the wording.
+    if (const char *e = getenv("ORBWXPHASE")) {
+        if (done)  *done  = 3;
+        if (total) *total = WX_RADAR_FRAMES;
+        return (WxPhase)atoi(e);
+    }
+#endif
     if (done)  *done  = s_phaseDone;
     if (total) *total = s_phaseTotal;
     return s_phase;
@@ -166,8 +177,12 @@ WxPhase wx_phase_get(int *done, int *total) {
 
 const char *wx_phase_text(void) {
     static char buf[48];
-    const int done = s_phaseDone, total = s_phaseTotal;
-    switch (s_phase) {
+    int done = s_phaseDone, total = s_phaseTotal;
+    WxPhase phase = s_phase;
+#ifndef ARDUINO
+    if (const char *e = getenv("ORBWXPHASE")) { phase = (WxPhase)atoi(e); done = 3; total = WX_RADAR_FRAMES; }
+#endif
+    switch (phase) {
         case WX_PHASE_MAP:     return "DRAWING THE MAP";
         case WX_PHASE_BUFFERS: return "MAKING ROOM";
         case WX_PHASE_INDEX:   return "FINDING THE LATEST SCAN";
