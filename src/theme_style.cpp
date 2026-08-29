@@ -46,7 +46,14 @@ Apps     s_apps;
 Names    s_names;
 // The theme's declared asset list (theme.json "assets"). s_assetN == 0 means the theme
 // did not declare one, which hasAsset() treats as "allow everything".
-constexpr size_t MAX_ASSETS = 24;
+// Twenty-four was not enough and had no headroom. A fully dressed theme can ship five
+// plates, five overlays, three hands with three shadows, the sweep, the blip, two radar
+// stills, the rings, a splash, and up to twenty converted typefaces. Adding the weather
+// map's plate and the Stock Ticker's took a real theme past the line, and what happened
+// next is the part that matters: the list was silently cut off, so the firmware refused to
+// open two files that were sitting on the card, and the only sign was one log line nobody
+// was watching. Sixty-four is past anything a theme can currently produce.
+constexpr size_t MAX_ASSETS = 64;
 char   s_asset[MAX_ASSETS][28] = {};
 size_t s_assetN = 0;
 uint32_t s_assetsHash = 0;   // theme.json "assetsHash": covers contents, not just names
@@ -917,8 +924,14 @@ void load() {
                     const char *n = v.as<const char *>();
                     if (!n || !*n) continue;
                     if (s_assetN >= MAX_ASSETS) {
-                        printf("[theme_style] more than %d assets declared, ignoring the rest\n",
-                                      (int)MAX_ASSETS);
+                        // A TRUNCATED LIST IS WORSE THAN NO LIST. This exists to ignore a
+                        // file left behind by an older push; cut short, it starts ignoring
+                        // files the current theme genuinely ships, which looks exactly like
+                        // the feature that needs them being broken. So fall back to the
+                        // behaviour of a theme that declares nothing: allow everything.
+                        printf("[theme_style] more than %d assets declared; trusting the card "
+                               "instead of a half-read list\n", (int)MAX_ASSETS);
+                        s_assetN = 0;
                         break;
                     }
                     strncpy(s_asset[s_assetN], n, sizeof(s_asset[0]) - 1);

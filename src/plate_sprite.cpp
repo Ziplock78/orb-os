@@ -2,6 +2,7 @@
 #ifdef ARDUINO
 #include <Arduino.h>
 #include <esp_heap_caps.h>
+#include <SD.h>
 #else
 #include <cstdio>
 #include <cstdarg>
@@ -78,9 +79,25 @@ bool load_asset(const char *assetName, uint8_t *&out, int &w, int &h, const char
         }
     }
     const char *slug = theme_select::activeSlug();
-    if (!slug[0] || !theme_style::hasAsset(assetName)) return false;
+    if (!slug[0]) return false;
     char path[64];
     snprintf(path, sizeof(path), "/themes/%s/%s", slug, assetName);
+    if (!theme_style::hasAsset(assetName)) {
+        // SAY SO. The theme's asset list is what stops a file left behind by an abandoned
+        // install being drawn after the design dropped it, and refusing to read it is
+        // correct. But refusing SILENTLY is indistinguishable from the feature being broken:
+        // the file is right there on the card, the design says it wants a picture, and the
+        // screen shows none. That exact combination cost an evening.
+        //
+        // The check only runs when the answer was already no, so it costs nothing in the
+        // normal case, and it names both halves of the disagreement.
+#ifdef ARDUINO
+        if (SD.exists(path))
+#endif
+            Serial.printf("[%s] %s is ON THE CARD but not in this theme's asset list, so it is "
+                          "being ignored. Re-install the theme from Orb Studio.\n", tag, assetName);
+        return false;
+    }
     size_t sdLen = 0;
     uint8_t *sdBuf = theme_sd::read_whole(path, sdLen, SD_ASSET_MAX_BYTES);
     if (!sdBuf) return false;
