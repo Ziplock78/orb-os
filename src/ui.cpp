@@ -2,6 +2,7 @@
 // Pure LVGL, portable. Taps hit-test via radar::hitTest; selection lives in radar.
 #include "ui.h"
 #include "theme_style.h"
+#include "plate_sprite.h"
 #include "app_theme.h"
 #include "radar_view.h"
 #include "custom_radar.h"     // CUSTOM_HAS_RADAR_STYLE — a pushed design's own banners replace this card
@@ -66,6 +67,8 @@ static lv_obj_t *s_hudBars[4] = { nullptr, nullptr, nullptr, nullptr };   // WiF
 static lv_obj_t *s_hudGps   = nullptr;   // HUD satellite icon (hidden unless GPS auto-location is on)
 static lv_obj_t *s_weatherNow = nullptr, *s_weatherMeta = nullptr, *s_weatherDays = nullptr;
 static lv_obj_t *s_wxCanvas = nullptr, *s_wxStatus = nullptr, *s_wxAirport = nullptr;
+static lv_obj_t *s_wxPlate = nullptr;
+static plate_sprite::Plate s_wxPlateArt { "weather_plate.png", "wx_plate" };
 static lv_obj_t *s_wxFooter = nullptr, *s_wxMeta = nullptr, *s_wxAttrib = nullptr;
 static lv_obj_t *s_wxRings[3] = { nullptr, nullptr, nullptr };
 static lv_obj_t *s_wxRingLbl[3] = { nullptr, nullptr, nullptr };
@@ -584,6 +587,21 @@ static void build_weather(void) {
 #endif
     // The rings take their colour, and their existence, from the weather theme.
     const theme_style::Weather &wxs = theme_style::weather();
+    // The weather map's own background colour. Never applied until now: the tile simply
+    // inherited whatever was behind it, so a design could pick a colour here and the map
+    // would carry on being black.
+    // Guarded, because build_weather() runs from ui_set_wx_zoom() during startup as well as
+    // from the tile refresh, and at that point the canvas does not exist yet.
+    // lv_obj_get_parent(nullptr) dereferences it, on the UI thread, which does not throw or
+    // log: the display, the web server and the USB command handler all simply stop together
+    // while core 0 carries on logging aircraft.
+    if (s_wxCanvas) {
+        lv_obj_t *wxTile = lv_obj_get_parent(s_wxCanvas);
+        if (wxTile) {
+            lv_obj_set_style_bg_color(wxTile, lv_color_hex(wxs.bg), 0);
+            lv_obj_set_style_bg_opa(wxTile, LV_OPA_COVER, 0);
+        }
+    }
     const lv_color_t ringCol = wxs.ringColorOn ? lv_color_hex(wxs.ringColor) : UI_GREEN;
     for (int i = 0; i < 3; ++i) {
         if (s_wxRings[i]) lv_obj_set_style_border_color(s_wxRings[i], ringCol, 0);
@@ -993,6 +1011,12 @@ void ui_create(void) {
     lv_obj_set_style_pad_ver(s_wxAirport, 2, 0);
     lv_obj_set_style_radius(s_wxAirport, 4, 0);
 
+    // The theme's own background picture, behind everything on this tile. Created before
+    // the canvas so it sits at the back of the stack without having to be moved there.
+    s_wxPlate = lv_img_create(wp);
+    lv_obj_center(s_wxPlate);
+    lv_obj_add_flag(s_wxPlate, LV_OBJ_FLAG_HIDDEN);
+
     s_wxCanvas = lv_canvas_create(wp);
     lv_obj_set_size(s_wxCanvas, WX_RADAR_SIZE, WX_RADAR_SIZE);
     lv_obj_align(s_wxCanvas, LV_ALIGN_TOP_MID, 0, 52);
@@ -1210,4 +1234,30 @@ void ui_create(void) {
 
     ui_splash_show();   // branded boot splash on top (auto-fades)
     umark("after splash");
+}
+
+// The weather map's artwork, on the same take-on-enter / release-on-exit contract every
+// other screen now follows. Called from main.cpp's radar_show_weather / radar_hide_weather,
+// both of which run on the UI thread, which is the only thread allowed to touch these.
+//
+// This screen had no art hooks at all: it was the one screen in Studio offering a
+// background picture that nothing shipped and nothing decoded.
+void ui_weather_art_attach(void) {
+    if (!s_wxPlate) return;
+    const lv_img_dsc_t *art = plate_sprite::get(s_wxPlateArt);
+    if (art) {
+        lv_img_set_src(s_wxPlate, art);
+        lv_obj_move_background(s_wxPlate);
+        lv_obj_clear_flag(s_wxPlate, LV_OBJ_FLAG_HIDDEN);
+    } else {
+        lv_obj_add_flag(s_wxPlate, LV_OBJ_FLAG_HIDDEN);
+    }
+}
+
+void ui_weather_art_release(void) {
+    if (s_wxPlate) {
+        lv_img_set_src(s_wxPlate, nullptr);
+        lv_obj_add_flag(s_wxPlate, LV_OBJ_FLAG_HIDDEN);
+    }
+    plate_sprite::release(s_wxPlateArt);
 }

@@ -494,13 +494,45 @@ static void adsb_task(void*) {
             // Closed: give them back, but only from here, and only while idle. wxFillIdx ==
             // WX_RADAR_FRAMES means no frame is part-way through, which is the only moment
             // it is safe: this task is the one that writes into them.
+            // The app has gone: abandon whatever is left of the current cycle rather than
+            // finishing it. Each remaining frame is a PNG fetched and decoded for a screen
+            // nobody is looking at, several seconds apiece, and until the cycle ends the
+            // gate below cannot take the 1.2 MB back. Measured stuck at frame 1 of 5 with
+            // the app closed, holding the lot.
+            //
+            // Safe HERE and nowhere else, for the same reason the release itself is: this is
+            // the top of the network task's loop, so the fetch that was in flight has
+            // already returned and no frame is part-way through being written.
+            if (g_wxClosed && wxFillIdx < WX_RADAR_FRAMES) {
+                Serial.printf("[wxradar] app closed at frame %d/%d; dropping the rest\n",
+                              wxFillIdx, WX_RADAR_FRAMES);
+                wxFillIdx = WX_RADAR_FRAMES;
+            }
             if (g_wxClosed && wxFillIdx >= WX_RADAR_FRAMES) {
                 g_wxClosed = false;
                 wx_radar_release();
+                // The road and coastline masks are NOT freed here. They are 16 KB each and
+                // they are the one thing both threads can see, so keeping them makes "the
+                // network task is mid-blit while the app closes" a non-question rather than
+                // a window to be narrowed. The 1.2 MB of frame buffers is what matters.
                 wx_phase_set(WX_PHASE_IDLE);
             }
+
+            // A refresh must not start for an app nobody is looking at. Without the
+            // !g_wxClosed here, the periodic timer kept arming a new cycle behind the closed
+            // app: wxFillIdx went back to zero before the release gate above could ever
+            // catch it idle, so 1.2 MB of frame buffers stayed held for the rest of the
+            // session. The release was written to wait for a quiet moment and the refresh
+            // guaranteed there was never one.
+            //
+            // Blocking the whole timer instead was worse and I tried it first: a cycle that
+            // was part-way through when the app closed then never finished either, so
+            // wxFillIdx never reached the value the gate waits for and the buffers were held
+            // just the same. An in-flight fetch has to be allowed to complete, because the
+            // task doing it is writing into those buffers and taking them away mid-write is
+            // the hang this whole handshake exists to avoid.
             if (wxFillIdx >= WX_RADAR_FRAMES && (int32_t)(nowMs - nextWxRadarAt) >= 0
-                && wx_radar_ready()) {
+                && wx_radar_ready() && !g_wxClosed) {
                 wxFillIdx = 0; ++wxGen;                // periodic refresh: start a new loop
             }
             if (wxFillIdx < WX_RADAR_FRAMES && (int32_t)(nowMs - nextWxRadarAt) >= 0) {
@@ -791,13 +823,16 @@ static void radar_show_weather() {
     // off the SD card and the driver cannot take that from two tasks at once. The network
     // task only ever blits the finished masks. Returns immediately if this centre is built.
     wx_phase_set(WX_PHASE_MAP);
+    ui_weather_art_attach();
     wx_map_prepare(g_settings.homeLat, g_settings.homeLon, g_wxZoomTier);
     ui_show_view(1);   // tile 1 since list/stats went
 }
 
 static void radar_hide_weather() {
+    ui_weather_art_release();   // UI thread, so the plate goes back here rather than by flag
     g_wxOpened = false;
     g_wxClosed = true;
+    Serial.println("[wxradar] app closed; buffers will go back at the next idle moment");
 }
 
 // A Launch Kit push with a custom selection design changes what the knob does on

@@ -190,6 +190,12 @@ static int        s_flowMax         = FLOW_MAX;    // persistent flow-layer segm
 static int        s_flowGenMax      = 14;          // ...and an age cap in polls (~2 s each) so tracks fade out
 static lv_timer_t *s_timer    = nullptr;
 static float       s_sweepDeg = 0.0f;
+// The weather map's own angle, advanced in the SAME callback off the SAME smoothed frame
+// time, just at its own rate. The two used to share s_sweepDeg outright, which is why the
+// weather theme's sweepSpeed was a slider in Orb Studio that moved nothing: there was only
+// one speed and it belonged to the Flight Tracker. Sharing the TIMER is what keeps the
+// motion even; sharing the ANGLE was never the part that mattered.
+static float       s_wxSweepDeg = 0.0f;
 // Sweep pacing state, at file scope so the loading gate can reset it. A multi-second
 // stall during first-entry projection would otherwise poison the smoothed frame time and
 // make the sweep lurch on its first few steps after the wait.
@@ -609,7 +615,7 @@ static void wx_sweep_draw_cb(lv_event_t *e) {
     ld.round_start = 1; ld.round_end = 1;
     for (int i = steps; i >= 1; --i) {
         const float frac = 1.0f - (float)i / (float)steps;
-        const float ang  = s_sweepDeg - (float)i * (trailDeg / (float)steps);
+        const float ang  = s_wxSweepDeg - (float)i * (trailDeg / (float)steps);
         ld.opa = (lv_opa_t)(frac * frac * trailOpaMax);
         if (ld.opa < 2) continue;
         lv_point_t p2 = rim_point(ang, R);
@@ -621,7 +627,7 @@ static void wx_sweep_draw_cb(lv_event_t *e) {
     le.width = (lv_coord_t)(ws.sweepLeadWidth < 1 ? 1 : ws.sweepLeadWidth);
     le.opa = 217;
     le.round_start = 1; le.round_end = 1;
-    lv_point_t lead = rim_point(s_sweepDeg, R);
+    lv_point_t lead = rim_point(s_wxSweepDeg, R);
     lv_draw_line(dctx, &le, &center, &lead);
 }
 
@@ -874,6 +880,13 @@ static void sweep_timer_cb(lv_timer_t *t) {
     if (s_emaDtMs < 20.0f) s_emaDtMs = 20.0f;
     if (s_emaDtMs > 400.0f) s_emaDtMs = 400.0f;
     s_sweepDeg += speedDps * s_emaDtMs / 1000.0f;
+    {
+        // The same smoothed dt, so it cannot judder independently of the other one.
+        const theme_style::Weather &ws = theme_style::weather();
+        const float wxDps = (float)(ws.sweepSpeed < 1 ? 1 : (ws.sweepSpeed > 360 ? 360 : ws.sweepSpeed));
+        s_wxSweepDeg += wxDps * s_emaDtMs / 1000.0f;
+        if (s_wxSweepDeg >= 360.0f) s_wxSweepDeg -= 360.0f;
+    }
     if (s_sweepDeg >= 360.0f) s_sweepDeg -= 360.0f;
     // Image-type sweep: same angle, rotated as a real lv_img instead of the
     // vector wedge's manual bounding-box invalidation below.

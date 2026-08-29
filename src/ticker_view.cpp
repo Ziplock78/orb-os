@@ -3,6 +3,7 @@
 #include "theme_style.h"
 #include "theme_font.h"
 #include "curved_text.h"
+#include "plate_sprite.h"
 #include "config.h"
 #ifdef ARDUINO
 #include <Arduino.h>
@@ -30,6 +31,8 @@ namespace {
 // again here as constexpr is a redefinition the preprocessor turns into nonsense.
 
 lv_obj_t *s_screen = nullptr;
+lv_obj_t *s_plate  = nullptr;   // the theme's own background picture, when it ships one
+plate_sprite::Plate s_plateArt { "ticker_plate.png", "ticker_plate" };
 lv_obj_t *s_name   = nullptr;
 lv_obj_t *s_price  = nullptr;
 lv_obj_t *s_change = nullptr;
@@ -308,6 +311,12 @@ void init() {
     lv_obj_set_size(s_screen, SCREEN_W, SCREEN_H);
     lv_obj_clear_flag(s_screen, LV_OBJ_FLAG_SCROLLABLE);
 
+    // Behind everything, and created first so it is at the back of the stack without having
+    // to be moved there afterwards.
+    s_plate = lv_img_create(s_screen);
+    lv_obj_center(s_plate);
+    show(s_plate, false);
+
     s_name = lv_label_create(s_screen);
     lv_label_set_text(s_name, "");
     lv_obj_set_style_text_align(s_name, LV_TEXT_ALIGN_CENTER, 0);
@@ -369,12 +378,25 @@ void onEnter() {
             Serial.println("[ticker] no PSRAM for the curved strip; falling back to the flat one");
         }
     }
+    // The plate is decoded HERE rather than at init, so a screen nobody visits costs no
+    // PSRAM, and a theme changed while another app was up is picked up on the way in.
+    const lv_img_dsc_t *art = plate_sprite::get(s_plateArt);
+    if (art && s_plate) {
+        lv_img_set_src(s_plate, art);
+        lv_obj_move_background(s_plate);
+    }
+    show(s_plate, art != nullptr);
+
     style_all();
     rebuild_strip();
     onQuotesReady();
 }
 
 void onExit() {
+    // The picture goes back with everything else. 424 KB is not a thing to hold for a screen
+    // nobody is looking at.
+    if (s_plate) { lv_img_set_src(s_plate, nullptr); show(s_plate, false); }
+    plate_sprite::release(s_plateArt);
     // Delete the object rather than handing it a null buffer. LVGL does not accept the
     // latter and wedges the UI thread on the next app switch, which cost two evenings and
     // three flashes to learn on the clock.

@@ -192,6 +192,13 @@ namespace theme_style {
 //      Tracker's sweep OBJECT outright, so it wore the Flight Tracker's artwork. An Orb
 //      below this level ignores the file and draws the weather map as it always did, which
 //      is with no sweep at all.
+//  27  three things the weather map was offered in Orb Studio and never given, plus a
+//      background picture for it and for the Stock Ticker. Its bg colour was never read at
+//      all, so the map inherited whatever sat behind it and stayed black however a design
+//      set it. Its sweepSpeed was never read either: both sweeps shared one angle, so the
+//      slider moved the Flight Tracker's hand or nothing. And neither screen could carry a
+//      plate. An Orb below this level keeps a black weather map at the Flight Tracker's
+//      sweep speed and ignores both plates.
 //  26  the Stock Ticker: a watchlist the theme carries, a focused readout, and a strip
 //      that can run along the bottom or bend around the bezel. An Orb below this level has
 //      no such app and ignores ticker_style.json entirely.
@@ -204,7 +211,7 @@ namespace theme_style {
 //      The weather map drew roads at a hard-coded grey and had no coastline at all, so a
 //      theme could set roadColor and roadsEnabled and watch neither do anything. An Orb
 //      below this level draws no coastline and keeps the fixed grey.
-constexpr int THEME_CAPS = 26;
+constexpr int THEME_CAPS = 27;
 
 struct ClockText {
     bool     show   = false;

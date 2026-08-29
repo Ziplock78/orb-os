@@ -9,6 +9,11 @@
 void ui_create(void);            // build the whole UI on the active screen
 void ui_on_data_updated(void);   // refresh the detail card + weather after radar::update()
 void ui_show_view(int idx);      // 0 = Flight Tracker, 1 = Weather Radar
+
+// The weather map's background picture. UI THREAD ONLY: it decodes from the SD card, and
+// the driver cannot be called from two tasks at once.
+void ui_weather_art_attach(void);
+void ui_weather_art_release(void);
 void ui_set_status(bool wifiUp, bool feedOk, int rssi, const char *clock);  // HUD: signal bars (count=RSSI, colour: red=down, amber=stale feed, white=ok) + clock
 void ui_set_battery(int pct, bool charging, bool present);  // top HUD battery indicator
 void ui_set_date(const char *date);  // top HUD date line (e.g. "08 Jun 2026")
