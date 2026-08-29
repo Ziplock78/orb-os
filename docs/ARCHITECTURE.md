@@ -1,7 +1,8 @@
 # Architecture
 
 How the Orb Firmware is actually put together today, not how it was originally
-sketched. Where the current build differs from `orb-user-requirements.md`, the gap is
+sketched. Where the current build differs from `orb-ux-requirements.md` (the top-level
+target, which supersedes `orb-user-requirements.md`), the gap is
 called out explicitly rather than papered over.
 
 Board: Waveshare ESP32-S3-Touch-AMOLED-1.75 (ESP32-S3R8, 8 MB PSRAM, 16 MB flash,
@@ -52,7 +53,7 @@ marked `hidden` and skipped when cycling. Current roster, in order:
 
 ## Known gap: touch is still live
 
-`orb-user-requirements.md` states that touch is disabled and never required for
+`orb-ux-requirements.md` states that touch is disabled and never required for
 anything. **The firmware does not currently match that.**
 
 - `src/display.cpp` (~line 288) registers the CST9217 as an LVGL pointer input device
