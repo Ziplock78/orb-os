@@ -110,6 +110,11 @@ to it, and it read as the glass having stopped being the top layer.
 
 ## Before calling it done
 
+- [ ] `python3 tools/audit.py` is clean. It cross-checks the firmware against Orb Studio for
+      the faults this project keeps producing: a control the firmware never reads, a theme
+      key nothing parses, a fixed limit a theme can now exceed, a simulator that skips a step
+      the device takes, a capability level only one side knows about, and a firmware that was
+      published but never deployed. Every one of those has shipped, and every one was silent.
 - [ ] Both firmware targets build (`native` and `esp32-s3-amoled-175`).
 - [ ] `THEME_CAPS` bumped, ledger entry written, `CAPS_FEATURES` row added.
 - [ ] `SCREEN_KEYS` entry added, and a version saves and survives a reload.
