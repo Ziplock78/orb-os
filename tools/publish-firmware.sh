@@ -42,3 +42,25 @@ JSON
 
 echo "published v$VERSION caps $CAPS -> $STUDIO"
 cat "$STUDIO/manifest.json"
+
+# THIS IS NOT THE LAST STEP, and forgetting that has now shipped an old firmware twice.
+#
+# Copying the binary into public/firmware only puts it on disk. Orb Studio serves what its
+# BUILD contains, so until the site is rebuilt and deployed the flasher hands out whatever
+# version was current the last time somebody ran vite build. The second time this happened,
+# the Orb was flashed BACKWARDS over a newer build from the cable, which looks like the
+# update silently failing.
+#
+# So the script says what is left rather than trusting anyone to remember, and it says it
+# after checking, because a reminder that fires when it is not needed gets ignored.
+DIST_MANIFEST="$(dirname "$STUDIO")/../dist/client/firmware/manifest.json"
+DIST_VERSION="$(grep -o '"version"[^,]*' "$DIST_MANIFEST" 2>/dev/null | grep -o '[0-9][0-9.]*' || echo "none")"
+if [ "$DIST_VERSION" != "$VERSION" ]; then
+  echo
+  echo "=============================================================="
+  echo " NOT DONE YET. Orb Studio still serves ${DIST_VERSION}."
+  echo " Flashing from Studio right now would install ${DIST_VERSION}, not ${VERSION}."
+  echo
+  echo "   cd $(dirname "$STUDIO")/.. && npx vite build && npx wrangler deploy --name buildtheorb"
+  echo "=============================================================="
+fi
