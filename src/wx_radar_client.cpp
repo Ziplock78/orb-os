@@ -171,6 +171,49 @@ static void mask_polylines(uint8_t *mask, size_t polys, int c) {
     }
 }
 
+// The plate, cropped to the radar circle. See the note in wx_radar.h for why it is never
+// freed. 253 KB, against the 1.2 MB of frame buffers this screen already takes and gives
+// back around it.
+static uint16_t *s_plateCrop = nullptr;
+// Separate from the pointer, because the buffer is kept once allocated and a design that
+// drops its picture has to stop drawing it without the allocation going away.
+static bool      s_plateHave = false;
+
+bool wx_plate_have() { return s_plateHave && s_plateCrop != nullptr; }
+
+void wx_plate_blit(uint16_t *dst) {
+    if (s_plateCrop && dst)
+        memcpy(dst, s_plateCrop, (size_t)WX_RADAR_SIZE * WX_RADAR_SIZE * sizeof(uint16_t));
+}
+
+void wx_plate_set(const uint16_t *src, int w, int h) {
+    if (!src || w <= 0 || h <= 0) {
+        if (s_plateCrop) memset(s_plateCrop, 0, (size_t)WX_RADAR_SIZE * WX_RADAR_SIZE * sizeof(uint16_t));
+        s_plateHave = false;
+        return;
+    }
+    if (!s_plateCrop) {
+        s_plateCrop = (uint16_t *)heap_caps_malloc((size_t)WX_RADAR_SIZE * WX_RADAR_SIZE * sizeof(uint16_t),
+                                                   MALLOC_CAP_SPIRAM);
+        if (!s_plateCrop) { Serial.println("[wxradar] no PSRAM for the background crop"); return; }
+    }
+    // The centre of the plate, at the size the radar image is drawn. Both are centred on the
+    // screen, so the crop is a straight offset rather than a scale: a design's picture lines
+    // up with what it looked like in Orb Studio instead of being subtly resampled.
+    const int ox = (w - WX_RADAR_SIZE) / 2, oy = (h - WX_RADAR_SIZE) / 2;
+    for (int y = 0; y < WX_RADAR_SIZE; ++y) {
+        const int sy = oy + y;
+        uint16_t *d = s_plateCrop + (size_t)y * WX_RADAR_SIZE;
+        if (sy < 0 || sy >= h) { memset(d, 0, WX_RADAR_SIZE * sizeof(uint16_t)); continue; }
+        for (int x = 0; x < WX_RADAR_SIZE; ++x) {
+            const int sx = ox + x;
+            d[x] = (sx < 0 || sx >= w) ? 0 : src[(size_t)sy * w + sx];
+        }
+    }
+    s_plateHave = true;
+    Serial.printf("[wxradar] background picture cropped to %dx%d\n", WX_RADAR_SIZE, WX_RADAR_SIZE);
+}
+
 void wx_map_prepare(double lat, double lon, int tier) {
     const theme_style::Weather &wx = theme_style::weather();
     if (!wx.roadsEnabled && !wx.coastEnabled) return;
@@ -471,9 +514,16 @@ int wx_radar_fetch_frame(double lat, double lon, int zoomTier, uint32_t gen, int
     heap_caps_free(image);           // PNG fully decoded (or failed) — buffer no longer needed
     if (decoded != PNG_SUCCESS) { Serial.printf("[wxradar] PNG decode error %d\n", decoded); return -1; }
 
-    // Composite: roads (fresh, crisp, at the true display range) as the base layer, then
-    // the native precipitation raster cropped/upscaled on top of it.
-    memset(wx_radar_back_buffer(), 0, WX_RADAR_SIZE * WX_RADAR_SIZE * sizeof(uint16_t));
+    // Composite, bottom up: the theme's background, then the roads and coastline, then the
+    // precipitation. The background used to be a memset to black, which is what made a
+    // design's chosen picture and colour both invisible under this screen's opaque image.
+    if (wx_plate_have()) wx_plate_blit(wx_radar_back_buffer());
+    else {
+        const uint16_t bg = rgb565(theme_style::weather().bg);
+        uint16_t *dst = wx_radar_back_buffer();
+        if (bg == 0) memset(dst, 0, WX_RADAR_SIZE * WX_RADAR_SIZE * sizeof(uint16_t));
+        else for (size_t i = 0; i < (size_t)WX_RADAR_SIZE * WX_RADAR_SIZE; ++i) dst[i] = bg;
+    }
     draw_map();
     composite_zoom(zoomTier);
     wx_radar_commit_frame(slot, gen, s_times[slot], lat, lon);

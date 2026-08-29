@@ -1249,8 +1249,13 @@ void ui_weather_art_attach(void) {
         lv_img_set_src(s_wxPlate, art);
         lv_obj_move_background(s_wxPlate);
         lv_obj_clear_flag(s_wxPlate, LV_OBJ_FLAG_HIDDEN);
+        // ...and hand the middle of it to the frame builder. The radar image is opaque and
+        // sits over the centre of the screen, so a plate BEHIND it is only visible as a
+        // border: the picture has to go INTO the frame to be seen at all.
+        wx_plate_set((const uint16_t *)art->data, art->header.w, art->header.h);
     } else {
         lv_obj_add_flag(s_wxPlate, LV_OBJ_FLAG_HIDDEN);
+        wx_plate_set(nullptr, 0, 0);
     }
 }
 

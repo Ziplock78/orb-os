@@ -84,6 +84,25 @@ void destroy() {
         if (lv_obj_t *scr = lv_scr_act()) lv_obj_invalidate(scr);
         lv_obj_invalidate(lv_layer_top());
         lv_refr_now(NULL);
+        // ...and again, a few frames later.
+        //
+        // One pass is demonstrably not always enough: a thin bright arc has been turning up
+        // along the top edge of the dial after an install for a while now, and it survives
+        // until something else repaints that region -- going to the app menu and back clears
+        // it, which is a full redraw by another name. The pass above happens while boot code
+        // is still driving lv_refr_now() by hand rather than the timer cycle LVGL expects, so
+        // a region can be left unclaimed exactly once and then never revisited.
+        //
+        // A second pass on a normal timer tick costs one repaint on a path that runs a
+        // handful of times in a device's life. It is a belt to go with the braces, and it is
+        // honest about being one: I have not found what leaves the strip, only that a real
+        // full redraw removes it.
+        lv_timer_t *again = lv_timer_create([](lv_timer_t *t) {
+            if (lv_obj_t *scr = lv_scr_act()) lv_obj_invalidate(scr);
+            lv_obj_invalidate(lv_layer_top());
+            lv_timer_del(t);
+        }, 150, nullptr);
+        if (again) lv_timer_set_repeat_count(again, 1);
     }
 }
 

@@ -601,7 +601,7 @@ static void sim_register_apps(lv_obj_t *radarScreen) {
                    !theme_style::apps().flight);
     app_shell::add(radarScreen, theme_style::names().weather,
                    []() { static bool fc = false; fc = !fc; ui_set_weather_forecast(fc); },  // push toggles WX/forecast
-                   nullptr, false, []() { wx_map_prepare(g_set.homeLat, g_set.homeLon, 0); ui_show_view(1); }, nullptr, !theme_style::apps().weather);
+                   nullptr, false, []() { wx_map_prepare(g_set.homeLat, g_set.homeLon, 0); ui_weather_art_attach(); ui_show_view(1); }, nullptr, !theme_style::apps().weather);
     app_shell::add(survScreen,  theme_style::names().surveillance, nullptr, nullptr, false, nullptr, nullptr, !theme_style::apps().surveillance);
     // init() FIRST, and this is not a style preference.
     //
@@ -1471,7 +1471,7 @@ int main(int argc, char **argv) {
             settingsview::init();
             app_shell::add(clockview::screen(), "Clock");
             app_shell::add(radarScreen, "Flight Tracker", nullptr, nullptr, false, []() { ui_show_view(0); });
-            app_shell::add(radarScreen, "Weather Radar", nullptr, nullptr, false, []() { wx_map_prepare(g_set.homeLat, g_set.homeLon, 0); ui_show_view(1); });
+            app_shell::add(radarScreen, "Weather Radar", nullptr, nullptr, false, []() { wx_map_prepare(g_set.homeLat, g_set.homeLon, 0); ui_weather_art_attach(); ui_show_view(1); });
             app_shell::add(unavailScreen1, "News");
             app_shell::add(unavailScreen2, "Surveillance");
             app_shell::add(settingsview::screen(), "Settings", settingsview::onPress, settingsview::onTurn, true, settingsview::onEnter, settingsview::onExit);

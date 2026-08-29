@@ -41,6 +41,23 @@ void wx_radar_release(void);
 // the centre or zoom actually moved.
 void wx_map_prepare(double lat, double lon, int tier);
 
+// The theme's background picture, cropped to the radar circle, for the frame builder to lay
+// down under the map and the precipitation.
+//
+// This exists because the radar image is OPAQUE. It is 360x360 of RGB565 with no alpha
+// channel, drawn over the middle of a 466 px screen, so a background plate behind it only
+// ever showed as a 53 px border and the picture a design had chosen was invisible in the
+// part of the screen anybody looks at.
+//
+// Filled by the UI thread when the app is entered (it is the thread that decodes the plate)
+// and read by the network task when it builds a frame. Kept for the life of the process
+// rather than freed on exit, exactly like the road and coastline masks and for exactly the
+// same reason: it is a thing two threads can see, and never freeing it means there is no
+// moment when one can be reading it while the other takes it away.
+void wx_plate_set(const uint16_t *src466, int w, int h);   // UI thread; nullptr clears it
+bool wx_plate_have();
+void wx_plate_blit(uint16_t *dst360);   // network task: lay it down as the frame's base
+
 // WHAT THE WEATHER APP IS DOING RIGHT NOW, so the screen can say so.
 //
 // Opening this app cold is not quick and never can be: it takes 1.2 MB of frame buffers,
