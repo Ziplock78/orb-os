@@ -57,6 +57,14 @@ const lv_font_t *intel_source();
 const lv_font_t *intel_age();
 bool intel_has_font(int slot);   // 0 title, 1 text, 2 source, 3 age
 
+// The Stock Ticker's four. Same contract: check ticker_has_font() before honouring a size
+// slider, because a theme's face is baked at one size and cannot be scaled afterwards.
+const lv_font_t *ticker_name();
+const lv_font_t *ticker_price();
+const lv_font_t *ticker_change();
+const lv_font_t *ticker_strip();
+bool ticker_has_font(int slot);  // 0 name, 1 price, 2 change, 3 strip
+
 // How many of this theme's fonts actually loaded from flash. 0 means everything is
 // running on compiled fallbacks, which is the honest "nothing changed yet" state rather
 // than a failure.

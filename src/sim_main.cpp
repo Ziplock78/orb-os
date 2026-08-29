@@ -28,6 +28,8 @@
 #include "aircraft.h"
 #include "clock_view.h"
 #include "intel_view.h"
+#include "ticker_view.h"
+#include "ticker.h"
 #include "app_shell.h"
 #include "app_theme.h"
 #include "theme_select.h"
@@ -616,8 +618,16 @@ static void sim_register_apps(lv_obj_t *radarScreen) {
     if (intelview::fetchStep()) intelview::onHeadlinesReady();
     app_shell::add(intelview::screen(), theme_style::names().headlines,
                    intelview::onPress, intelview::onTurn, false, intelview::onEnter, intelview::onExit, !theme_style::apps().headlines);
-    // After News, matching main.cpp. The selftests below address apps by index, so the two
-    // lineups have to stay in the same order or the simulator stops standing in for the
+    // The Stock Ticker, between News and Settings, matching main.cpp. Fetched once here for
+    // the same reason News is: the device does this from a network task the simulator has
+    // no equivalent of, and a headless screenshot of an empty screen tells nobody anything.
+    tickerview::init();
+    if (ticker_fetch_step()) tickerview::onQuotesReady();
+    app_shell::add(tickerview::screen(), theme_style::names().ticker,
+                   tickerview::onPress, tickerview::onTurn, false,
+                   tickerview::onEnter, tickerview::onExit, !theme_style::apps().ticker);
+    // After the Ticker, matching main.cpp. The selftests below address apps by index, so the
+    // two lineups have to stay in the same order or the simulator stops standing in for the
     // device at exactly the moment someone is using it to check one.
     app_shell::add(settingsview::screen(), theme_style::names().settings,
                    settingsview::onPress, settingsview::onTurn, true, settingsview::onEnter, settingsview::onExit, false);

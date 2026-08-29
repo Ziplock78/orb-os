@@ -51,7 +51,9 @@
 #include "custom_boot_target.h"       // CUSTOM_BOOT_TARGET — set by whichever Launch Kit push (clock/splash/radar) ran last
 #include "custom_apps.h"              // CUSTOM_APP_* — which apps a theme flash includes in the menu
 #include "spycam_view.h"             // Spy Cam: looping "security camera" flip-book
-#include "intel_view.h"              // world headlines, read through the gateway
+#include "intel_view.h"
+#include "ticker_view.h"
+#include "ticker.h"              // world headlines, read through the gateway
 #include <set>                       // audio: track which contacts are in range
 #include <string>
 #include <WiFiManager.h>             // captive portal
@@ -175,6 +177,7 @@ static volatile bool         g_wxRadarDirty = false;
 static volatile bool         g_wxAnimDirty = false;      // new Weather app: frame set ready
 static volatile bool         g_cloudImageDirty = false;
 static volatile bool         g_intelDirty = false;      // headlines: a fresh set is in the store
+static volatile bool         g_tickerDirty = false;     // quotes: a fresh set is in the store
 
 // Web-selectable time zones (label + POSIX TZ). The <option> value is the index; the save
 // handler maps it back to the POSIX string stored in NVS and used by configTzTime at boot.
@@ -534,6 +537,11 @@ static void adsb_task(void*) {
             // a kilobyte, so there is nothing to spread over several cycles. fetchStep() owns its own timing and returns immediately when
             // nothing is due, which is almost every pass through this loop.
             if (intelview::fetchStep()) g_intelDirty = true;
+            // Quotes, through the same gateway and for the same reason. Well under a
+            // kilobyte for a whole watchlist, so like the headlines there is nothing here
+            // worth spreading over several passes; the step owns its own timing and returns
+            // immediately when nothing is due, which is almost every pass.
+            if (theme_style::apps().ticker && ticker_fetch_step()) g_tickerDirty = true;
             // Then the on-demand lookups for the selected aircraft. Their timeouts are kept
             // short (see photo_client / route_client) so a slow photo server can't freeze the
             // feed for long; the next loop iteration polls again as soon as they return.
@@ -2298,6 +2306,11 @@ void setup() {
     psram_mark("after intelview");
     app_shell::add(intelview::screen(), theme_style::names().headlines,
                    intelview::onPress, intelview::onTurn, false, intelview::onEnter, intelview::onExit, !theme_style::apps().headlines);  // push fetches now, or toggles scroll mode when the type size overflows; onEnter resets to the top
+    tickerview::init();
+    psram_mark("after tickerview");
+    app_shell::add(tickerview::screen(), theme_style::names().ticker,
+                   tickerview::onPress, tickerview::onTurn, false,
+                   tickerview::onEnter, tickerview::onExit, !theme_style::apps().ticker);  // turn steps the watchlist; onEnter takes the strip canvas only when the design curves it
     settingsview::init();
     psram_mark("after settingsview");
     app_shell::add(settingsview::screen(), theme_style::names().settings,
@@ -2825,6 +2838,14 @@ void loop() {
         g_intelDirty = false;
         intelview::onHeadlinesReady();
     }
+    if (g_tickerDirty) {
+        g_tickerDirty = false;
+        tickerview::onQuotesReady();
+    }
+    // The curved strip is advanced from here rather than from a timer of its own, so it
+    // moves on the same clock as everything else the display does and cannot drift against
+    // it. tick() returns immediately unless the theme actually curves its strip.
+    tickerview::tick();
     if (g_wxRadarDirty) {
         g_wxRadarDirty = false;
         ui_on_data_updated();

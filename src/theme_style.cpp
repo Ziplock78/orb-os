@@ -37,6 +37,7 @@ namespace {
 Clock    s_clock;
 Radar    s_radar;
 Weather  s_weather;
+Ticker   s_ticker;
 Menu     s_menu;
 Settings s_settings;
 Intel    s_intel;
@@ -269,6 +270,10 @@ void seed_defaults() {
 // 0..255, from a value that may be absent, negative, or 300. Ten opacity fields share this
 // rather than each writing its own clamp, because ten hand-written clamps is ten chances to
 // differ from the one Studio applies on the other side.
+// Same reasoning, for the many integer ranges: one clamp, so it cannot drift from the one
+// Orb Studio applies on the other side of the wire.
+static int clampi(int v, int lo, int hi) { return v < lo ? lo : (v > hi ? hi : v); }
+
 static int opa_of(JsonVariantConst v, int fallback) {
     if (!v.is<int>()) return fallback;
     const int o = v.as<int>();
@@ -416,6 +421,51 @@ void load() {
                     s_clock.shadowDY = sh["dy"] | 0;
                 }
             }
+        }
+    }
+    {
+        // The Stock Ticker's own file, for the same reason every other screen has one.
+        JsonDocument doc;
+        if (read_style_json(slug, "ticker_style.json", doc)) {
+            if (doc["bg"].is<uint32_t>()) s_ticker.bg = doc["bg"].as<uint32_t>();
+            if (doc["symbols"].is<const char *>())
+                strlcpy(s_ticker.symbols, doc["symbols"].as<const char *>(), sizeof(s_ticker.symbols));
+            // Clamped to match Studio, in both directions. Under fifteen seconds is a
+            // request every Orb makes four times a minute for a number that has not moved;
+            // over fifteen minutes it is not a ticker any more.
+            if (doc["pollSeconds"].is<int>())
+                s_ticker.pollSeconds = clampi(doc["pollSeconds"].as<int>(), 15, 900);
+            if (doc["upColor"].is<uint32_t>())   s_ticker.upColor   = doc["upColor"].as<uint32_t>();
+            if (doc["downColor"].is<uint32_t>()) s_ticker.downColor = doc["downColor"].as<uint32_t>();
+            if (doc["flatColor"].is<uint32_t>()) s_ticker.flatColor = doc["flatColor"].as<uint32_t>();
+
+            if (doc["nameColor"].is<uint32_t>()) s_ticker.nameColor = doc["nameColor"].as<uint32_t>();
+            if (doc["nameSize"].is<int>())  s_ticker.nameSize = doc["nameSize"].as<int>();
+            if (doc["nameY"].is<int>())     s_ticker.nameY    = clampi(doc["nameY"].as<int>(), 0, 465);
+            if (doc["nameShow"].is<bool>()) s_ticker.nameShow = doc["nameShow"].as<bool>();
+
+            if (doc["priceSize"].is<int>())     s_ticker.priceSize    = doc["priceSize"].as<int>();
+            if (doc["priceY"].is<int>())        s_ticker.priceY       = clampi(doc["priceY"].as<int>(), 0, 465);
+            if (doc["priceShow"].is<bool>())    s_ticker.priceShow    = doc["priceShow"].as<bool>();
+            if (doc["priceColorOn"].is<bool>()) s_ticker.priceColorOn = doc["priceColorOn"].as<bool>();
+            if (doc["priceColor"].is<uint32_t>()) s_ticker.priceColor = doc["priceColor"].as<uint32_t>();
+
+            if (doc["changeSize"].is<int>())  s_ticker.changeSize = doc["changeSize"].as<int>();
+            if (doc["changeY"].is<int>())     s_ticker.changeY    = clampi(doc["changeY"].as<int>(), 0, 465);
+            if (doc["changeShow"].is<bool>()) s_ticker.changeShow = doc["changeShow"].as<bool>();
+            if (doc["changePct"].is<bool>())  s_ticker.changePct  = doc["changePct"].as<bool>();
+
+            if (doc["stripShow"].is<bool>())    s_ticker.stripShow  = doc["stripShow"].as<bool>();
+            if (doc["stripPlace"].is<int>())
+                s_ticker.stripPlace = (uint8_t)clampi(doc["stripPlace"].as<int>(), 0, 2);
+            if (doc["stripSize"].is<int>())     s_ticker.stripSize  = doc["stripSize"].as<int>();
+            if (doc["stripColor"].is<uint32_t>()) s_ticker.stripColor = doc["stripColor"].as<uint32_t>();
+            if (doc["stripOpa"].is<int>())      s_ticker.stripOpa   = clampi(doc["stripOpa"].as<int>(), 0, 255);
+            if (doc["stripSpeed"].is<int>())    s_ticker.stripSpeed = clampi(doc["stripSpeed"].as<int>(), 1, 120);
+            if (doc["stripY"].is<int>())        s_ticker.stripY     = clampi(doc["stripY"].as<int>(), 0, 465);
+            if (doc["stripRadius"].is<int>())   s_ticker.stripRadius = clampi(doc["stripRadius"].as<int>(), 40, 233);
+            if (doc["stripAngle"].is<int>())    s_ticker.stripAngle = clampi(doc["stripAngle"].as<int>(), 0, 359);
+            if (doc["stripUpDown"].is<bool>())  s_ticker.stripUpDown = doc["stripUpDown"].as<bool>();
         }
     }
     {
@@ -832,6 +882,7 @@ void load() {
                 if (a["weather"].is<bool>())      s_apps.weather      = a["weather"].as<bool>();
                 if (a["surveillance"].is<bool>()) s_apps.surveillance = a["surveillance"].as<bool>();
                 if (a["headlines"].is<bool>())    s_apps.headlines    = a["headlines"].as<bool>();
+                if (a["ticker"].is<bool>())       s_apps.ticker       = a["ticker"].as<bool>();
             }
             // Display labels. Purely cosmetic: they never affect which folder is read or
             // which app is which, so a theme can rename Flight Tracker freely.
@@ -845,6 +896,7 @@ void load() {
                     { "weather",      s_names.weather,      sizeof(s_names.weather)      },
                     { "surveillance", s_names.surveillance, sizeof(s_names.surveillance) },
                     { "headlines",    s_names.headlines,    sizeof(s_names.headlines)    },
+                    { "ticker",       s_names.ticker,       sizeof(s_names.ticker)       },
                     { "settings",     s_names.settings,     sizeof(s_names.settings)     },
                 };
                 for (auto &m : map) {
@@ -882,6 +934,7 @@ void load() {
 const Clock &clock() { return s_clock; }
 const Radar &radar() { return s_radar; }
 const Weather &weather() { return s_weather; }
+const Ticker  &ticker()  { return s_ticker;  }
 const Menu &menu() { return s_menu; }
 const Settings &settings() { return s_settings; }
 const Intel &intel() { return s_intel; }

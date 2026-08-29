@@ -192,6 +192,9 @@ namespace theme_style {
 //      Tracker's sweep OBJECT outright, so it wore the Flight Tracker's artwork. An Orb
 //      below this level ignores the file and draws the weather map as it always did, which
 //      is with no sweep at all.
+//  26  the Stock Ticker: a watchlist the theme carries, a focused readout, and a strip
+//      that can run along the bottom or bend around the bezel. An Orb below this level has
+//      no such app and ignores ticker_style.json entirely.
 //  25  the weather map's rings honoured at last: colour (behind its own switch, see
 //      ringColorOn) and the on/off toggle. Both were in the theme and in Orb Studio, and
 //      the firmware read neither: the rings were the built-in palette's accent, which is
@@ -201,7 +204,7 @@ namespace theme_style {
 //      The weather map drew roads at a hard-coded grey and had no coastline at all, so a
 //      theme could set roadColor and roadsEnabled and watch neither do anything. An Orb
 //      below this level draws no coastline and keeps the fixed grey.
-constexpr int THEME_CAPS = 25;
+constexpr int THEME_CAPS = 26;
 
 struct ClockText {
     bool     show   = false;
@@ -273,6 +276,66 @@ struct Apps {
     bool weather      = true;
     bool surveillance = true;
     bool headlines    = true;   // world headlines, fetched through the gateway
+    bool ticker       = true;   // stock ticker, through the same gateway
+};
+
+// ---- the Stock Ticker -------------------------------------------------------
+//
+// One symbol at a time, large enough to read across a room, with the rest of the watchlist
+// running past underneath. The knob moves between them.
+//
+// The watchlist lives HERE, in the theme, for the same reason the news topics do: it is the
+// thing a person picks, it wants to be editable in Orb Studio rather than over a serial
+// console, and a design that is about markets should be able to arrive with its own.
+constexpr int TICKER_MAX_SYMBOLS = 8;
+constexpr int TICKER_SYM_BYTES   = 13;   // 12 characters and a NUL, matching the gateway
+
+struct Ticker {
+    uint32_t bg           = 0x05070A;
+    // Comma separated, as typed. Split on the device rather than stored pre-split: it is
+    // one string in the JSON, one field in Studio, and one thing to get wrong.
+    char     symbols[TICKER_MAX_SYMBOLS * TICKER_SYM_BYTES] = "^GSPC,^DJI,^IXIC,AAPL";
+    int      pollSeconds  = 60;    // a minute. Clamped 15..900 on the way in.
+
+    // Up and down. Not fixed green and red: the convention is inverted in Japan, and a
+    // design in brass and cream should not be made to wear traffic-light colours.
+    uint32_t upColor      = 0x35D07F;
+    uint32_t downColor    = 0xE5484D;
+    uint32_t flatColor    = 0x8A94A6;
+
+    // The focused quote: name, price, change. Three text elements, each with the same
+    // controls every other text element on this device has.
+    uint32_t nameColor    = 0x8A94A6;
+    int      nameSize     = 16;
+    int      nameY        = 186;
+    bool     nameShow     = true;
+
+    int      priceSize    = 40;
+    int      priceY       = 222;
+    bool     priceShow    = true;
+    // Off means the price is drawn in the up/down colour with everything else, which is the
+    // livelier look; on lets a design hold the price steady and let only the change move.
+    bool     priceColorOn = false;
+    uint32_t priceColor   = 0xE8ECF1;
+
+    int      changeSize   = 22;
+    int      changeY      = 286;
+    bool     changeShow   = true;
+    bool     changePct    = true;   // show the percentage as well as the absolute move
+
+    // The strip. STRIP_CURVED bends it around the bezel with curved_text::draw_arc, which is
+    // the same code the clock's numerals and the scope's readouts use.
+    enum StripPlace : uint8_t { STRIP_BOTTOM = 0, STRIP_TOP = 1, STRIP_CURVED = 2 };
+    bool     stripShow    = true;
+    uint8_t  stripPlace   = STRIP_CURVED;
+    int      stripSize    = 16;
+    uint32_t stripColor   = 0xC8D0DA;
+    int      stripOpa     = 235;
+    int      stripSpeed   = 26;    // px/sec, or degrees/sec when curved
+    int      stripY       = 392;   // flat placements only
+    int      stripRadius  = 196;   // curved only
+    int      stripAngle   = 0;     // curved only: where the middle of the window sits, 0 = top
+    bool     stripUpDown  = true;  // colour each entry by its own direction
 };
 
 // Display names, kept strictly separate from the identifiers they label.
@@ -292,6 +355,7 @@ struct Names {
     char flight[20]       = "Flight Tracker";
     char weather[20]      = "Weather Radar";
     char surveillance[20] = "Surveillance";
+    char ticker[20]       = "Stock Ticker";
     // The KEY stays `headlines`, the LABEL is "News", and the source file is still called
     // intel_view.cpp. Three names for one screen, none of which can be made to agree.
     //
@@ -885,6 +949,7 @@ void load();
 const Clock    &clock();
 const Radar     &radar();
 const Weather   &weather();
+const Ticker    &ticker();
 const Menu      &menu();
 const Settings  &settings();
 const Intel     &intel();

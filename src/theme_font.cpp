@@ -72,7 +72,8 @@ int         s_loaded = 0;
 // One slot per place a theme can style text. Order matches the accessors below.
 enum Slot { S_CLOCK1, S_CLOCK2, S_MENU_CUR, S_MENU_PREV, S_MENU_NEXT, S_SETTINGS, S_SETTINGS_SEL,
             S_RADAR1, S_RADAR2, S_RADAR3, S_RADAR4,
-            S_INTEL_TITLE, S_INTEL_TEXT, S_INTEL_SOURCE, S_INTEL_AGE, S_COUNT };
+            S_INTEL_TITLE, S_INTEL_TEXT, S_INTEL_SOURCE, S_INTEL_AGE,
+            S_TICK_NAME, S_TICK_PRICE, S_TICK_CHANGE, S_TICK_STRIP, S_COUNT };
 
 // Asset names Launch Kit ships. Kept here rather than derived, so the contract between
 // the two programs is one readable list instead of a naming convention nobody can see.
@@ -82,6 +83,7 @@ const char *SLOT_FILE[S_COUNT] = {
     "font_settings.bin", "font_settings_sel.bin",
     "font_radar1.bin", "font_radar2.bin", "font_radar3.bin", "font_radar4.bin",
     "font_intel_title.bin", "font_intel_text.bin", "font_intel_source.bin", "font_intel_age.bin",
+    "font_ticker_name.bin", "font_ticker_price.bin", "font_ticker_change.bin", "font_ticker_strip.bin",
 };
 
 const lv_font_t *s_font[S_COUNT] = { nullptr };
@@ -198,6 +200,25 @@ bool intel_has_font(int slot) {
         case 1: return s_font[S_INTEL_TEXT]   != nullptr;
         case 2: return s_font[S_INTEL_SOURCE] != nullptr;
         case 3: return s_font[S_INTEL_AGE]    != nullptr;
+        default: return false;
+    }
+}
+
+const lv_font_t *ticker_name()   { return get(S_TICK_NAME);   }
+const lv_font_t *ticker_price()  { return get(S_TICK_PRICE);  }
+const lv_font_t *ticker_change() { return get(S_TICK_CHANGE); }
+const lv_font_t *ticker_strip()  { return get(S_TICK_STRIP);  }
+
+// 0 name, 1 price, 2 change, 3 strip. Same contract as the Headlines screen's: a loaded
+// face was baked at ONE size by lv_font_conv and ignores the size slider entirely, so a
+// caller that offers a size control has to ask this first rather than quietly resizing
+// something that cannot be resized.
+bool ticker_has_font(int slot) {
+    switch (slot) {
+        case 0: return s_font[S_TICK_NAME]   != nullptr;
+        case 1: return s_font[S_TICK_PRICE]  != nullptr;
+        case 2: return s_font[S_TICK_CHANGE] != nullptr;
+        case 3: return s_font[S_TICK_STRIP]  != nullptr;
         default: return false;
     }
 }
