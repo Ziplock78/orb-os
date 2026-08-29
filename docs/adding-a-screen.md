@@ -42,7 +42,7 @@ they show. They do not differ in how their text is set.
 | Glass / CRT | `<screen>_overlay.png`, composited over everything | `GlassCrtCard` on the shared `clock.overlay` object |
 | Version history | — | an entry in `SCREEN_KEYS`, or saving throws |
 | Capability level | a `THEME_CAPS` bump **and** a ledger entry per feature | a matching row in `CAPS_FEATURES` |
-| Memory | attach art on enter, release on exit | — |
+| Memory | attach art on enter, release on exit (see [memory.md](memory.md)) | — |
 | Preview parity | — | the preview runs the firmware's layout arithmetic, not an approximation |
 
 Ship the plate only when the design actually uses a picture. Baked art is raw RGB565, so a
