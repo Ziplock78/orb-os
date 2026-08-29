@@ -192,11 +192,16 @@ namespace theme_style {
 //      Tracker's sweep OBJECT outright, so it wore the Flight Tracker's artwork. An Orb
 //      below this level ignores the file and draws the weather map as it always did, which
 //      is with no sweep at all.
+//  25  the weather map's rings honoured at last: colour (behind its own switch, see
+//      ringColorOn) and the on/off toggle. Both were in the theme and in Orb Studio, and
+//      the firmware read neither: the rings were the built-in palette's accent, which is
+//      the Flight Tracker's phosphor, on a screen that is supposed to be its own app. An
+//      Orb below this level keeps drawing them in the accent and cannot switch them off.
 //  24  a coastline on the weather map, and a road colour that is finally the theme's own.
 //      The weather map drew roads at a hard-coded grey and had no coastline at all, so a
 //      theme could set roadColor and roadsEnabled and watch neither do anything. An Orb
 //      below this level draws no coastline and keeps the fixed grey.
-constexpr int THEME_CAPS = 24;
+constexpr int THEME_CAPS = 25;
 
 struct ClockText {
     bool     show   = false;
@@ -382,7 +387,15 @@ struct Weather {
     int      sweepLeadWidth  = 2;
     int      sweepTrailSteps = 20;
     // The rings and the road overlay, which the map draws for itself rather than borrowing.
+    // ringColorOn is off by default and that is deliberate. These rings were drawn in
+    // UI_GREEN, which is not a fixed colour at all: it is the built-in palette's accent, so
+    // it differs between ORB, MILITARY and AVIATOR. There is no hex that could be this
+    // field's default without silently restyling somebody's weather map the first time the
+    // firmware actually started reading it, which it never had. Off means "carry on using
+    // the palette accent"; a design that wants the weather map to stop borrowing the Flight
+    // Tracker's phosphor turns it on and picks. Same shape as Intel's briefColorOn.
     uint32_t ringColor       = 0x1E3A2E;
+    bool     ringColorOn     = false;
     bool     ringsEnabled    = true;
     uint32_t roadColor       = 0x4A4A4A;
     bool     roadsEnabled    = true;

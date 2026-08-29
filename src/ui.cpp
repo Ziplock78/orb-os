@@ -1,6 +1,7 @@
 // M3 UI: tileview (radar / list / stats) + tap-to-inspect detail card.
 // Pure LVGL, portable. Taps hit-test via radar::hitTest; selection lives in radar.
 #include "ui.h"
+#include "theme_style.h"
 #include "app_theme.h"
 #include "radar_view.h"
 #include "custom_radar.h"     // CUSTOM_HAS_RADAR_STYLE — a pushed design's own banners replace this card
@@ -581,10 +582,29 @@ static void build_weather(void) {
         }
     }
 #endif
+    // The rings take their colour, and their existence, from the weather theme.
+    const theme_style::Weather &wxs = theme_style::weather();
+    const lv_color_t ringCol = wxs.ringColorOn ? lv_color_hex(wxs.ringColor) : UI_GREEN;
+    for (int i = 0; i < 3; ++i) {
+        if (s_wxRings[i]) lv_obj_set_style_border_color(s_wxRings[i], ringCol, 0);
+        if (s_wxRingLbl[i]) lv_obj_set_style_text_color(s_wxRingLbl[i], ringCol, 0);
+    }
     lv_obj_t *radarObjs[] = { s_wxCanvas, s_wxStatus, s_wxAirport, s_wxFooter, s_wxMeta,
                               s_wxAttrib, s_wxNorth, s_wxCenter, s_wxRange,
-                              s_wxRings[0], s_wxRings[1], s_wxRings[2],
-                              s_wxRingLbl[0], s_wxRingLbl[1], s_wxRingLbl[2] };
+                              wxs.ringsEnabled ? s_wxRings[0] : nullptr,
+                              wxs.ringsEnabled ? s_wxRings[1] : nullptr,
+                              wxs.ringsEnabled ? s_wxRings[2] : nullptr,
+                              wxs.ringsEnabled ? s_wxRingLbl[0] : nullptr,
+                              wxs.ringsEnabled ? s_wxRingLbl[1] : nullptr,
+                              wxs.ringsEnabled ? s_wxRingLbl[2] : nullptr };
+    // Switched off means hidden, not merely left out of the list above: an object nobody
+    // shows and nobody hides keeps whatever it had last time.
+    if (!wxs.ringsEnabled) {
+        for (int i = 0; i < 3; ++i) {
+            if (s_wxRings[i])   lv_obj_add_flag(s_wxRings[i], LV_OBJ_FLAG_HIDDEN);
+            if (s_wxRingLbl[i]) lv_obj_add_flag(s_wxRingLbl[i], LV_OBJ_FLAG_HIDDEN);
+        }
+    }
     for (lv_obj_t *o : forecastObjs) if (o) {
         if (forecastMode) lv_obj_clear_flag(o, LV_OBJ_FLAG_HIDDEN); else lv_obj_add_flag(o, LV_OBJ_FLAG_HIDDEN);
     }
@@ -1002,7 +1022,11 @@ void ui_create(void) {
         lv_obj_set_size(s_wxRings[i], ringSize[i], ringSize[i]);
         lv_obj_align(s_wxRings[i], LV_ALIGN_TOP_MID, 0, 52 + (360 - ringSize[i]) / 2);
         lv_obj_set_style_radius(s_wxRings[i], LV_RADIUS_CIRCLE, 0);
-        lv_obj_set_style_border_color(s_wxRings[i], UI_GREEN, 0);
+        // Colour is applied in build_weather() from the weather theme, not here: this runs
+        // once and a theme can change afterwards. It used to be UI_GREEN, hard-coded, which
+        // is the Flight Tracker's phosphor: the weather map was wearing the other app's
+        // colour while its own ringColor and ringsEnabled sat in the theme being read by
+        // nobody. Two apps, two looks, and this was the seam where that stopped being true.
         lv_obj_set_style_border_opa(s_wxRings[i], i == 0 ? 180 : 90, 0);
         lv_obj_set_style_border_width(s_wxRings[i], 1, 0);
         lv_obj_clear_flag(s_wxRings[i], LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_SCROLLABLE);
