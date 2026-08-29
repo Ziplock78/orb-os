@@ -7,7 +7,7 @@
 // "1.4.2", said "up to date", and left an Orb missing everything in that list. THEME_CAPS
 // exists because this stopped moving; it covers theme settings and nothing else, so a new
 // command or a deleted screen is invisible to it. Move this too.
-#define FW_VERSION "1.62.1"   // shown on the web config page + Stats screen
+#define FW_VERSION "1.63.1"   // shown on the web config page + Stats screen
 // Edit pins below: replace every -1 with the value from the Waveshare factory demo
 // (see docs/HARDWARE.md and docs/SETUP.md). Do NOT guess them.
 
@@ -144,7 +144,13 @@ static const float RANGE_STEPS_KM[] = {10.0f, 20.0f, 30.0f, 50.0f, 100.0f};
 #define ADSB_EDGE_POOL      5
 // Edges attempted per poll. Deliberately small: see the socket-exhaustion note in
 // adsb_client.cpp. The pool still rotates BETWEEN polls, so all of it stays in play.
-#define ADSB_TRIES_PER_POLL 2
+// Three, not two. Measured against the live service 2026-08-29: the same three addresses
+// behind api.adsb.lol answered a laptop on Zion's own network as open, open, dead one
+// minute and timeout, timeout, 200-in-355ms ten minutes later. The service is not down, it
+// FLAPS, and which door opens changes by the minute. Roughly one attempt in six succeeded.
+// Two tries against that is a coin toss lost most of the time, which on the dial looks like
+// aircraft that have stopped moving under a banner saying there is no data.
+#define ADSB_TRIES_PER_POLL 3
 // Connect and read budgets. The read budget was 8000 and the service was measured taking
 // 11.6 s to answer during a bad spell on 2026-08-22, so every request failed for a reason
 // that had nothing to do with this device.
@@ -156,7 +162,11 @@ static const float RANGE_STEPS_KM[] = {10.0f, 20.0f, 30.0f, 50.0f, 100.0f};
 //
 // The cost of waiting is bounded and lands on the feed task, not the UI: worst case is this
 // times ADSB_TRIES_PER_POLL. The cost of NOT waiting is measured, and it is every aircraft.
-#define ADSB_CONNECT_MS     15000
+// Five seconds, down from fifteen. A server that is going to answer answers in about a
+// third of one; the fifteen was there to be patient with a slow server, and what it actually
+// bought was fifteen seconds of a ten-second poll cycle spent waiting on a socket that was
+// never going to open. Being patient with a dead door is not patience, it is the whole poll.
+#define ADSB_CONNECT_MS     5000
 #define ADSB_READ_MS        20000
 
 // A deliberate product ceiling, not a RAM guess: twelve is what a 466 px scope can show

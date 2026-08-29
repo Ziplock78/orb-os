@@ -118,6 +118,32 @@ namespace {
 IPAddress s_edge[ADSB_EDGE_POOL];
 uint8_t   s_edgeN  = 0;      // how many distinct addresses learned so far
 uint8_t   s_edgeAt = 0;      // which one to try first next time
+// When each edge may be tried again. A DEAD edge is not the same as a busy one, and the
+// pool above treated them identically.
+//
+// Measured on Zion's Orb, 2026-08-29: api.adsb.lol resolved to three addresses and
+// 89.58.34.223 refused to open a socket at all, while the other two answered a laptop on the
+// same network in 353 ms. The Orb tried the dead one, waited out the full fifteen-second
+// connect, tried one more, gave up, and backed off. Six polls in seventy seconds, none good,
+// with a working feed two addresses away. The scope sat there holding aircraft that had
+// stopped moving.
+//
+// Rate limiting is per edge, so a REFUSAL is a reason to ask a different door and come back
+// soon. A connect that never opens is a different thing: nothing is listening, and asking
+// again in ten seconds only spends the poll. So a failure to connect parks that address for
+// a while, and the pool spends its two tries on doors that might open.
+uint32_t  s_edgeNextOkMs[ADSB_EDGE_POOL] = { 0 };
+// Forty-five seconds, not five minutes. The first version of this rested a failed address
+// for five minutes, which is right for an address that is DEAD and wrong for this service,
+// which flaps: the same address that refuses now answers in 355 ms a minute later. Resting
+// it for five minutes throws away a working door. This is just long enough to stop spending
+// both tries of the next poll on the same silent address.
+constexpr uint32_t EDGE_COOLDOWN_MS = 45UL * 1000UL;
+
+bool edge_usable(uint8_t i) {
+    const uint32_t until = s_edgeNextOkMs[i];
+    return until == 0 || (int32_t)(millis() - until) >= 0;
+}
 
 void learn_edge() {
     IPAddress ip;
@@ -218,17 +244,37 @@ bool AdsbClient::poll(std::vector<Aircraft>& out) {
     // what exhausted the socket table: five fresh connections every ten seconds, each
     // lingering in TIME_WAIT long after it closed. One retry is enough to route around a
     // single rate-limited or sulking server, and the pool still rotates across polls.
-    const uint8_t tries = s_edgeN < ADSB_TRIES_PER_POLL ? s_edgeN : ADSB_TRIES_PER_POLL;
-    for (uint8_t attempt = 0; attempt < tries; ++attempt) {
-        const uint8_t idx = (uint8_t)((s_edgeAt + attempt) % s_edgeN);
+    // Walk the WHOLE pool looking for doors that are not on cooldown, but still only knock
+    // on ADSB_TRIES_PER_POLL of them: the cap exists because trying every edge every poll is
+    // what exhausted the socket table, and that reasoning is unchanged. What changes is that
+    // the two tries are no longer spent on an address already known not to answer.
+    uint8_t used = 0;
+    for (uint8_t step = 0; step < s_edgeN && used < ADSB_TRIES_PER_POLL; ++step) {
+        const uint8_t idx = (uint8_t)((s_edgeAt + step) % s_edgeN);
+        if (!edge_usable(idx)) continue;
+        ++used;
         if (fetchFrom(s_edge[idx], out)) {
             s_edgeAt = idx;                                    // stay on what works
+            s_edgeNextOkMs[idx] = 0;                           // and forgive it entirely
             return true;
         }
+        // Only a transport failure parks an address. A 429 means the server is there and
+        // busy, which is exactly the case the rotation was built for and must stay in it.
+        if (_lastStatus <= 0) {
+            s_edgeNextOkMs[idx] = millis() + EDGE_COOLDOWN_MS;
+            Serial.printf("[adsb] %s did not answer; resting it for %lu min\n",
+                          s_edge[idx].toString().c_str(), (unsigned long)(EDGE_COOLDOWN_MS / 60000UL));
+        }
+    }
+    // Every door is on cooldown: forget the cooldowns rather than sit out the outage. Being
+    // wrong about one address is recoverable; refusing to try any of them is not.
+    if (used == 0) {
+        for (uint8_t i = 0; i < s_edgeN; ++i) s_edgeNextOkMs[i] = 0;
+        Serial.println("[adsb] every edge was resting; trying them all again");
     }
     s_edgeAt = (uint8_t)((s_edgeAt + 1) % s_edgeN);            // rotate for next time
     Serial.printf("[adsb] poll gave up after %u edge(s); sockets opened=%lu reused=%lu\n",
-                  (unsigned)tries, (unsigned long)_openCount, (unsigned long)_reuseCount);
+                  (unsigned)used, (unsigned long)_openCount, (unsigned long)_reuseCount);
     return false;
 }
 
