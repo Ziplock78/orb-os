@@ -621,10 +621,17 @@ static void wx_text_refresh(void) {
         if (!buf[0]) continue;
         const lv_font_t *font = theme_font::weather_text(i);
         if (t.curved) {
-            // A curved line arcs around x/y as its centre, which is why the position
-            // controls stay meaningful when curve is switched on: they stop being where the
-            // text sits and become what it orbits.
-            curved_text::draw_arc(dst, font, buf, (float)t.x, (float)t.y,
+            // The SCREEN centre, like every other curved line on the device.
+            //
+            // This used to pass x/y, on the reasoning that it kept the position controls
+            // meaningful once the curve was on. It did not: it made this the only screen
+            // whose arc orbits something other than the middle of the dial, so a line
+            // dragged to the edge and then curved flew off the display entirely, around a
+            // circle centred on wherever it happened to have been left. Orb Studio hides
+            // across and down while a line is curved, which means those numbers are stale
+            // leftovers by the time this reads them. An arc is placed by its radius and its
+            // angle, on all six screens.
+            curved_text::draw_arc(dst, font, buf, (float)(SCREEN_W / 2), (float)(SCREEN_H / 2),
                                   (float)t.curveR, t.arcDeg,
                                   lv_color_hex(t.color), t.glow, lv_color_hex(t.glowColor),
                                   (lv_opa_t)t.opa);
@@ -636,9 +643,9 @@ static void wx_text_refresh(void) {
     }
 
     // The data credit, when a design has curved it. Straight, it stays an LVGL label so it
-    // can keep its pill; curved, there is no pill to keep (theme_style forces bgOpa to 0)
-    // and it belongs here with every other bent line on the device. Same renderer, same
-    // arc convention: x/y is what it orbits, not where it sits.
+    // can keep its background; curved, there is none to keep (theme_style forces bgOpa to 0)
+    // and it belongs here with every other bent line on the device. Same renderer, same arc
+    // convention: radius and angle about the middle of the dial.
     if (ws.credit.curved) {
         // Read off the label rather than rebuilt: the label is hidden, not emptied, and it
         // is already the one place that knows what the credit currently says (the timestamp
@@ -647,7 +654,7 @@ static void wx_text_refresh(void) {
         const char *credit = s_wxAttrib ? lv_label_get_text(s_wxAttrib) : nullptr;
         if (credit && credit[0]) {
             curved_text::draw_arc(dst, F14(), credit,
-                                  (float)ws.credit.x, (float)ws.credit.y,
+                                  (float)(SCREEN_W / 2), (float)(SCREEN_H / 2),
                                   (float)ws.credit.curveR, (float)ws.credit.arcDeg,
                                   lv_color_hex(ws.credit.color), 0, lv_color_black(),
                                   (lv_opa_t)ws.credit.opa);

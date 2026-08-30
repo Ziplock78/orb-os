@@ -187,6 +187,67 @@ if caps_fw and levels:
         print(f"    note: no CAPS_FEATURES row for level(s) {missing}. Fine when the design")
         print(f"          works on firmware below that level; a fault when it silently does not.")
 
+print("\n=== 7. Curved text that orbits something other than the dial's middle ===")
+print("    The weather map passed the line's own x/y as the arc CENTRE, so a line dragged")
+print("    to the edge and then curved flew off the screen around a circle centred on")
+print("    wherever it had been left.\n")
+
+# draw_arc(dst, font, str, CX, CY, R, arcDeg, ...) — arguments 4 and 5 are the centre the
+# text orbits, and on a round 466 px screen there is exactly one right answer for both.
+CENTRE_OK = ("SCREEN_W / 2", "SCREEN_H / 2", "W / 2", "H / 2",
+             "SCREEN_W/2", "SCREEN_H/2", "W/2", "H/2", "SCREEN_CX", "SCREEN_CY", "233")
+
+
+def split_args(text):
+    """Top-level commas only. A cast like (float)s_cy has parens of its own, and the regex
+    this started as chopped straight through them and then reported the wreckage."""
+    out, depth, cur = [], 0, ""
+    for ch in text:
+        if ch in "([": depth += 1
+        elif ch in ")]": depth -= 1
+        if ch == "," and depth == 0:
+            out.append(cur); cur = ""
+        else:
+            cur += ch
+    out.append(cur)
+    return [a.strip() for a in out]
+
+
+def resolve(expr, src):
+    """A bare local standing in for the centre is still the centre.
+
+    ticker_view binds `const float cy = SCREEN_H / 2.0f;` and passes `cy`, which the first
+    version of this check reported as a fault. One false positive is all it takes for a
+    checker to start being ignored, so a plain identifier is looked up once before judging.
+    """
+    # Cast first, THEN parens. The other order turns "(float)s_cx" into "float)s_cx",
+    # which is neither an identifier nor an expression, and the report prints the wreckage.
+    e = expr.strip()
+    e = re.sub(r"^\(\s*(?:float|int|lv_coord_t)\s*\)\s*", "", e).strip()
+    while e.startswith("(") and e.endswith(")"):
+        e = e[1:-1].strip()
+    if not re.fullmatch(r"[A-Za-z_]\w*", e):
+        return e
+    # Declared with a type (a local), or as a file-scope static that may be declared
+    # alongside its twin: `static lv_coord_t s_cx = SCREEN_CX, s_cy = SCREEN_CY;`
+    m = re.search(r"\b(?:static\s+)?(?:const\s+)?(?:float|int|lv_coord_t|auto)\s+[^;]*?\b%s\s*=\s*([^,;]+)[,;]" % re.escape(e), src)
+    return m.group(1).strip() if m else e
+
+
+for name, src in sorted(fw_src.items()):
+    if not name.endswith(".cpp"):
+        continue
+    for m in re.finditer(r"curved_text::draw_arc\(([^;]*?)\);", src, re.S):
+        args = split_args(m.group(1))
+        if len(args) < 5:
+            continue
+        cx, cy = resolve(args[3], src), resolve(args[4], src)
+        if not any(k in cx for k in CENTRE_OK) or not any(k in cy for k in CENTRE_OK):
+            line = src[:m.start()].count("\n") + 1
+            report("ARC", f"{name}:{line} curves text about ({cx}, {cy}), not the screen centre")
+if not any(k == "ARC" for k, _ in findings):
+    print("    ok: every curved line orbits the middle of the dial")
+
 print("\n=== 6. Is the deployed Orb Studio serving the current firmware? ===")
 print("    Publishing copies the binary to disk. Studio serves what its BUILD contains.\n")
 
