@@ -2073,6 +2073,35 @@ static void rebuild_flat_background() {
         lv_canvas_draw_img(s_flatCanvas, 0, 0, rings, &d);
         s_ringsBaked = true;
     }
+    // 1d. PUT THE PLATE BACK INSIDE THE KEEP-OUT AREAS.
+    //
+    // Here rather than on each layer, because it is the one place where everything a zone is
+    // supposed to hide has been drawn and nothing it is supposed to keep has been. The map
+    // arrives already punched (take_map_snapshot clears its alpha), but the rings are a
+    // separate baked image and nothing was punching those, so a design with a keep-out area
+    // got a clean gap in the roads with the range rings still ruled straight across it.
+    //
+    // Copying the plate back is simpler than teaching each layer to clip, and it cannot
+    // disagree with itself: whatever was on the plate is exactly what returns. It also means
+    // a layer added above this line is covered for free, and one added below is deliberately
+    // not, which is the right default for decoration.
+    //
+    // Runs when the theme changes, not per frame.
+    if (rs.zoneCount > 0 && plate && plate->header.cf == LV_IMG_CF_TRUE_COLOR &&
+        plate->header.w == SCREEN_W && plate->header.h == SCREEN_H && s_flatBuf) {
+        const lv_color_t *src = (const lv_color_t *)plate->data;
+        int restored = 0;
+        for (int y = 0; y < SCREEN_H; ++y) {
+            for (int x = 0; x < SCREEN_W; ++x) {
+                if (!in_excluded_zone((lv_coord_t)x, (lv_coord_t)y)) continue;
+                s_flatBuf[y * SCREEN_W + x] = src[y * SCREEN_W + x];
+                ++restored;
+            }
+        }
+        Serial.printf("[radar] %d px of map and rings put back to the plate by %d keep-out area(s)\n",
+                      restored, rs.zoneCount);
+    }
+
     // 2. the decorative statics we are allowed to absorb, same transform as the
     //    live path above (zoom about the image's own centre, positioned by
     //    unscaled w/h so the visual centre lands on x,y at any scale)

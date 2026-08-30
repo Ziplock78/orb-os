@@ -579,6 +579,18 @@ void load() {
                 if (cr["radius"].is<int>())     c.radius = cr["radius"].as<int>();
                 if (cr["align"].is<int>())      c.align  = cr["align"].as<int>();
                 if (cr["opa"].is<int>())        c.opa    = cr["opa"].as<int>();
+                if (cr["curved"].is<bool>())    c.curved = cr["curved"].as<bool>();
+                if (cr["curveR"].is<int>())     c.curveR = cr["curveR"].as<int>();
+                if (cr["arcDeg"].is<int>())     c.arcDeg = cr["arcDeg"].as<int>();
+                if (c.curveR < 40)  c.curveR = 40;
+                if (c.curveR > 233) c.curveR = 233;
+                c.arcDeg = ((c.arcDeg % 360) + 360) % 360;
+                // Curved wins over the pill rather than the other way round. Orb Studio only
+                // offers the curve once the pill is off, so the two can only arrive together
+                // in a hand-written theme, and a curve cannot be half-honoured: bending the
+                // words and leaving a straight rounded rectangle behind them would look like
+                // a fault rather than like a choice.
+                if (c.curved) c.bgOpa = 0;
                 if (c.opa < theme_style::Weather::CREDIT_MIN_OPA)
                     c.opa = theme_style::Weather::CREDIT_MIN_OPA;
                 if (c.opa > 255)   c.opa = 255;

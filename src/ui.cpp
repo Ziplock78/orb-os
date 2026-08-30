@@ -634,6 +634,25 @@ static void wx_text_refresh(void) {
                                        t.align, (lv_opa_t)t.opa);
         }
     }
+
+    // The data credit, when a design has curved it. Straight, it stays an LVGL label so it
+    // can keep its pill; curved, there is no pill to keep (theme_style forces bgOpa to 0)
+    // and it belongs here with every other bent line on the device. Same renderer, same
+    // arc convention: x/y is what it orbits, not where it sits.
+    if (ws.credit.curved) {
+        // Read off the label rather than rebuilt: the label is hidden, not emptied, and it
+        // is already the one place that knows what the credit currently says (the timestamp
+        // in it changes with every frame that lands). Two places composing that string is
+        // how the curved one starts telling a different time from the straight one.
+        const char *credit = s_wxAttrib ? lv_label_get_text(s_wxAttrib) : nullptr;
+        if (credit && credit[0]) {
+            curved_text::draw_arc(dst, F14(), credit,
+                                  (float)ws.credit.x, (float)ws.credit.y,
+                                  (float)ws.credit.curveR, (float)ws.credit.arcDeg,
+                                  lv_color_hex(ws.credit.color), 0, lv_color_black(),
+                                  (lv_opa_t)ws.credit.opa);
+        }
+    }
     lv_obj_invalidate(s_wxTextCanvas);
 }
 
@@ -840,19 +859,22 @@ static void build_weather(void) {
                               wxSlots ? nullptr : s_wxNorth,
                               wxSlots ? nullptr : s_wxCenter,
                               wxSlots ? nullptr : s_wxRange,
-                              wxs.ringsEnabled ? s_wxRings[0] : nullptr,
-                              wxs.ringsEnabled ? s_wxRings[1] : nullptr,
-                              wxs.ringsEnabled ? s_wxRings[2] : nullptr,
+                              // The ring CIRCLES are drawn into the frame buffer now
+                              // (draw_rings, wx_radar_client.cpp) so a keep-out area can
+                              // cover them the way it covers the roads. Anything drawn as an
+                              // object over the canvas is out of a zone's reach by
+                              // construction. These stay for their geometry and stay hidden.
+
                               wxs.ringsEnabled && !wxSlots ? s_wxRingLbl[0] : nullptr,
                               wxs.ringsEnabled && !wxSlots ? s_wxRingLbl[1] : nullptr,
                               wxs.ringsEnabled && !wxSlots ? s_wxRingLbl[2] : nullptr };
     // Switched off means hidden, not merely left out of the list above: an object nobody
     // shows and nobody hides keeps whatever it had last time.
+    // The circles are never objects any more, whatever the theme says.
+    for (int i = 0; i < 3; ++i) if (s_wxRings[i]) lv_obj_add_flag(s_wxRings[i], LV_OBJ_FLAG_HIDDEN);
     if (!wxs.ringsEnabled) {
-        for (int i = 0; i < 3; ++i) {
-            if (s_wxRings[i])   lv_obj_add_flag(s_wxRings[i], LV_OBJ_FLAG_HIDDEN);
+        for (int i = 0; i < 3; ++i)
             if (s_wxRingLbl[i]) lv_obj_add_flag(s_wxRingLbl[i], LV_OBJ_FLAG_HIDDEN);
-        }
     }
     for (lv_obj_t *o : forecastObjs) if (o) {
         if (forecastMode) lv_obj_clear_flag(o, LV_OBJ_FLAG_HIDDEN); else lv_obj_add_flag(o, LV_OBJ_FLAG_HIDDEN);
@@ -865,6 +887,12 @@ static void build_weather(void) {
     // SAYS is never touched here, and there is no path that hides it.
     if (s_wxAttrib && !forecastMode) {
         const theme_style::Weather::Credit &c = wxs.credit;
+        // Curved, the canvas above is drawing it. Two copies on screen at once is what
+        // happens if this is left showing, and the straight one would be the wrong shape.
+        if (c.curved) {
+            lv_obj_add_flag(s_wxAttrib, LV_OBJ_FLAG_HIDDEN);
+        } else {
+        lv_obj_clear_flag(s_wxAttrib, LV_OBJ_FLAG_HIDDEN);
         lv_obj_set_style_text_color(s_wxAttrib, lv_color_hex(c.color), 0);
         lv_obj_set_style_text_opa(s_wxAttrib, (lv_opa_t)c.opa, 0);
         lv_obj_set_style_bg_color(s_wxAttrib, lv_color_hex(c.bg), 0);
@@ -876,6 +904,7 @@ static void build_weather(void) {
         const lv_coord_t w = lv_obj_get_width(s_wxAttrib);
         const lv_coord_t offX = (c.align == 0) ? 0 : (c.align == 2) ? -w : -w / 2;
         lv_obj_align(s_wxAttrib, LV_ALIGN_TOP_LEFT, (lv_coord_t)c.x + offX, (lv_coord_t)c.y);
+        }
     }
     if (wxSlots && !forecastMode) {
         // After the loop above, never before it. The title is shared with the forecast page,

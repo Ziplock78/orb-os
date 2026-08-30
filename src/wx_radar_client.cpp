@@ -220,6 +220,43 @@ static bool wx_in_zone(int bx, int by) {
 // base underneath: the theme's plate where it has one, its background colour where it does
 // not. That is what lets decoration live in the baked background instead of in a layer above
 // the map, which is the entire reason the Flight Tracker got zones first.
+// The range rings, into the frame rather than over it.
+//
+// They were three LVGL objects sitting on top of the canvas, which meant no keep-out area
+// could touch them: the zones restore the background INSIDE the frame buffer, and anything
+// drawn above that buffer is simply out of reach. A design with a keep-out area got a clean
+// gap in the roads with the rings still ruled straight across it.
+//
+// Drawn here, one line below the map and one line above the zone pass, they are covered like
+// everything else. Which is what the card column in Orb Studio has been claiming all along.
+static void draw_rings(uint16_t *dst) {
+    const theme_style::Weather &w = theme_style::weather();
+    if (!dst || !w.ringsEnabled) return;
+    const int c = WX_RADAR_SIZE / 2;
+    // The same three radii the objects had, as a fraction of the dial, so a theme that has
+    // never heard of this change draws exactly the rings it drew before.
+    const int radii[3] = { c - 2, (c * 2) / 3, c / 3 };
+    const uint16_t col = rgb565(w.ringColorOn ? w.ringColor : 0x1DFF86);
+    for (int k = 0; k < 3; ++k) {
+        const int r = radii[k];
+        if (r < 2) continue;
+        // Midpoint circle, eight-way symmetric. No trig, no allocation, and it lands on the
+        // same pixels every frame so the rings cannot shimmer against the precipitation.
+        int x = r, y = 0, err = 1 - r;
+        while (x >= y) {
+            const int pts[8][2] = { {x,y},{y,x},{-y,x},{-x,y},{-x,-y},{-y,-x},{y,-x},{x,-y} };
+            for (auto &pt : pts) {
+                const int px = c + pt[0], py = c + pt[1];
+                if (px >= 0 && px < WX_RADAR_SIZE && py >= 0 && py < WX_RADAR_SIZE)
+                    dst[(size_t)py * WX_RADAR_SIZE + px] = col;
+            }
+            ++y;
+            if (err < 0) err += 2 * y + 1;
+            else { --x; err += 2 * (y - x) + 1; }
+        }
+    }
+}
+
 static void wx_apply_zones(uint16_t *dst) {
     if (!dst || theme_style::weather().zoneCount <= 0) return;
     const uint16_t bg = rgb565(theme_style::weather().bg);
@@ -582,6 +619,7 @@ int wx_radar_fetch_frame(double lat, double lon, int zoomTier, uint32_t gen, int
     }
     draw_map();
     composite_zoom(zoomTier);
+    draw_rings(wx_radar_back_buffer());     // over the rain, under the keep-out areas
     wx_apply_zones(wx_radar_back_buffer());
     wx_radar_commit_frame(slot, gen, s_times[slot], lat, lon);
     Serial.printf("[wxradar] gen %lu frame %d/%d @%lu (tier=%d, %lu px)\n",

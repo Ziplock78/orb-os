@@ -224,6 +224,9 @@ namespace theme_style {
 //      slider moved the Flight Tracker's hand or nothing. And neither screen could carry a
 //      plate. An Orb below this level keeps a black weather map at the Flight Tracker's
 //      sweep speed and ignores both plates.
+//  31  the weather map's data credit can curve, on the same arc renderer every other text
+//      element on the device uses. Only when the pill is off: a rounded rectangle is not a
+//      shape that survives the line bending. An Orb below this level draws it straight.
 //  26  the Stock Ticker: a watchlist the theme carries, a focused readout, and a strip
 //      that can run along the bottom or bend around the bezel. An Orb below this level has
 //      no such app and ignores ticker_style.json entirely.
@@ -236,7 +239,7 @@ namespace theme_style {
 //      The weather map drew roads at a hard-coded grey and had no coastline at all, so a
 //      theme could set roadColor and roadsEnabled and watch neither do anything. An Orb
 //      below this level draws no coastline and keeps the fixed grey.
-constexpr int THEME_CAPS = 30;
+constexpr int THEME_CAPS = 31;
 
 struct ClockText {
     bool     show   = false;
@@ -561,6 +564,15 @@ struct Weather {
         int      bgOpa   = 170;   // 0 is allowed: no pill, just the words
         int      radius  = 4;
         int      align   = 1;     // 0 left, 1 centre, 2 right
+        // Curved, like every other text element on this device. ONLY WITHOUT THE PILL, and
+        // that is a real constraint rather than a missing feature: the pill is a rounded
+        // rectangle an LVGL label draws for itself, curved text is glyphs blitted onto a
+        // canvas, and a rounded rectangle is not a shape that exists once the line bends.
+        // Orb Studio only offers the switch once the pill is off, and the firmware treats
+        // curved as the winner if a hand-written theme asks for both.
+        bool     curved  = false;
+        int      curveR  = 180;   // px from the centre it orbits
+        int      arcDeg  = 180;   // where round the dial it sits, 0 = twelve o'clock
     };
     static constexpr int CREDIT_MIN_OPA = 128;   // half. Below this it stops being a credit.
     Credit   credit;
