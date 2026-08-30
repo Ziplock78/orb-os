@@ -125,7 +125,7 @@ def fetch_overpass(south, west, north, east):
             for url in OVERPASS_URLS:
                 req = urllib.request.Request(
                     url, data=q.encode("utf-8"),
-                    headers={"User-Agent": "capsule-radar-tile-gen/1.0 (github.com/zionbrock)"},
+                    headers={"User-Agent": "orb-os-tile-gen/1.0 (github.com/Ziplock78/orb-firmware)"},
                 )
                 print(f"  querying {hwy} via {url}...", file=sys.stderr)
                 try:

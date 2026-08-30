@@ -2,7 +2,8 @@
 
 > Named Capsule Radar until August 2026, and Plane Radar 2.0 before that. The rename
 > is display-only: the NVS namespace is still `capsuleradar` and always will be, the
-> mDNS name became `theorb.local` in 1.40, and the repo folder is still `capsule-radar`.
+> mDNS name became `theorb.local` in 1.40, and the repo folder became `orb-os` on 2026-08-30
+> (origin was already `Ziplock78/orb-firmware`; `upstream` still points at socquique/capsule-radar).
 > See the note on the namespace in main.cpp before touching any of those.
 >
 > The inherited product documents are gone as of 1.42: `docs/LISTING.md`,
@@ -19,6 +20,20 @@ Master context for Claude Code. Read this first, then `docs/` for detail.
 > screen has — background, glass, per-slot typefaces, the full set of text controls,
 > margins, version keys, capability level — written after the Headlines screen shipped
 > without five of them and had to be repaired one complaint at a time.
+
+## The launch plan lives outside this repo
+
+Read both of these before starting work. They are the scope, and neither is in this
+repository:
+
+- `~/Developer/agentic-os/data/documents/plans/orb-launch-one-cut-list.md`
+  What must be true to ship launch one. Finite and numbered `CUT-nn`. If a job does not
+  serve an item on that list, it is not launch work, and saying so is more useful than
+  doing it.
+- `~/Developer/agentic-os/data/documents/plans/orb-ux-requirements.md`
+  The destination, numbered `UX-nnn`. The cut list cites these ids.
+
+When work closes or changes a cut list item, name it by number.
 
 ## What we're building
 A live ADS-B aircraft radar for the **Waveshare ESP32-S3-Touch-AMOLED-1.75** (round 466×466 AMOLED, capacitive touch). It's an evolution of the classic 240×240 GC9A01 "plane radar": same idea (pull nearby aircraft from an online ADS-B feed over WiFi, plot them on a radar scope centered on the user), but redesigned for a full-color high-res round AMOLED with touch, IMU, RTC and a speaker.
