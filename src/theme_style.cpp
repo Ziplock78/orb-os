@@ -295,6 +295,21 @@ static int opa_of(JsonVariantConst v, int fallback) {
     return o < 0 ? 0 : (o > 255 ? 255 : o);
 }
 
+// The three keys behind a line of text, in one place because there are four callers now and
+// a fifth is a matter of time. THEME_CAPS 33 gave every text control the same two choices,
+// and four hand-written copies of the same three reads is how one of them ends up missing a
+// clamp. Reading nothing when the theme says nothing is what keeps a design written before
+// 33 drawing exactly as it did.
+template <typename T>
+static void parse_pill(JsonVariantConst j, T &t) {
+    if (j["bg"].is<uint32_t>()) t.bg = j["bg"].as<uint32_t>();
+    t.bgOpa = opa_of(j["bgOpa"], t.bgOpa);
+    if (j["radius"].is<int>()) {
+        const int r = j["radius"].as<int>();
+        t.radius = r < 0 ? 0 : (r > 40 ? 40 : r);
+    }
+}
+
 // Merge helpers: only touch a field when the JSON actually has it, so a partial
 // file (or a field a given theme never set) leaves the compiled default in place.
 void merge_text(JsonVariantConst j, ClockText &t) {
@@ -307,6 +322,7 @@ void merge_text(JsonVariantConst j, ClockText &t) {
     if (j["glow"].is<int>()) t.glow = j["glow"].as<int>();
     if (j["glowColor"].is<uint32_t>()) t.glowColor = j["glowColor"].as<uint32_t>();
     if (j["fmt"].is<const char *>()) snprintf(t.fmt, sizeof(t.fmt), "%s", j["fmt"].as<const char *>());
+    parse_pill(j, t);
     if (j["curved"].is<bool>()) t.curved = j["curved"].as<bool>();
     if (j["curveR"].is<int>()) t.curveR = j["curveR"].as<int>();
     // int OR float. Studio rounds degrees to a whole number, so the value on the card is `90`
@@ -379,6 +395,7 @@ void merge_rtext(JsonVariantConst j, RadarText &t) {
     if (j["glow"].is<int>()) t.glow = j["glow"].as<int>();
     if (j["glowColor"].is<uint32_t>()) t.glowColor = j["glowColor"].as<uint32_t>();
     if (j["fmt"].is<const char *>()) snprintf(t.fmt, sizeof(t.fmt), "%s", j["fmt"].as<const char *>());
+    parse_pill(j, t);
     if (j["curved"].is<bool>()) t.curved = j["curved"].as<bool>();
     if (j["curveR"].is<int>()) t.curveR = j["curveR"].as<int>();
     if (j["arcDeg"].is<float>() || j["arcDeg"].is<int>()) t.arcDeg = j["arcDeg"].as<float>();
@@ -550,6 +567,10 @@ void load() {
             if (doc["coastColor"].is<uint32_t>()) s_weather.coastColor = doc["coastColor"].as<uint32_t>();
             if (doc["coastEnabled"].is<bool>()) s_weather.coastEnabled = doc["coastEnabled"].as<bool>();
             if (doc["ringColorOn"].is<bool>()) s_weather.ringColorOn = doc["ringColorOn"].as<bool>();
+            if (doc["ringCount"].is<int>())    s_weather.ringCount   = clampi(doc["ringCount"].as<int>(), 1, 5);
+            if (doc["ringWidth"].is<int>())    s_weather.ringWidth   = clampi(doc["ringWidth"].as<int>(), 1, 6);
+            if (doc["ringOpacity"].is<int>())  s_weather.ringOpacity = clampi(doc["ringOpacity"].as<int>(), 0, 255);
+            if (doc["crosshair"].is<bool>())   s_weather.crosshair   = doc["crosshair"].as<bool>();
             // Four themeable lines, same struct and same reader as the Flight Tracker's, so
             // "curved" and "align" mean one thing across the device. The key is "wtext" and
             // not "rtext" only because the two files are read separately; the shape is
@@ -574,9 +595,7 @@ void load() {
                 if (cr["x"].is<int>())          c.x      = cr["x"].as<int>();
                 if (cr["y"].is<int>())          c.y      = cr["y"].as<int>();
                 if (cr["color"].is<uint32_t>()) c.color  = cr["color"].as<uint32_t>();
-                if (cr["bg"].is<uint32_t>())    c.bg     = cr["bg"].as<uint32_t>();
-                if (cr["bgOpa"].is<int>())      c.bgOpa  = cr["bgOpa"].as<int>();
-                if (cr["radius"].is<int>())     c.radius = cr["radius"].as<int>();
+                parse_pill(cr, c);
                 if (cr["align"].is<int>())      c.align  = cr["align"].as<int>();
                 if (cr["opa"].is<int>())        c.opa    = cr["opa"].as<int>();
                 if (cr["curved"].is<bool>())    c.curved = cr["curved"].as<bool>();
@@ -781,6 +800,7 @@ void load() {
                     const int a = v["align"].as<int>();
                     t.align = a < 0 ? 0 : (a > 2 ? 2 : a);
                 }
+                parse_pill(v, t);
                 if (v["curved"].is<bool>())  t.curved = v["curved"].as<bool>();
                 if (v["curveR"].is<int>())   t.curveR = v["curveR"].as<int>();
                 if (v["arcDeg"].is<float>() || v["arcDeg"].is<int>()) t.arcDeg = v["arcDeg"].as<float>();
@@ -927,6 +947,12 @@ void load() {
             }
             if (doc["ageGlowColor"].is<uint32_t>()) s_intel.ageGlowColor = doc["ageGlowColor"].as<uint32_t>();
             if (doc["ageCurved"].is<bool>()) s_intel.ageCurved = doc["ageCurved"].as<bool>();
+            if (doc["ageBg"].is<uint32_t>()) s_intel.ageBg = doc["ageBg"].as<uint32_t>();
+            s_intel.ageBgOpa = opa_of(doc["ageBgOpa"], s_intel.ageBgOpa);
+            if (doc["ageRadius"].is<int>()) {
+                const int r = doc["ageRadius"].as<int>();
+                s_intel.ageRadius = r < 0 ? 0 : (r > 40 ? 40 : r);
+            }
             if (doc["ageCurveR"].is<int>()) {
                 const int r = doc["ageCurveR"].as<int>();
                 s_intel.ageCurveR = r < 40 ? 40 : (r > 233 ? 233 : r);

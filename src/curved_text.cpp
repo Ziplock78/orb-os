@@ -17,6 +17,59 @@ inline float glyph_alpha4(const uint8_t *bmp, int bw, int x, int y) {
     return nib * 17.0f;
 }
 
+// Fill a rounded rectangle into the same RGB565+alpha raster the glyphs land in.
+//
+// Blends rather than overwrites, so a plate at half strength shows what is behind it, and it
+// runs BEFORE the glyphs so the words are never dimmed by their own background. Corners are
+// a plain circle test rather than anything anti-aliased: at the radii these plates use, 0 to
+// 20 px, the stair-stepping is a pixel deep and invisible under a glyph, and the alternative
+// is a second coverage pass on every pixel of a shape whose whole job is to be ignored.
+void fill_round_rect(const curved_text::Target &dst, int x0, int y0, int x1, int y1,
+                     int radius, lv_color_t col, lv_opa_t opa) {
+    if (!dst.buf || opa == 0 || x1 <= x0 || y1 <= y0) return;
+    const int w = x1 - x0, h = y1 - y0;
+    int r = radius;
+    const int rmax = (w < h ? w : h) / 2;
+    if (r > rmax) r = rmax;
+    if (r < 0) r = 0;
+    const uint8_t lo = (uint8_t)(col.full & 0xFF), hi = (uint8_t)(col.full >> 8);
+    const int cx0 = x0 + r, cx1 = x1 - 1 - r, cy0 = y0 + r, cy1 = y1 - 1 - r;
+    const int rr = r * r;
+    for (int y = y0; y < y1; ++y) {
+        if (y < 0 || y >= dst.h) continue;
+        for (int x = x0; x < x1; ++x) {
+            if (x < 0 || x >= dst.w) continue;
+            if (r > 0) {
+                // Only the four corner boxes need testing; everything else is inside by
+                // construction, which is what keeps this cheap on a 466 px line.
+                const int qx = (x < cx0) ? cx0 - x : (x > cx1) ? x - cx1 : 0;
+                const int qy = (y < cy0) ? cy0 - y : (y > cy1) ? y - cy1 : 0;
+                if (qx && qy && qx * qx + qy * qy > rr) continue;
+            }
+            const int px = (y * dst.w + x) * 3;
+            uint8_t *b = dst.buf;
+            if (opa >= 255 || b[px + 2] == 0) {
+                b[px] = lo; b[px + 1] = hi;
+                if (b[px + 2] < opa) b[px + 2] = opa;
+            } else {
+                // Something is already here. Mix toward the plate by its own opacity and
+                // keep the stronger alpha, which is what an overlap of two plates should do.
+                const uint16_t have = (uint16_t)(b[px] | (b[px + 1] << 8));
+                const int hr = (have >> 11) & 0x1F, hg = (have >> 5) & 0x3F, hb = have & 0x1F;
+                const uint16_t want = col.full;
+                const int wr = (want >> 11) & 0x1F, wg = (want >> 5) & 0x3F, wb = want & 0x1F;
+                const int a = opa;
+                const int nr = (wr * a + hr * (255 - a)) / 255;
+                const int ng = (wg * a + hg * (255 - a)) / 255;
+                const int nb = (wb * a + hb * (255 - a)) / 255;
+                const uint16_t out = (uint16_t)((nr << 11) | (ng << 5) | nb);
+                b[px] = (uint8_t)(out & 0xFF); b[px + 1] = (uint8_t)(out >> 8);
+                if (b[px + 2] < opa) b[px + 2] = opa;
+            }
+        }
+    }
+}
+
 // Rotate one glyph about its own centre and blend it in, box centred at (destCx, destCy).
 //
 // Composites by "higher opacity wins" per pixel rather than true alpha-over. That is cheap,
@@ -119,7 +172,7 @@ void curved_text::draw_arc(const Target &dst, const lv_font_t *font, const char 
 
 void curved_text::draw_straight(const Target &dst, const lv_font_t *font, const char *str,
                                 float bx, float by, lv_color_t col, int glow, lv_color_t glowCol,
-                                int align, lv_opa_t opa) {
+                                int align, lv_opa_t opa, const Pill &pill) {
     if (!dst.buf || !font || !str || !str[0]) return;
     const int n = (int)strlen(str), cap = n < 80 ? n : 80;
     float w[80], total = 0.0f;
@@ -131,6 +184,19 @@ void curved_text::draw_straight(const Target &dst, const lv_font_t *font, const 
     const float startX = (align == 1) ? (bx - total / 2.0f) : (align == 2) ? (bx - total) : bx;
     const float lineH = (float)lv_font_get_line_height(font), desc = (float)font->base_line;
     const float halfMid = (lineH - 2.0f * desc) * 0.5f;
+
+    // The plate first, sized to the run this call is about to lay down. The padding matches
+    // what the weather map's credit label has always used (8 across, 2 down), because that
+    // one is an LVGL label with LVGL's own padding and the two have to look like the same
+    // control when a design moves a line from one screen to another.
+    if (pill.opa) {
+        const float padX = 8.0f, padY = 2.0f;
+        fill_round_rect(dst,
+                        (int)lroundf(startX - padX), (int)lroundf(by - lineH / 2.0f - padY),
+                        (int)lroundf(startX + total + padX), (int)lroundf(by + lineH / 2.0f + padY),
+                        pill.radius, pill.col, pill.opa);
+    }
+
     float x = startX;
     for (int i = 0; i < cap; ++i) {
         lv_font_glyph_dsc_t g;

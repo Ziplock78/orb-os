@@ -567,7 +567,8 @@ static void banner_silent(const char *which, const char *why, const char *fmt) {
 
 static void draw_baked_text(const lv_font_t *font, const char *fmt, int bx, int by,
                             uint32_t color, int glow, uint32_t glowColor, int align,
-                            const struct tm *ti, const char *which, lv_opa_t opa = LV_OPA_COVER) {
+                            const struct tm *ti, const char *which, lv_opa_t opa = LV_OPA_COVER,
+                            uint32_t bg = 0, int bgOpa = 0, int bgRadius = 0) {
     if (!font)          { banner_silent(which, "no font loaded for this slot", fmt); return; }
     if (!fmt || !fmt[0]) { banner_silent(which, "empty format", fmt); return; }
     char buf[48];
@@ -586,6 +587,21 @@ static void draw_baked_text(const lv_font_t *font, const char *fmt, int bx, int 
     }
     const float startX = (align == 1) ? (bx - total / 2.0f) : (align == 2) ? (bx - total) : (float)bx;
     const int y0 = (int)lroundf(by - lv_font_get_line_height(font) * 0.5f);
+
+    // The plate behind the words, THEME_CAPS 33. This screen draws into an LVGL canvas
+    // rather than through curved_text, so it gets LVGL's own rounded rectangle instead of
+    // the raster filler that serves the other screens. Same padding, 8 across and 2 down, so
+    // a design that moves a line between screens keeps the shape it drew against.
+    if (bgOpa > 0) {
+        lv_draw_rect_dsc_t rd;
+        lv_draw_rect_dsc_init(&rd);
+        rd.bg_color = lv_color_hex(bg);
+        rd.bg_opa   = (lv_opa_t)bgOpa;
+        rd.radius   = (lv_coord_t)bgRadius;
+        const lv_coord_t lh = (lv_coord_t)lv_font_get_line_height(font);
+        lv_canvas_draw_rect(s_canvas, (lv_coord_t)lroundf(startX) - 8, (lv_coord_t)(y0 - 2),
+                            (lv_coord_t)lroundf(total) + 16, lh + 4, &rd);
+    }
     lv_draw_label_dsc_t ld;
     lv_draw_label_dsc_init(&ld);
     ld.font  = font;
@@ -925,14 +941,14 @@ static void draw_custom(const struct tm *ti) {
         const theme_style::ClockText &t = theme_style::clock().text1;
         if (t.show) {
             if (t.curved) draw_baked_arc_text(theme_font::clock_text1(), t.fmt, (float)t.curveR, t.arcDeg, t.color, ti, "text1", (lv_opa_t)t.opa);
-            else draw_baked_text(theme_font::clock_text1(), t.fmt, t.x, t.y, t.color, t.glow, t.glowColor, t.align, ti, "text1", (lv_opa_t)t.opa);
+            else draw_baked_text(theme_font::clock_text1(), t.fmt, t.x, t.y, t.color, t.glow, t.glowColor, t.align, ti, "text1", (lv_opa_t)t.opa, t.bg, t.bgOpa, t.radius);
         }
     }
     {
         const theme_style::ClockText &t = theme_style::clock().text2;
         if (t.show) {
             if (t.curved) draw_baked_arc_text(theme_font::clock_text2(), t.fmt, (float)t.curveR, t.arcDeg, t.color, ti, "text2", (lv_opa_t)t.opa);
-            else draw_baked_text(theme_font::clock_text2(), t.fmt, t.x, t.y, t.color, t.glow, t.glowColor, t.align, ti, "text2", (lv_opa_t)t.opa);
+            else draw_baked_text(theme_font::clock_text2(), t.fmt, t.x, t.y, t.color, t.glow, t.glowColor, t.align, ti, "text2", (lv_opa_t)t.opa, t.bg, t.bgOpa, t.radius);
         }
     }
 

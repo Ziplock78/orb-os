@@ -1200,6 +1200,14 @@ void intelview::init() {
     s_age = lv_label_create(s_screen);
     lv_obj_set_style_text_color(s_age, lv_color_hex(cfg.ageColor), 0);
     lv_obj_set_style_text_opa(s_age, (lv_opa_t)cfg.ageOpa, 0);
+    // The plate behind it, THEME_CAPS 33. A label, so LVGL draws it: the padding matches the
+    // 8-across/2-down every other text control on the device uses, or the same design moved
+    // between screens comes out a different shape.
+    lv_obj_set_style_bg_color(s_age, lv_color_hex(cfg.ageBg), 0);
+    lv_obj_set_style_bg_opa(s_age, (lv_opa_t)cfg.ageBgOpa, 0);
+    lv_obj_set_style_radius(s_age, (lv_coord_t)cfg.ageRadius, 0);
+    lv_obj_set_style_pad_hor(s_age, 8, 0);
+    lv_obj_set_style_pad_ver(s_age, 2, 0);
     lv_obj_set_style_text_font(s_age, slot_font(3, cfg.ageSize), 0);
     lv_label_set_text(s_age, "");
     lv_obj_align(s_age, LV_ALIGN_CENTER, cfg.ageX - 233, cfg.ageY - 233);

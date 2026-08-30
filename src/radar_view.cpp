@@ -2630,9 +2630,10 @@ static void rtext_draw_curved(const lv_font_t *font, const char *str, float R, f
 }
 
 static void rtext_draw_straight(const lv_font_t *font, const char *str, float bx, float by,
-                                lv_color_t col, int glow, lv_color_t glowCol, int align, lv_opa_t opa) {
+                                lv_color_t col, int glow, lv_color_t glowCol, int align, lv_opa_t opa,
+                                const curved_text::Pill &pill = curved_text::Pill()) {
     const curved_text::Target dst = { (uint8_t *)s_textBuf, SCREEN_W, SCREEN_H };
-    curved_text::draw_straight(dst, font, str, bx, by, col, glow, glowCol, align, opa);
+    curved_text::draw_straight(dst, font, str, bx, by, col, glow, glowCol, align, opa, pill);
 }
 
 // Refresh the 4 selection banners for whatever's currently selected — the
@@ -2714,7 +2715,7 @@ static void refresh_custom_text() {
             // of the scope, which is not where anyone put it.
             const float lx = (t.onCard && cardOn) ? cardCx + (float)(t.x - SCREEN_W / 2) : (float)t.x;
             const float ly = (t.onCard && cardOn) ? cardCy + (float)(t.y - SCREEN_H / 2) : (float)t.y;
-            rtext_draw_straight(theme_font::radar_text(i), buf, lx, ly, lv_color_hex(t.color), t.glow, lv_color_hex(t.glowColor), t.align, (lv_opa_t)t.opa);
+            rtext_draw_straight(theme_font::radar_text(i), buf, lx, ly, lv_color_hex(t.color), t.glow, lv_color_hex(t.glowColor), t.align, (lv_opa_t)t.opa, curved_text::pill_of(t));
         }
     }
     // The range banner describes the scope itself (its configured radius), not a
@@ -2724,7 +2725,7 @@ static void refresh_custom_text() {
       const theme_style::RadarText &t = rs.rtext[3];
       char buf[64]; radar_range_fmt(buf, sizeof(buf), t.fmt);
       if (t.curved) rtext_draw_curved(theme_font::radar_text(3), buf, (float)t.curveR, t.arcDeg, lv_color_hex(t.color), t.glow, lv_color_hex(t.glowColor), (lv_opa_t)t.opa);
-      else rtext_draw_straight(theme_font::radar_text(3), buf, (float)t.x, (float)t.y, lv_color_hex(t.color), t.glow, lv_color_hex(t.glowColor), t.align, (lv_opa_t)t.opa);
+      else rtext_draw_straight(theme_font::radar_text(3), buf, (float)t.x, (float)t.y, lv_color_hex(t.color), t.glow, lv_color_hex(t.glowColor), t.align, (lv_opa_t)t.opa, curved_text::pill_of(t));
     }
     lv_obj_invalidate(s_textCanvas);
 }

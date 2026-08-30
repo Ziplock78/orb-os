@@ -47,7 +47,8 @@ void one_line(const theme_style::SplashText &t, const char *text) {
                               (float)t.curveR, t.arcDeg, col, t.glow, glowCol, (lv_opa_t)t.opa);
     } else {
         curved_text::draw_straight(dst, f, text, (float)t.x, (float)t.y,
-                                   col, t.glow, glowCol, t.align, (lv_opa_t)t.opa);
+                                   col, t.glow, glowCol, t.align, (lv_opa_t)t.opa,
+                                   curved_text::pill_of(t));
     }
 }
 

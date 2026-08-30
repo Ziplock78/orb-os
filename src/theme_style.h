@@ -224,6 +224,15 @@ namespace theme_style {
 //      slider moved the Flight Tracker's hand or nothing. And neither screen could carry a
 //      plate. An Orb below this level keeps a black weather map at the Flight Tracker's
 //      sweep speed and ignores both plates.
+//  33  a text background behind any line of text on the device, not just the weather map's
+//      data credit. Every text card in Orb Studio now asks the same question: sit on a
+//      background, or curve to the dial. The credit was the only line that had ever been
+//      offered a plate, which made it the odd one out on the one screen where somebody
+//      would notice. bgOpa defaults to 0, so this changes nothing about how an existing
+//      theme draws. An Orb below this level draws every line without its background.
+//  32  the weather map's range rings gain the controls the Flight Tracker's have had all
+//      along: how many, how thick, how strong, and a crosshair. An Orb below this level
+//      draws the three fixed circles it always did.
 //  31  the weather map's data credit can curve, on the same arc renderer every other text
 //      element on the device uses. Only when the pill is off: a rounded rectangle is not a
 //      shape that survives the line bending. An Orb below this level draws it straight.
@@ -239,7 +248,7 @@ namespace theme_style {
 //      The weather map drew roads at a hard-coded grey and had no coastline at all, so a
 //      theme could set roadColor and roadsEnabled and watch neither do anything. An Orb
 //      below this level draws no coastline and keeps the fixed grey.
-constexpr int THEME_CAPS = 31;
+constexpr int THEME_CAPS = 33;
 
 struct ClockText {
     bool     show   = false;
@@ -253,6 +262,13 @@ struct ClockText {
     int      glow   = 0;
     uint32_t glowColor = 0xF2F5F9;
     char     fmt[32] = "";
+    // The plate behind the words. THEME_CAPS 33: every text control in Orb Studio now offers
+    // the same two choices, a background or a curve, because offering a different set of
+    // controls on each card taught nobody anything except that the cards were written on
+    // different days. bgOpa defaults to 0, so a theme that never asked for one is unchanged.
+    uint32_t bg     = 0x000000;
+    int      bgOpa  = 0;     // 0..255, 0 = no plate at all
+    int      radius = 4;     // corner rounding, px
     bool     curved = false;
     int      curveR = 0;
     float    arcDeg = 0.0f;
@@ -433,6 +449,13 @@ struct TextSlot {
     int      glow   = 0;
     uint32_t glowColor = 0xFFFFFF;
     char     fmt[80] = "";
+    // The plate behind the words. THEME_CAPS 33: every text control in Orb Studio now offers
+    // the same two choices, a background or a curve, because offering a different set of
+    // controls on each card taught nobody anything except that the cards were written on
+    // different days. bgOpa defaults to 0, so a theme that never asked for one is unchanged.
+    uint32_t bg     = 0x000000;
+    int      bgOpa  = 0;     // 0..255, 0 = no plate at all
+    int      radius = 4;     // corner rounding, px
     bool     curved = false;
     int      curveR = 0;
     float    arcDeg = 0.0f;
@@ -528,6 +551,13 @@ struct Weather {
     uint32_t ringColor       = 0x1E3A2E;
     bool     ringColorOn     = false;
     bool     ringsEnabled    = true;
+    // The same set the Flight Tracker's rings have, because they are the same idea on the
+    // same dial and there was no reason for one to be adjustable and the other not. Defaults
+    // reproduce the three fixed circles this screen drew before they were controls.
+    int      ringCount       = 3;      // 1..5, spread evenly out to the rim
+    int      ringWidth       = 1;      // px
+    int      ringOpacity     = 180;    // 0..255
+    bool     crosshair       = false;  // off by default: this screen has never had one
     uint32_t roadColor       = 0x4A4A4A;
     bool     roadsEnabled    = true;
     // The coastline, on its own switch and its own colour. Roads are worldwide now, but a
@@ -561,7 +591,10 @@ struct Weather {
         uint32_t color   = 0x9AA0A6;
         int      opa     = 255;   // clamped to CREDIT_MIN_OPA on the way in
         uint32_t bg      = 0x000000;
-        int      bgOpa   = 170;   // 0 is allowed: no pill, just the words
+        // 0, the same as every other text control since THEME_CAPS 33: a text background
+        // that starts clear. This was 170, which made the credit the one line on the device
+        // that arrived wearing something nobody had asked for.
+        int      bgOpa   = 0;
         int      radius  = 4;
         int      align   = 1;     // 0 left, 1 centre, 2 right
         // Curved, like every other text element on this device. ONLY WITHOUT THE PILL, and
@@ -814,6 +847,13 @@ struct SplashText {
     int      glow      = 0;
     uint32_t glowColor = 0xFFFFFF;
     int      align     = 1;      // 0 left, 1 center, 2 right
+    // The plate behind the words. THEME_CAPS 33: every text control in Orb Studio now offers
+    // the same two choices, a background or a curve, because offering a different set of
+    // controls on each card taught nobody anything except that the cards were written on
+    // different days. bgOpa defaults to 0, so a theme that never asked for one is unchanged.
+    uint32_t bg     = 0x000000;
+    int      bgOpa  = 0;     // 0..255, 0 = no plate at all
+    int      radius = 4;     // corner rounding, px
     bool     curved    = false;
     int      curveR    = 0;
     float    arcDeg    = 0.0f;
@@ -1045,6 +1085,10 @@ struct Intel {
     // line sat by default, at the bottom of the dial, so switching it on moves nothing
     // until the radius is changed.
     bool     ageCurved    = false;
+    // The plate behind it, THEME_CAPS 33, on the same control every other line of text has.
+    uint32_t ageBg     = 0x000000;
+    int      ageBgOpa  = 0;    // 0..255, 0 = none
+    int      ageRadius = 4;
     int      ageCurveR    = 176;    // px from the dial centre
     float    ageArcDeg    = 180.0f; // clock angle the text is centred on; 180 = six o'clock
 };

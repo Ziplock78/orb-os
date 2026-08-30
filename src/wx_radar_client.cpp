@@ -233,26 +233,56 @@ static void draw_rings(uint16_t *dst) {
     const theme_style::Weather &w = theme_style::weather();
     if (!dst || !w.ringsEnabled) return;
     const int c = WX_RADAR_SIZE / 2;
-    // The same three radii the objects had, as a fraction of the dial, so a theme that has
-    // never heard of this change draws exactly the rings it drew before.
-    const int radii[3] = { c - 2, (c * 2) / 3, c / 3 };
     const uint16_t col = rgb565(w.ringColorOn ? w.ringColor : 0x1DFF86);
-    for (int k = 0; k < 3; ++k) {
-        const int r = radii[k];
+    const int n = w.ringCount < 1 ? 1 : (w.ringCount > 5 ? 5 : w.ringCount);
+    const int wid = w.ringWidth < 1 ? 1 : (w.ringWidth > 6 ? 6 : w.ringWidth);
+    const uint8_t a = (uint8_t)(w.ringOpacity < 0 ? 0 : (w.ringOpacity > 255 ? 255 : w.ringOpacity));
+    if (a == 0) return;
+
+    // Mixed rather than written, so ring strength means what the slider says. RGB565 pulled
+    // apart, blended per channel, put back: no float, no lookup table, and it costs nothing
+    // because it runs on the handful of pixels a ring actually covers.
+    const int sr = (col >> 11) & 0x1F, sg = (col >> 5) & 0x3F, sb = col & 0x1F;
+    auto plot = [&](int px, int py) {
+        if (px < 0 || px >= WX_RADAR_SIZE || py < 0 || py >= WX_RADAR_SIZE) return;
+        uint16_t &d = dst[(size_t)py * WX_RADAR_SIZE + px];
+        if (a == 255) { d = col; return; }
+        const int dr = (d >> 11) & 0x1F, dg = (d >> 5) & 0x3F, db = d & 0x1F;
+        const int nr = dr + ((sr - dr) * a) / 255;
+        const int ng = dg + ((sg - dg) * a) / 255;
+        const int nb = db + ((sb - db) * a) / 255;
+        d = (uint16_t)((nr << 11) | (ng << 5) | nb);
+    };
+
+    // Spread evenly out to the rim, so asking for one ring gives the outer circle and asking
+    // for five subdivides the same dial. Three lands on very nearly the radii the three
+    // fixed objects used, which is what keeps an untouched theme looking untouched.
+    for (int k = 1; k <= n; ++k) {
+        const int r = ((c - 2) * k) / n;
         if (r < 2) continue;
-        // Midpoint circle, eight-way symmetric. No trig, no allocation, and it lands on the
-        // same pixels every frame so the rings cannot shimmer against the precipitation.
-        int x = r, y = 0, err = 1 - r;
-        while (x >= y) {
-            const int pts[8][2] = { {x,y},{y,x},{-y,x},{-x,y},{-x,-y},{-y,-x},{y,-x},{x,-y} };
-            for (auto &pt : pts) {
-                const int px = c + pt[0], py = c + pt[1];
-                if (px >= 0 && px < WX_RADAR_SIZE && py >= 0 && py < WX_RADAR_SIZE)
-                    dst[(size_t)py * WX_RADAR_SIZE + px] = col;
+        // Midpoint circle, eight-way symmetric, walked once per pixel of width. No trig and
+        // no allocation, and it lands on the same pixels every frame so the rings cannot
+        // shimmer against the precipitation behind them.
+        for (int t = 0; t < wid; ++t) {
+            const int rr = r - t;
+            if (rr < 2) break;
+            int x = rr, y = 0, err = 1 - rr;
+            while (x >= y) {
+                const int pts[8][2] = { {x,y},{y,x},{-y,x},{-x,y},{-x,-y},{-y,-x},{y,-x},{x,-y} };
+                for (auto &pt : pts) plot(c + pt[0], c + pt[1]);
+                ++y;
+                if (err < 0) err += 2 * y + 1;
+                else { --x; err += 2 * (y - x) + 1; }
             }
-            ++y;
-            if (err < 0) err += 2 * y + 1;
-            else { --x; err += 2 * (y - x) + 1; }
+        }
+    }
+
+    // The crosshair, when a design asks for one. Drawn to the outer ring rather than the
+    // buffer's edge so it stops where the dial does.
+    if (w.crosshair) {
+        const int reach = c - 2;
+        for (int t = 0; t < wid; ++t) {
+            for (int i = -reach; i <= reach; ++i) { plot(c + i, c + t); plot(c + t, c + i); }
         }
     }
 }
