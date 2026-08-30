@@ -99,6 +99,29 @@ plane-radar-2.0/
 ```
 
 ## Build / flash
+
+**A firmware change is not finished when it compiles.** `pio run` puts a binary in
+`.pio/build/`, where nothing can reach it. Zion flashes from Orb Studio, and Studio decides
+whether to offer an update by comparing version STRINGS. So a changed binary under an
+unchanged `FW_VERSION` is invisible: his Orb says 1.63.1, the bundle says 1.63.1, Studio says
+"firmware is up to date", and there is no button to press. This has now wasted his time
+several times, and each time it looked like the flasher was broken when nothing was broken.
+
+Three steps, every time, or the work does not exist:
+
+```
+# 1. bump FW_VERSION in src/config.h            <- the step that keeps getting skipped
+# 2. build + copy into Studio's bundle + write the manifest
+bash tools/publish-firmware.sh
+# 3. rebuild and deploy Studio, or it keeps serving the old bundle
+cd ~/Developer/hf-sites/buildtheorb/app && npx vite build && npx wrangler deploy --name buildtheorb
+```
+
+`publish-firmware.sh` now refuses step 2 if the binary moved and `FW_VERSION` did not, and
+tells you after step 2 if step 3 is still outstanding. Neither guard fires if nobody runs the
+script, which is why this is written here as well.
+
+Local build and flash, for working on the device directly:
 ```
 pio run                        # build
 pio run -t upload              # flash over USB-C

@@ -3,6 +3,15 @@
 #include "ui.h"
 #include "theme_style.h"
 #include "plate_sprite.h"
+#ifndef ARDUINO
+// The weather map's text canvas is allocated with the PSRAM allocator, which the simulator
+// does not have. Plain malloc stands in: there is only one kind of memory on a desktop, and
+// the point of the sim is to run the same drawing code, not the same allocator.
+#include <cstdlib>
+#define MALLOC_CAP_SPIRAM 0
+static inline void *heap_caps_malloc(size_t n, int) { return malloc(n); }
+static inline void  heap_caps_free(void *p) { free(p); }
+#endif
 #include "app_theme.h"
 #include "radar_view.h"
 #include "custom_radar.h"     // CUSTOM_HAS_RADAR_STYLE — a pushed design's own banners replace this card
@@ -15,6 +24,9 @@
 #include "config.h"
 #include "splash_art.h"       // splash_art_decode() — boot-splash PNG, decoded on demand
 #include "splash_lines.h"     // the three standing lines, and the glass over them
+#include "text_tokens.h"       // {token} expansion, the same parser the Flight Tracker uses
+#include "curved_text.h"       // the one glyph blitter; there is not a second
+#include "theme_font.h"        // font_weather1..4.bin, when a theme ships them
 #include <lvgl.h>
 #include <stdio.h>
 #include <stdint.h>
@@ -87,6 +99,45 @@ static int      s_wxUpdateDots = 0;
 static int      s_wxAnimSlot = 0;   // which frame of the loop is on screen right now
 static lv_obj_t *s_wxNorth = nullptr, *s_wxCenter = nullptr, *s_wxRange = nullptr;
 static lv_obj_t *s_weatherTitle = nullptr;
+
+// The weather map's four themeable text lines (THEME_CAPS 28).
+//
+// Everything the map said used to be fixed here: a temperature, a wind line, a range label,
+// a centre label and a title, each at a hard-coded spot in a hard-coded colour. A design
+// could restyle the map underneath them and not move one word on top of it.
+//
+// Painted onto one canvas rather than into LVGL labels, because glow has to be hand-painted
+// into a buffer and a label cannot draw it. The canvas is allocated only once a theme
+// actually asks for a line, so a design using none pays nothing.
+//
+// Two things are deliberately NOT slots and stay drawn by this file: the RainViewer credit
+// (UX-030: a data source credit is not a theme's to remove) and the status line (UX-038: the
+// screen has to be able to say a feed is loading or dead). A free slot could delete either
+// of those by simply never being defined, and neither is the designer's to delete.
+static lv_obj_t   *s_wxTextCanvas = nullptr;
+static lv_color_t *s_wxTextBuf    = nullptr;
+
+// When the radar picture currently on screen was actually taken, as a unix time.
+//
+// Kept here because the animation callback is the only place that knows which of the five
+// frames is showing, and {age} has to describe THAT frame rather than the newest one. The
+// loop steps back through the last hour, so a line reading "now" while a forty-minute-old
+// frame is on the glass would be a screen lying about the one thing this app is for.
+// 0 means nothing has been shown yet.
+static uint32_t s_wxFrameTime = 0;
+static void wx_text_refresh(void);   // defined below; the animation callback repaints through it
+
+// Does the active theme want to draw the map's text itself?
+//
+// This is the gate that keeps every theme written before THEME_CAPS 28 looking exactly as it
+// did: no slots means no opinion, so the fixed labels below stay exactly where they were.
+// The moment a theme defines even one slot it is composing the screen, and the five labels
+// it replaces get out of the way.
+static bool wx_slots_active(void) {
+    const theme_style::Weather &w = theme_style::weather();
+    for (int i = 0; i < 4; ++i) if (w.text[i].show) return true;
+    return false;
+}
 enum WeatherViewMode { WEATHER_RADAR, WEATHER_CLOUDS, WEATHER_FORECAST };
 static WeatherViewMode s_weatherMode = WEATHER_RADAR;
 static lv_obj_t *s_fcCurrent = nullptr, *s_fcCondition = nullptr, *s_fcUpdated = nullptr;
@@ -389,10 +440,20 @@ static void wx_anim_cb(lv_timer_t *t) {
     if (!wx_radar_frame(s_wxAnimSlot, gen, &px, &ft) || !px) return;
     lv_canvas_set_buffer(s_wxCanvas, (void *)px, WX_RADAR_SIZE, WX_RADAR_SIZE, LV_IMG_CF_TRUE_COLOR);
     lv_obj_invalidate(s_wxCanvas);
+    // {age} describes the frame that just went up, so it is repainted with it rather than
+    // on the weather data's own slower clock. Costs one canvas pass per animation step, and
+    // only when a theme has asked for a line at all.
+    s_wxFrameTime = ft;
+    wx_text_refresh();
     if (s_wxAttrib) {
         char stamp[6] = "--:--"; time_t t = (time_t)ft; struct tm ti;
         if (ft && localtime_r(&t, &ti)) snprintf(stamp, sizeof(stamp), "%02d:%02d", ti.tm_hour, ti.tm_min);
-        char attr[64]; snprintf(attr, sizeof(attr), "RADAR %s  |  RAINVIEWER", stamp);
+        // The credit has to stay (UX-030), the timestamp beside it does not: it is the same
+        // fact {age} and {updated} now give a design to place where it wants. So a theme
+        // composing its own text gets the bare source name and nothing else.
+        char attr[64];
+        if (wx_slots_active()) snprintf(attr, sizeof(attr), "RAINVIEWER");
+        else                   snprintf(attr, sizeof(attr), "RADAR %s  |  RAINVIEWER", stamp);
         lv_label_set_text(s_wxAttrib, attr);
     }
 }
@@ -434,6 +495,148 @@ static void wx_status_timer_cb(lv_timer_t *) {
     if (s_wxStatus && !lv_obj_has_flag(s_wxStatus, LV_OBJ_FLAG_HIDDEN)) wx_status_paint();
 }
 
+// Build the token table and paint whichever of the four lines a theme asked for.
+//
+// The table is built fresh on every refresh rather than cached. It is twenty-odd short
+// strings on the stack once a minute; caching it would buy nothing and would introduce the
+// one bug this screen cannot afford, which is text that is quietly out of date while
+// looking current.
+//
+// An unknown token comes out empty, which reads as a typo. Leaving "{tmp}" on the glass
+// would read as the firmware being broken.
+static void wx_text_refresh(void) {
+    const theme_style::Weather &ws = theme_style::weather();
+    if (!wx_slots_active()) {
+        // Nothing to draw, and nothing to hold: a theme that does not use these must not pay
+        // 434 KB of PSRAM for a canvas it never marks.
+        if (s_wxTextBuf) {
+            if (s_wxTextCanvas) {
+                lv_img_set_src(s_wxTextCanvas, (const void *)NULL);   // detach before the free
+                lv_obj_add_flag(s_wxTextCanvas, LV_OBJ_FLAG_HIDDEN);
+            }
+            heap_caps_free(s_wxTextBuf);
+            s_wxTextBuf = nullptr;
+        }
+        return;
+    }
+    if (!s_wxTextCanvas) return;
+    if (!s_wxTextBuf) {
+        const size_t sz = LV_CANVAS_BUF_SIZE_TRUE_COLOR_ALPHA(SCREEN_W, SCREEN_H);
+        s_wxTextBuf = (lv_color_t *)heap_caps_malloc(sz, MALLOC_CAP_SPIRAM);
+        if (!s_wxTextBuf) {
+            // Said out loud, not swallowed. A theme whose text simply never appears, with
+            // nothing anywhere explaining why, is the failure mode TC-011 exists to stop.
+            printf("[wx] text canvas alloc FAILED (%u bytes); the map's text is skipped\n", (unsigned)sz);
+            return;
+        }
+        lv_canvas_set_buffer(s_wxTextCanvas, s_wxTextBuf, SCREEN_W, SCREEN_H, LV_IMG_CF_TRUE_COLOR_ALPHA);
+    }
+    lv_obj_clear_flag(s_wxTextCanvas, LV_OBJ_FLAG_HIDDEN);
+    lv_canvas_fill_bg(s_wxTextCanvas, lv_color_black(), LV_OPA_TRANSP);
+
+    WeatherSnapshot w;
+    const bool have = weather_get(w) && w.valid;
+
+    // Every value is rendered into its own buffer first, because the token table holds
+    // pointers and every one of them has to outlive the expand() call below.
+    char tempS[12] = "--", tempCS[12] = "--", tempFS[12] = "--", feelsS[12] = "--";
+    char humS[8] = "--", windS[12] = "--", windDegS[8] = "--", rangeS[16] = "";
+    const char *condS = have ? weather_condition(w.code) : "";
+    const char *windDirS = have ? cardinal((float)w.windDeg) : "";
+    const char *updatedS = have ? w.updated : "";
+    if (have) {
+        snprintf(tempS,   sizeof(tempS),   "%.0f", (double)weather_temp(w.tempC));
+        snprintf(tempCS,  sizeof(tempCS),  "%.0f", (double)w.tempC);
+        snprintf(tempFS,  sizeof(tempFS),  "%.0f", (double)(w.tempC * 1.8f + 32.0f));
+        snprintf(feelsS,  sizeof(feelsS),  "%.0f", (double)weather_temp(w.feelsC));
+        snprintf(humS,    sizeof(humS),    "%d",   w.humidity);
+        snprintf(windS,   sizeof(windS),   "%.0f", (double)weather_wind(w.windKmh));
+        snprintf(windDegS,sizeof(windDegS),"%d",   w.windDeg);
+    }
+    snprintf(rangeS, sizeof(rangeS), "%.0f", (double)wx_dist_val(WX_ZOOM_KM[s_wxZoom]));
+
+    // How old the picture currently on the glass is.
+    //
+    // Two forms on purpose. {age} is the sentence, "now" or "20 min", so a line can just say
+    // it. {ageMin} is the bare number for anyone composing their own wording, and is "0"
+    // rather than blank when the frame is current, because a design writing "{ageMin} MIN
+    // AGO" should read "0 MIN AGO" and not "MIN AGO".
+    //
+    // Under 90 seconds counts as now. The source publishes about every ten minutes, so
+    // anything fresher than a minute and a half is the newest thing that exists, and saying
+    // "1 min" about it would be technically true and read as staleness.
+    //
+    // Before the clock is set, neither can be honest: an age computed against a 1970 clock
+    // would be decades. Both go blank, which a design shows as a gap rather than as a lie.
+    char ageS[16] = "", ageMinS[8] = "";
+    {
+        const time_t nowT = time(nullptr);
+        if (s_wxFrameTime && nowT > 1000000000L) {
+            long ago = (long)nowT - (long)s_wxFrameTime;
+            if (ago < 0) ago = 0;                 // a frame stamped slightly ahead of us
+            const long mins = (ago + 30) / 60;    // to the nearest minute
+            snprintf(ageMinS, sizeof(ageMinS), "%ld", mins);
+            if (ago < 90) snprintf(ageS, sizeof(ageS), "now");
+            else          snprintf(ageS, sizeof(ageS), "%ld min", mins);
+        }
+    }
+
+    // The four-day forecast, flattened. Four days times four values, each in its own slot,
+    // so a design can put tomorrow's high anywhere it likes.
+    char dayS[4][8], highS[4][8], lowS[4][8], rainS[4][8];
+    const char *condN[4];
+    for (int d = 0; d < 4; ++d) {
+        const bool ok = have && d < w.dayCount;
+        snprintf(dayS[d],  sizeof(dayS[d]),  "%s", ok ? weather_day_name(w.days[d].date) : "");
+        snprintf(highS[d], sizeof(highS[d]), ok ? "%.0f" : "%s",
+                 ok ? (double)weather_temp(w.days[d].tempMaxC) : 0.0);
+        snprintf(lowS[d],  sizeof(lowS[d]),  ok ? "%.0f" : "%s",
+                 ok ? (double)weather_temp(w.days[d].tempMinC) : 0.0);
+        snprintf(rainS[d], sizeof(rainS[d]), ok ? "%d" : "%s", ok ? w.days[d].rainChance : 0);
+        if (!ok) { highS[d][0] = 0; lowS[d][0] = 0; rainS[d][0] = 0; }
+        condN[d] = ok ? weather_condition(w.days[d].code) : "";
+    }
+
+    const text_tokens::Tok toks[] = {
+        { "temp", tempS }, { "tempC", tempCS }, { "tempF", tempFS }, { "feels", feelsS },
+        { "cond", condS }, { "humidity", humS }, { "wind", windS },
+        { "windDir", windDirS }, { "windDeg", windDegS },
+        { "range", rangeS }, { "updated", updatedS },
+        { "age", ageS }, { "ageMin", ageMinS },
+        { "unit", weather_temp_unit() }, { "windUnit", weather_wind_unit() },
+        { "rangeUnit", wx_dist_unit() },
+        { "day1", dayS[0] }, { "high1", highS[0] }, { "low1", lowS[0] }, { "rain1", rainS[0] }, { "cond1", condN[0] },
+        { "day2", dayS[1] }, { "high2", highS[1] }, { "low2", lowS[1] }, { "rain2", rainS[1] }, { "cond2", condN[1] },
+        { "day3", dayS[2] }, { "high3", highS[2] }, { "low3", lowS[2] }, { "rain3", rainS[2] }, { "cond3", condN[2] },
+        { "day4", dayS[3] }, { "high4", highS[3] }, { "low4", lowS[3] }, { "rain4", rainS[3] }, { "cond4", condN[3] },
+    };
+    const size_t nToks = sizeof(toks) / sizeof(toks[0]);
+
+    const curved_text::Target dst = { (uint8_t *)s_wxTextBuf, SCREEN_W, SCREEN_H };
+    for (int i = 0; i < 4; ++i) {
+        const theme_style::TextSlot &t = ws.text[i];
+        if (!t.show) continue;
+        char buf[96];
+        text_tokens::expand(buf, sizeof(buf), t.fmt, toks, nToks);
+        if (!buf[0]) continue;
+        const lv_font_t *font = theme_font::weather_text(i);
+        if (t.curved) {
+            // A curved line arcs around x/y as its centre, which is why the position
+            // controls stay meaningful when curve is switched on: they stop being where the
+            // text sits and become what it orbits.
+            curved_text::draw_arc(dst, font, buf, (float)t.x, (float)t.y,
+                                  (float)t.curveR, t.arcDeg,
+                                  lv_color_hex(t.color), t.glow, lv_color_hex(t.glowColor),
+                                  (lv_opa_t)t.opa);
+        } else {
+            curved_text::draw_straight(dst, font, buf, (float)t.x, (float)t.y,
+                                       lv_color_hex(t.color), t.glow, lv_color_hex(t.glowColor),
+                                       t.align, (lv_opa_t)t.opa);
+        }
+    }
+    lv_obj_invalidate(s_wxTextCanvas);
+}
+
 static void build_weather(void) {
     if (!s_weatherNow || !s_weatherMeta || !s_weatherDays || !s_wxFooter) return;
     WeatherSnapshot w;
@@ -461,6 +664,11 @@ static void build_weather(void) {
         snprintf(wxmeta, sizeof(wxmeta), "WIND %s %.0f %s   HUM %d%%",
                  cardinal((float)w.windDeg), weather_wind(w.windKmh), weather_wind_unit(), w.humidity);
         lv_label_set_text(s_wxMeta, wxmeta);
+
+        // Which labels a theme's own text replaces is decided in ONE place, further down,
+        // next to the loop that shows them. Doing it here as well was the bug: that loop
+        // runs afterwards and put every one of them straight back.
+        wx_text_refresh();
 
         char current[24];
         snprintf(current, sizeof(current), "%.0f %s", weather_temp(w.tempC), weather_temp_unit());
@@ -546,7 +754,8 @@ static void build_weather(void) {
         if (!cloudMode && wx_phase_get(&fdone, &ftotal) == WX_PHASE_FRAMES)
             snprintf(attr, sizeof(attr), "RADAR %s  |  LOADING %d/%d", stamp, fdone, ftotal);
         else
-            snprintf(attr, sizeof(attr), cloudMode ? "SAT %s  |  EUMETSAT" : "RADAR %s  |  RAINVIEWER", stamp);
+            if (wx_slots_active()) snprintf(attr, sizeof(attr), cloudMode ? "EUMETSAT" : "RAINVIEWER");
+            else snprintf(attr, sizeof(attr), cloudMode ? "SAT %s  |  EUMETSAT" : "RADAR %s  |  RAINVIEWER", stamp);
         lv_label_set_text(s_wxAttrib, attr);
     } else {
         if (s_wxCanvas) lv_obj_add_flag(s_wxCanvas, LV_OBJ_FLAG_HIDDEN);
@@ -607,14 +816,36 @@ static void build_weather(void) {
         if (s_wxRings[i]) lv_obj_set_style_border_color(s_wxRings[i], ringCol, 0);
         if (s_wxRingLbl[i]) lv_obj_set_style_text_color(s_wxRingLbl[i], ringCol, 0);
     }
-    lv_obj_t *radarObjs[] = { s_wxCanvas, s_wxStatus, s_wxAirport, s_wxFooter, s_wxMeta,
-                              s_wxAttrib, s_wxNorth, s_wxCenter, s_wxRange,
+    // A theme composing its own text takes over every readout on this screen. They are kept
+    // OUT of the show list rather than hidden earlier in the pass, because this loop runs
+    // last and clears the hidden flag on everything in it: the first attempt hid them a
+    // hundred lines above and this quietly put them all back, which is why a design's own
+    // text arrived on top of the firmware's instead of instead of it.
+    //
+    // The rings themselves stay. They are drawn furniture on their own switch, not a
+    // readout, and a design that wants them gone turns them off. Their NUMBERS go, because
+    // those are words at fixed positions and {range} is how a design says the same thing.
+    //
+    // The canvas, the status line and the credit are never in this set: one is the map, one
+    // is how the screen admits a feed is dead (UX-038), and one is a licence obligation
+    // (UX-030).
+    const bool wxSlots = wx_slots_active();
+    lv_obj_t *const wxTaken[] = { s_wxAirport, s_wxFooter, s_wxMeta, s_wxNorth, s_wxCenter,
+                                  s_wxRange, s_wxRingLbl[0], s_wxRingLbl[1], s_wxRingLbl[2],
+                                  s_weatherTitle };
+    lv_obj_t *radarObjs[] = { s_wxCanvas, s_wxStatus, s_wxAttrib,
+                              wxSlots ? nullptr : s_wxAirport,
+                              wxSlots ? nullptr : s_wxFooter,
+                              wxSlots ? nullptr : s_wxMeta,
+                              wxSlots ? nullptr : s_wxNorth,
+                              wxSlots ? nullptr : s_wxCenter,
+                              wxSlots ? nullptr : s_wxRange,
                               wxs.ringsEnabled ? s_wxRings[0] : nullptr,
                               wxs.ringsEnabled ? s_wxRings[1] : nullptr,
                               wxs.ringsEnabled ? s_wxRings[2] : nullptr,
-                              wxs.ringsEnabled ? s_wxRingLbl[0] : nullptr,
-                              wxs.ringsEnabled ? s_wxRingLbl[1] : nullptr,
-                              wxs.ringsEnabled ? s_wxRingLbl[2] : nullptr };
+                              wxs.ringsEnabled && !wxSlots ? s_wxRingLbl[0] : nullptr,
+                              wxs.ringsEnabled && !wxSlots ? s_wxRingLbl[1] : nullptr,
+                              wxs.ringsEnabled && !wxSlots ? s_wxRingLbl[2] : nullptr };
     // Switched off means hidden, not merely left out of the list above: an object nobody
     // shows and nobody hides keeps whatever it had last time.
     if (!wxs.ringsEnabled) {
@@ -628,6 +859,29 @@ static void build_weather(void) {
     }
     for (lv_obj_t *o : radarObjs) if (o) {
         if (forecastMode) lv_obj_add_flag(o, LV_OBJ_FLAG_HIDDEN); else lv_obj_clear_flag(o, LV_OBJ_FLAG_HIDDEN);
+    }
+    // The credit wears the theme: position, colour, and the pill behind it. Applied every
+    // pass rather than once at construction, because a theme switch has to move it. What it
+    // SAYS is never touched here, and there is no path that hides it.
+    if (s_wxAttrib && !forecastMode) {
+        const theme_style::Weather::Credit &c = wxs.credit;
+        lv_obj_set_style_text_color(s_wxAttrib, lv_color_hex(c.color), 0);
+        lv_obj_set_style_text_opa(s_wxAttrib, (lv_opa_t)c.opa, 0);
+        lv_obj_set_style_bg_color(s_wxAttrib, lv_color_hex(c.bg), 0);
+        lv_obj_set_style_bg_opa(s_wxAttrib, (lv_opa_t)c.bgOpa, 0);
+        lv_obj_set_style_radius(s_wxAttrib, (lv_coord_t)c.radius, 0);
+        // Positioned from its own centre so the align control means what it says and a
+        // change of wording does not shift where the thing sits.
+        lv_obj_update_layout(s_wxAttrib);
+        const lv_coord_t w = lv_obj_get_width(s_wxAttrib);
+        const lv_coord_t offX = (c.align == 0) ? 0 : (c.align == 2) ? -w : -w / 2;
+        lv_obj_align(s_wxAttrib, LV_ALIGN_TOP_LEFT, (lv_coord_t)c.x + offX, (lv_coord_t)c.y);
+    }
+    if (wxSlots && !forecastMode) {
+        // After the loop above, never before it. The title is shared with the forecast page,
+        // so it only steps aside while the map is the visible mode; the forecast page keeps
+        // its heading, which is the half deliberately left alone for now.
+        for (lv_obj_t *o : wxTaken) if (o) lv_obj_add_flag(o, LV_OBJ_FLAG_HIDDEN);
     }
     if (!forecastMode && haveImage) lv_obj_add_flag(s_wxStatus, LV_OBJ_FLAG_HIDDEN);
     if (!forecastMode && !haveImage) lv_obj_add_flag(s_wxCanvas, LV_OBJ_FLAG_HIDDEN);
@@ -1160,6 +1414,15 @@ void ui_create(void) {
     lv_obj_set_style_radius(s_wxMeta, 4, 0);
     lv_obj_set_style_pad_hor(s_wxMeta, 8, 0);
     lv_obj_set_style_radius(s_wxMeta, 7, 0);
+    // The four themeable lines paint here, created last so it sits above every label on the
+    // tile. No buffer yet: wx_text_refresh() allocates one the first time a theme actually
+    // asks for a line, and frees it again the moment a theme stops asking.
+    s_wxTextCanvas = lv_canvas_create(wp);
+    lv_obj_set_size(s_wxTextCanvas, SCREEN_W, SCREEN_H);
+    lv_obj_align(s_wxTextCanvas, LV_ALIGN_TOP_LEFT, 0, 0);
+    lv_obj_add_flag(s_wxTextCanvas, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_clear_flag(s_wxTextCanvas, LV_OBJ_FLAG_CLICKABLE);
+
     s_wxAttrib = lv_label_create(wp);
     lv_obj_set_style_text_font(s_wxAttrib, F12(), 0);
     lv_obj_set_style_text_color(s_wxAttrib, UI_DIM, 0);

@@ -47,6 +47,11 @@ const lv_font_t *settings_item();
 // same face as settings_item(). See THEME_CAPS 22.
 const lv_font_t *settings_sel();
 const lv_font_t *radar_text(int idx);      // idx 0..3, clamped
+
+// The Weather map's four, THEME_CAPS 28. Check weather_has_font() before honouring a size
+// control: a loaded face is baked at one size and ignores any size asked of it afterwards.
+const lv_font_t *weather_text(int idx);    // idx 0..3, clamped
+bool weather_has_font(int slot);           // 0..3
 // The Headlines screen's four text slots. Each returns nullptr-free: the theme's face when
 // one loaded, LV_FONT_DEFAULT otherwise. A caller that also has a SIZE to honour should
 // check `intel_has_font()` first — a loaded face is baked at one size and ignores any

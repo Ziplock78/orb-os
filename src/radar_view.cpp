@@ -12,6 +12,7 @@
 #include "coastline.h"
 #include "roads_sd.h"
 #include "airports.h"
+#include "text_tokens.h"   // shared {token} expansion, see radar_fmt()
 #include "route.h"           // route_request()/route_get() — {from}/{to} tokens in a custom text banner
 #include "custom_radar.h"    // CUSTOM_HAS_RADAR / CUSTOM_RTEXT{1,2,3}_* / CUSTOM_HAS_RADAR_STYLE / CUSTOM_SWEEP_*, CUSTOM_BLIP_*, CUSTOM_SEL_*, CUSTOM_OFFRANGE_*, CUSTOM_CENTER_* — a Launch Kit push's selection banners + visual styling
 #include "radar_sprite.h"    // radar_custom_plate()/radar_custom_overlay()/radar_custom_blip_icon() — the editor's baked background+rings+crosshair / CRT+glass / aircraft-icon layers
@@ -2529,30 +2530,12 @@ static void fill_info(const AcDraw &a, AcInfo &out) {
 // same token set the Launch Kit editor's own radarFmt()/radarTokens() use, so a
 // format string written there means the same thing here. {from}/{to} come from
 // the same async route lookup the native detail card already uses.
-struct RadarTok { const char *key; const char *val; };
-// Shared {token} substitution engine — radar_fmt() (aircraft tokens) and
-// radar_range_fmt() (the scope-range banner's {range}, which isn't
-// aircraft-dependent at all) both just supply a different token table.
-static void radar_fmt_toks(char *out, size_t outSz, const char *fmt, const RadarTok *toks, size_t nToks) {
-    size_t oi = 0;
-    for (const char *p = fmt; *p && oi + 1 < outSz; ) {
-        if (*p == '{') {
-            const char *close = strchr(p, '}');
-            if (close) {
-                char key[16]; size_t klen = (size_t)(close - p - 1);
-                if (klen > 0 && klen < sizeof(key)) {
-                    memcpy(key, p + 1, klen); key[klen] = 0;
-                    const char *val = "";
-                    for (size_t i = 0; i < nToks; ++i) if (!strcmp(toks[i].key, key)) { val = toks[i].val; break; }
-                    for (const char *v = val; *v && oi + 1 < outSz; ++v) out[oi++] = *v;
-                    p = close + 1;
-                    continue;
-                }
-            }
-        }
-        out[oi++] = *p++;
-    }
-    out[oi] = 0;
+// The parser moved to text_tokens.cpp when the Weather map got text slots of its own, so
+// both screens walk a format string the same way. These two names stay because they are
+// spelled all over this file and mean exactly what they always did.
+using RadarTok = text_tokens::Tok;
+static inline void radar_fmt_toks(char *out, size_t outSz, const char *fmt, const RadarTok *toks, size_t nToks) {
+    text_tokens::expand(out, outSz, fmt, toks, nToks);
 }
 // Returns false (leaves `out` empty) when the format needs {from}/{to} and the
 // route lookup hasn't produced both yet — the caller skips drawing that banner

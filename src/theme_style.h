@@ -192,6 +192,31 @@ namespace theme_style {
 //      Tracker's sweep OBJECT outright, so it wore the Flight Tracker's artwork. An Orb
 //      below this level ignores the file and draws the weather map as it always did, which
 //      is with no sweep at all.
+//  30  the weather map's data credit wearing the theme: where it sits, its colour, and the
+//      pill behind it. UX-030 always allowed a credit to be restyled and only forbade
+//      removing it; this was read as "leave it alone entirely", which left a white-on-black
+//      chip sitting on top of designs that had composed everything else. There is no show
+//      switch and text opacity has a floor, because "invisible" is how a removal would be
+//      spelled if the field allowed it. An Orb below this level draws the credit exactly
+//      where it always did, which is the same credit in a different place.
+//  29  {age} and {ageMin} on the weather map: how old the picture currently on the glass
+//      is, stepping with the animation rather than sitting on the weather data's slower
+//      clock. Its own level rather than folded into 28 because 28 shipped without them for
+//      a few minutes and an Orb flashed in that window would render the token as a gap,
+//      which is exactly the silent nothing THEME_CAPS exists to turn into a refusal.
+//  28  the weather map's own text and its own keep-out zones. Everything the map said was
+//      fixed in ui.cpp: a temperature, a wind line, a range label, a centre label and a
+//      title, each at a hard-coded position in a hard-coded colour, so a design could
+//      restyle the map underneath them and not move one word on top of it. It now carries
+//      four text slots of the same shape the Flight Tracker has, filled from a {token}
+//      table (see wx_text_refresh in ui.cpp for the list), and its own zones, which restore
+//      the theme's plate wherever the map is told not to draw. An Orb below this level
+//      ignores both keys and draws the fixed labels exactly as it always did, which is also
+//      what any Orb does when a theme defines no slots: absence means no opinion, not off.
+//
+//      Two things are deliberately NOT slots: the RainViewer credit, because a data source
+//      credit is not a theme's to remove, and the status line, because the screen has to be
+//      able to say a feed is loading or dead.
 //  27  three things the weather map was offered in Orb Studio and never given, plus a
 //      background picture for it and for the Stock Ticker. Its bg colour was never read at
 //      all, so the map inherited whatever sat behind it and stayed black however a design
@@ -211,7 +236,7 @@ namespace theme_style {
 //      The weather map drew roads at a hard-coded grey and had no coastline at all, so a
 //      theme could set roadColor and roadsEnabled and watch neither do anything. An Orb
 //      below this level draws no coastline and keeps the fixed grey.
-constexpr int THEME_CAPS = 27;
+constexpr int THEME_CAPS = 30;
 
 struct ClockText {
     bool     show   = false;
@@ -383,7 +408,17 @@ struct Names {
     char settings[20]     = "Settings";      // renameable, but never hideable
 };
 
-struct RadarText {
+// One themeable line of text, wherever a screen puts one.
+//
+// Named RadarText when the Flight Tracker was the only screen with live text banners. The
+// Weather map now carries four of its own (THEME_CAPS 28) and needs exactly these fields,
+// so the struct was renamed rather than copied: a second struct with the same members is
+// how two screens start drifting on what "curved" means. `RadarText` stays as an alias
+// because it is spelled that way across radar_view.cpp and in every theme already written.
+//
+// `onCard` is the one Flight Tracker specific: it rides the aircraft selection card, and no
+// other screen has one. A screen without a card simply leaves it false.
+struct TextSlot {
     bool     show   = false;
     int      x      = 233;
     int      y      = 233;
@@ -404,6 +439,7 @@ struct RadarText {
     // so the line travels with the card as the card chases the far side of the dial.
     bool     onCard = false;
 };
+using RadarText = TextSlot;
 
 // The selection card: a little plate that appears when an aircraft is picked, always on
 // the OPPOSITE side of the scope from that aircraft, so the thing you just selected is
@@ -431,6 +467,27 @@ struct RadarStatic {
     int   y = 233;
     int   opacity = 255;
     float scale = 1.0f;
+};
+
+// A keep-out shape, in 466x466 screen coordinates.
+//
+// These exist so decorative artwork can live in the BAKED BACKGROUND instead of in a layer
+// above the moving parts. Measured 2026-08-17: Steam Punk's brass bezel, as a layer above
+// the movers, cost 24% of the Flight Tracker's frame rate; the same art baked into the
+// background costs nothing at all. A zone gets the same visual result, the moving parts
+// never cross the decoration, for a handful of comparisons per frame.
+//
+// A zone is a circle or an axis-aligned rectangle, and it can be inverted. Inverted means
+// "hide OUTSIDE this shape", which turns one zone into a containment ring: put a big
+// inverted circle just inside the dial's border and nothing can encroach on it, replacing a
+// border overlay, which is another layer above the movers and another 24%.
+static constexpr int MAX_ZONES = 6;
+struct Zone {
+    int  x = 233, y = 233;
+    int  r = 0;                 // circle radius, when rect is false
+    int  w = 0, h = 0;          // full width/height centred on x,y, when rect is true
+    bool rect   = false;
+    bool invert = false;        // true = hide outside the shape instead of inside it
 };
 
 // The weather map's OWN look. Its own background, its own sweep, its own colours.
@@ -475,6 +532,44 @@ struct Weather {
     // peninsula the roads alone read as scribble until the coast puts them somewhere.
     uint32_t coastColor      = 0x2B4A63;
     bool     coastEnabled    = true;
+
+    // Four themeable lines, the same four the Flight Tracker has and the same struct, so a
+    // control means the same thing on both screens. Until THEME_CAPS 28 this screen drew a
+    // hard-coded temperature, a hard-coded age stamp and a hard-coded loading line, none of
+    // which a design could move, colour, or switch off. Tokens are listed in weather_view.cpp
+    // next to the table that fills them.
+    TextSlot text[4];
+
+    // The data source credit: where it sits and what it looks like, but never whether it
+    // exists.
+    //
+    // UX-030 says a theme may restyle a credit and may not remove it. The first pass read
+    // that as "leave it entirely alone", which is stricter than the rule and left a white
+    // chip on a black pill sitting on top of every design that did not want one. Position,
+    // colour, typeface and the pill behind it are all a theme's business. Being there is not.
+    //
+    // There is no `show`, on purpose: a switch that can be set wrong eventually is. Opacity
+    // has a floor for the same reason, since "invisible" is how a removal would be spelled
+    // if the field allowed it. bgOpa has NO floor, because a credit with no pill behind it
+    // is still a credit.
+    struct Credit {
+        int      x       = 233;
+        int      y       = 382;
+        uint32_t color   = 0x9AA0A6;
+        int      opa     = 255;   // clamped to CREDIT_MIN_OPA on the way in
+        uint32_t bg      = 0x000000;
+        int      bgOpa   = 170;   // 0 is allowed: no pill, just the words
+        int      radius  = 4;
+        int      align   = 1;     // 0 left, 1 centre, 2 right
+    };
+    static constexpr int CREDIT_MIN_OPA = 128;   // half. Below this it stops being a credit.
+    Credit   credit;
+
+    // Keep-out shapes for the map layers, exactly as the Flight Tracker has for aircraft.
+    // Without these the rain and the coastline paint straight over whatever the background
+    // art was doing, which is the whole reason the Flight Tracker got them first.
+    Zone     zones[MAX_ZONES];
+    int      zoneCount       = 0;
 };
 
 struct Radar {
@@ -592,14 +687,12 @@ struct Radar {
     // means "hide OUTSIDE this shape", which turns one zone into a containment ring: put
     // a big inverted circle just inside the dial's border and aircraft can never encroach
     // on it, replacing a border overlay — another layer above the movers, another 24%.
-    static constexpr int MAX_ZONES = 6;
-    struct Zone {
-        int  x = 233, y = 233;
-        int  r = 0;                 // circle radius, when rect is false
-        int  w = 0, h = 0;          // full width/height centred on x,y, when rect is true
-        bool rect   = false;
-        bool invert = false;        // true = hide outside the shape instead of inside it
-    };
+    // The shape itself now lives at namespace scope (see Zone above the Weather struct), so
+    // the Weather map can hide its own layers with the same geometry rather than a second
+    // copy of it. `Radar::Zone` still resolves, because it is spelled that way in
+    // radar_view.cpp and there is no reason to make that file move for this.
+    using Zone = theme_style::Zone;
+    static constexpr int MAX_ZONES = theme_style::MAX_ZONES;
     Zone     zones[MAX_ZONES];
     int      zoneCount       = 0;
 

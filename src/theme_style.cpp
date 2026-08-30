@@ -8,7 +8,15 @@
 // Desktop simulator: no Serial. This file logs exactly one line (a hand-written theme with
 // a second inverted zone), and that line is worth keeping in the sim too, so shim it the
 // same way radar_view.cpp already does.
-static struct { void println(const char *s) const { puts(s); } } Serial;
+#include <cstdarg>
+static struct {
+    void println(const char *s) const { puts(s); }
+    // printf as well as println: the asset-list and token logging added since this shim was
+    // written calls it, and the simulator is where those lines are most worth reading.
+    void printf(const char *fmt, ...) const {
+        va_list a; va_start(a, fmt); vprintf(fmt, a); va_end(a);
+    }
+} Serial;
 #endif
 
 // Compile-time fallback defaults (and, for a stock/no-design build, the only values
@@ -301,7 +309,11 @@ void merge_text(JsonVariantConst j, ClockText &t) {
     if (j["fmt"].is<const char *>()) snprintf(t.fmt, sizeof(t.fmt), "%s", j["fmt"].as<const char *>());
     if (j["curved"].is<bool>()) t.curved = j["curved"].as<bool>();
     if (j["curveR"].is<int>()) t.curveR = j["curveR"].as<int>();
-    if (j["arcDeg"].is<float>()) t.arcDeg = j["arcDeg"].as<float>();
+    // int OR float. Studio rounds degrees to a whole number, so the value on the card is `90`
+    // and not `90.0`. A check that only accepted a float would leave every "around the dial"
+    // control doing nothing, with nothing said about it. Cheap to accept both; expensive to
+    // discover later that a slider was ornamental.
+    if (j["arcDeg"].is<float>() || j["arcDeg"].is<int>()) t.arcDeg = j["arcDeg"].as<float>();
     if (j["align"].is<int>()) t.align = j["align"].as<int>();
 }
 
@@ -319,6 +331,44 @@ void merge_radar_card(JsonVariantConst j, RadarCard &c) {
     if (j["borderWidth"].is<int>()) c.borderWidth = j["borderWidth"].as<int>();
 }
 
+// Read a "zones" array into any screen's zone list. Shared because every rule in here is a
+// judgement call (a zone with no extent is dropped, at most one inverted zone is honoured)
+// and a second copy of a judgement is a second copy that can drift. `who` only names the
+// screen in the log line, so a hand-written theme is told WHICH file the problem is in.
+static void merge_zones(JsonVariantConst arr, theme_style::Zone *out, int &count, const char *who) {
+    if (!arr.is<JsonArrayConst>()) return;
+    bool hasInvert = false;
+    for (JsonVariantConst z : arr.as<JsonArrayConst>()) {
+        if (count >= theme_style::MAX_ZONES) break;
+        const bool rect = z["rect"] | false;
+        const int  r = z["r"] | 0;
+        const int  w = z["w"] | 0;
+        const int  h = z["h"] | 0;
+        // A zone with no extent masks nothing, so it is dropped rather than shipped as a
+        // shape that silently does nothing.
+        if (rect ? (w <= 0 || h <= 0) : (r <= 0)) continue;
+        const bool invert = z["invert"] | false;
+        // At most ONE inverted zone. Inverted means "hide outside me", so two of them
+        // intersect: something must be inside both to show, and two that do not overlap hide
+        // everything, leaving a screen that looks broken rather than configured. The editors
+        // prevent it; this is the backstop for a hand-written theme, and it says so rather
+        // than failing quietly.
+        if (invert && hasInvert) {
+            Serial.printf("[theme] %s: ignoring extra inverted zone, only one is allowed\n", who);
+            continue;
+        }
+        if (invert) hasInvert = true;
+        theme_style::Zone &zo = out[count++];
+        zo.x      = z["x"] | 233;
+        zo.y      = z["y"] | 233;
+        zo.r      = r;
+        zo.w      = w;
+        zo.h      = h;
+        zo.rect   = rect;
+        zo.invert = invert;
+    }
+}
+
 void merge_rtext(JsonVariantConst j, RadarText &t) {
     if (j.isNull()) return;
     if (j["show"].is<bool>()) t.show = j["show"].as<bool>();
@@ -331,7 +381,7 @@ void merge_rtext(JsonVariantConst j, RadarText &t) {
     if (j["fmt"].is<const char *>()) snprintf(t.fmt, sizeof(t.fmt), "%s", j["fmt"].as<const char *>());
     if (j["curved"].is<bool>()) t.curved = j["curved"].as<bool>();
     if (j["curveR"].is<int>()) t.curveR = j["curveR"].as<int>();
-    if (j["arcDeg"].is<float>()) t.arcDeg = j["arcDeg"].as<float>();
+    if (j["arcDeg"].is<float>() || j["arcDeg"].is<int>()) t.arcDeg = j["arcDeg"].as<float>();
     if (j["align"].is<int>()) t.align = j["align"].as<int>();
     if (j["onCard"].is<bool>()) t.onCard = j["onCard"].as<bool>();
 }
@@ -500,6 +550,44 @@ void load() {
             if (doc["coastColor"].is<uint32_t>()) s_weather.coastColor = doc["coastColor"].as<uint32_t>();
             if (doc["coastEnabled"].is<bool>()) s_weather.coastEnabled = doc["coastEnabled"].as<bool>();
             if (doc["ringColorOn"].is<bool>()) s_weather.ringColorOn = doc["ringColorOn"].as<bool>();
+            // Four themeable lines, same struct and same reader as the Flight Tracker's, so
+            // "curved" and "align" mean one thing across the device. The key is "wtext" and
+            // not "rtext" only because the two files are read separately; the shape is
+            // identical on purpose.
+            JsonVariantConst wtext = doc["wtext"];
+            if (wtext.is<JsonArrayConst>()) {
+                int i = 0;
+                for (JsonVariantConst item : wtext.as<JsonArrayConst>()) {
+                    if (i >= 4) break;
+                    merge_rtext(item, s_weather.text[i]);
+                    i++;
+                }
+            }
+            merge_zones(doc["zones"], s_weather.zones, s_weather.zoneCount, "weather_style.json");
+            // The credit's looks, never its existence. Opacity is floored here rather than
+            // trusted from the file: this is the one field where a hand-written theme could
+            // spell "remove" as "invisible", and the floor is what makes that impossible
+            // rather than merely discouraged.
+            JsonVariantConst cr = doc["credit"];
+            if (!cr.isNull()) {
+                theme_style::Weather::Credit &c = s_weather.credit;
+                if (cr["x"].is<int>())          c.x      = cr["x"].as<int>();
+                if (cr["y"].is<int>())          c.y      = cr["y"].as<int>();
+                if (cr["color"].is<uint32_t>()) c.color  = cr["color"].as<uint32_t>();
+                if (cr["bg"].is<uint32_t>())    c.bg     = cr["bg"].as<uint32_t>();
+                if (cr["bgOpa"].is<int>())      c.bgOpa  = cr["bgOpa"].as<int>();
+                if (cr["radius"].is<int>())     c.radius = cr["radius"].as<int>();
+                if (cr["align"].is<int>())      c.align  = cr["align"].as<int>();
+                if (cr["opa"].is<int>())        c.opa    = cr["opa"].as<int>();
+                if (c.opa < theme_style::Weather::CREDIT_MIN_OPA)
+                    c.opa = theme_style::Weather::CREDIT_MIN_OPA;
+                if (c.opa > 255)   c.opa = 255;
+                if (c.bgOpa < 0)   c.bgOpa = 0;
+                if (c.bgOpa > 255) c.bgOpa = 255;
+                // Kept on the glass. A credit dragged off the edge is a credit removed.
+                if (c.x < 30) c.x = 30;  if (c.x > 436) c.x = 436;
+                if (c.y < 10) c.y = 10;  if (c.y > 450) c.y = 450;
+            }
         }
     }
     {
@@ -609,38 +697,7 @@ void load() {
                 }
             }
             s_radar.zoneCount = 0;
-            bool s_radarHasInvertZone = false;
-            if (doc["zones"].is<JsonArrayConst>()) {
-                for (JsonVariantConst z : doc["zones"].as<JsonArrayConst>()) {
-                    if (s_radar.zoneCount >= theme_style::Radar::MAX_ZONES) break;
-                    const bool rect = z["rect"] | false;
-                    const int  r = z["r"] | 0;
-                    const int  w = z["w"] | 0;
-                    const int  h = z["h"] | 0;
-                    // A zone with no extent masks nothing, so it is dropped rather than
-                    // shipped as a shape that silently does nothing.
-                    if (rect ? (w <= 0 || h <= 0) : (r <= 0)) continue;
-                    const bool invert = z["invert"] | false;
-                    // At most ONE inverted zone. Inverted means "hide outside me", so two of
-                    // them intersect: an aircraft must be inside both to show, and two that
-                    // do not overlap hide everything, leaving a scope that looks broken
-                    // rather than configured. The editors prevent it; this is the backstop
-                    // for a hand-written theme, and it says so rather than failing quietly.
-                    if (invert && s_radarHasInvertZone) {
-                        Serial.println("[theme] ignoring extra inverted zone: only one is allowed");
-                        continue;
-                    }
-                    if (invert) s_radarHasInvertZone = true;
-                    theme_style::Radar::Zone &out = s_radar.zones[s_radar.zoneCount++];
-                    out.x      = z["x"] | 233;
-                    out.y      = z["y"] | 233;
-                    out.r      = r;
-                    out.w      = w;
-                    out.h      = h;
-                    out.rect   = rect;
-                    out.invert = invert;
-                }
-            }
+            merge_zones(doc["zones"], s_radar.zones, s_radar.zoneCount, "radar_style.json");
         }
     }
     {
@@ -714,7 +771,7 @@ void load() {
                 }
                 if (v["curved"].is<bool>())  t.curved = v["curved"].as<bool>();
                 if (v["curveR"].is<int>())   t.curveR = v["curveR"].as<int>();
-                if (v["arcDeg"].is<float>()) t.arcDeg = v["arcDeg"].as<float>();
+                if (v["arcDeg"].is<float>() || v["arcDeg"].is<int>()) t.arcDeg = v["arcDeg"].as<float>();
                 // No "show". These three are not the theme's to remove; see Splash.
             }
         }

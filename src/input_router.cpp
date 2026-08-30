@@ -18,13 +18,14 @@
 // the others, which is backwards for a device whose only control is a knob.
 //
 // Now a turn belongs to whatever app is on screen, and the switcher is opened by ROCKING the
-// knob: a quick turn LEFT immediately followed by a quick turn RIGHT. Ordinary use never
-// looks like that. Scrolling a list back and forth does, but slowly — it is the speed that
+// knob: a quick turn one way immediately followed by a quick turn back. Ordinary use never
+// looks like that. Scrolling a list back and forth does, but slowly, and it is the speed that
 // separates the gesture from someone changing their mind, which is why the window is tight.
 //
-// Direction order is deliberate. Left-then-right fires; right-then-left does not. Requiring
-// one specific order halves the number of accidental reversals that can trigger it, for no
-// cost in how hard the gesture is to perform.
+// EITHER direction fires. Left-then-right only was the rule until 2026-08-29, on the reasoning
+// that one fixed order halves the accidental reversals for no cost in performing it. There was
+// a cost: a hand reaching for the menu does not decide which way to go first, so half the
+// attempts did nothing. See knob.cpp for what carries the margin now, and UX-011.
 //
 // There is no fallback way in, by choice. If this proves unreliable on real hardware the
 // window is the thing to tune, and if it cannot be made reliable then a fallback should come

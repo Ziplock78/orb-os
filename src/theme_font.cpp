@@ -73,7 +73,8 @@ int         s_loaded = 0;
 enum Slot { S_CLOCK1, S_CLOCK2, S_MENU_CUR, S_MENU_PREV, S_MENU_NEXT, S_SETTINGS, S_SETTINGS_SEL,
             S_RADAR1, S_RADAR2, S_RADAR3, S_RADAR4,
             S_INTEL_TITLE, S_INTEL_TEXT, S_INTEL_SOURCE, S_INTEL_AGE,
-            S_TICK_NAME, S_TICK_PRICE, S_TICK_CHANGE, S_TICK_STRIP, S_COUNT };
+            S_TICK_NAME, S_TICK_PRICE, S_TICK_CHANGE, S_TICK_STRIP,
+            S_WX1, S_WX2, S_WX3, S_WX4, S_COUNT };
 
 // Asset names Launch Kit ships. Kept here rather than derived, so the contract between
 // the two programs is one readable list instead of a naming convention nobody can see.
@@ -84,6 +85,10 @@ const char *SLOT_FILE[S_COUNT] = {
     "font_radar1.bin", "font_radar2.bin", "font_radar3.bin", "font_radar4.bin",
     "font_intel_title.bin", "font_intel_text.bin", "font_intel_source.bin", "font_intel_age.bin",
     "font_ticker_name.bin", "font_ticker_price.bin", "font_ticker_change.bin", "font_ticker_strip.bin",
+    // The Weather map's four, added with THEME_CAPS 28. Same four-slot shape as the Flight
+    // Tracker, because the screens now offer the same four text lines and a designer moving
+    // between them should not have to learn a second layout.
+    "font_weather1.bin", "font_weather2.bin", "font_weather3.bin", "font_weather4.bin",
 };
 
 const lv_font_t *s_font[S_COUNT] = { nullptr };
@@ -232,6 +237,20 @@ const lv_font_t *radar_text(int idx) {
     if (idx < 0) idx = 0;
     if (idx > 3) idx = 3;
     return get((Slot)(S_RADAR1 + idx));
+}
+
+const lv_font_t *weather_text(int idx) {
+    if (idx < 0) idx = 0;
+    if (idx > 3) idx = 3;
+    return get((Slot)(S_WX1 + idx));
+}
+
+// A converted face is baked at ONE size, so a screen that got a theme font must not then
+// apply a size control on top of it: the glyphs simply are that size. Same contract the
+// Intel and Ticker screens already keep, and the reason both have a predicate like this.
+bool weather_has_font(int slot) {
+    if (slot < 0 || slot > 3) return false;
+    return s_font[S_WX1 + slot] != nullptr;
 }
 int loaded_count() { return s_loaded; }
 

@@ -24,6 +24,28 @@ VERSION=$(grep -oE '#define FW_VERSION "[^"]+"' src/config.h | grep -oE '"[^"]+"
 CAPS=$(grep -oE 'constexpr int THEME_CAPS = [0-9]+' src/theme_style.h | grep -oE '[0-9]+$')
 [ -n "$VERSION" ] && [ -n "$CAPS" ] || { echo "could not read FW_VERSION/THEME_CAPS" >&2; exit 1; }
 
+# A NEW BINARY UNDER AN OLD VERSION NUMBER IS INVISIBLE, and this is the failure that
+# actually keeps happening. Studio decides whether to offer an update by comparing version
+# STRINGS: the Orb says 1.63.1, the bundle says 1.63.1, so Studio reports "up to date" and
+# there is no button to press. The change is sitting right there in the bundle and cannot
+# be reached. It looks like the flasher is broken; nothing is broken, the build was just
+# never given a name of its own.
+#
+# So: if the binary moved and FW_VERSION did not, refuse. Bumping is one edit, and it is
+# the edit that makes the work reachable.
+OLD_VERSION=$(grep -o '"version"[^,]*' "$STUDIO/manifest.json" 2>/dev/null | grep -o '[0-9][0-9.]*' || echo "none")
+if [ "$OLD_VERSION" = "$VERSION" ] && [ -f "$STUDIO/firmware.bin" ] \
+   && ! cmp -s "$BUILD/firmware.bin" "$STUDIO/firmware.bin"; then
+  echo >&2
+  echo "REFUSING TO PUBLISH: the firmware changed but FW_VERSION is still $VERSION." >&2
+  echo >&2
+  echo "  Studio compares version strings, so an Orb already running $VERSION would be" >&2
+  echo "  told it is up to date and would never be offered this build." >&2
+  echo >&2
+  echo "  Bump FW_VERSION in src/config.h, then run this again." >&2
+  exit 1
+fi
+
 for f in bootloader.bin partitions.bin firmware.bin; do
   cp "$BUILD/$f" "$STUDIO/$f"
 done

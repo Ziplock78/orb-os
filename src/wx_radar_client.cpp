@@ -181,6 +181,62 @@ static bool      s_plateHave = false;
 
 bool wx_plate_have() { return s_plateHave && s_plateCrop != nullptr; }
 
+// Is this point inside one of the weather map's keep-out zones?
+//
+// Zones are written in 466x466 screen coordinates, because that is what a designer is
+// looking at in Orb Studio. The radar image is 360x360 drawn at (53, 52) on that screen, so
+// the buffer coordinate is offset before it is tested. Getting this offset wrong would put
+// every zone 53 pixels from where it was drawn, which looks like the feature almost working.
+static bool wx_in_zone(int bx, int by) {
+    const theme_style::Weather &w = theme_style::weather();
+    if (w.zoneCount <= 0) return false;
+    const int x = bx + (466 - WX_RADAR_SIZE) / 2;
+    const int y = by + 52;
+    bool anyInvert = false, insideInvert = false;
+    for (int i = 0; i < w.zoneCount; ++i) {
+        const theme_style::Zone &z = w.zones[i];
+        bool inside;
+        if (z.rect) {
+            inside = (x >= z.x - z.w / 2 && x <= z.x + z.w / 2 &&
+                      y >= z.y - z.h / 2 && y <= z.y + z.h / 2);
+        } else {
+            const int dx = x - z.x, dy = y - z.y;
+            inside = (dx * dx + dy * dy) <= (z.r * z.r);
+        }
+        if (z.invert) { anyInvert = true; if (inside) insideInvert = true; }
+        else if (inside) return true;
+    }
+    // An inverted zone means "hide everything OUTSIDE me", so it masks the point when the
+    // point is not in it. Only one is ever honoured; theme_style drops the rest.
+    return anyInvert && !insideInvert;
+}
+
+// Put back what was underneath, everywhere a zone says the map may not draw.
+//
+// Called once per frame build, not per displayed frame. The map, the coastline and the
+// precipitation are three separate passes that know nothing about zones, and teaching each
+// of them to clip would mean threading zone state through all three. They have all already
+// been flattened into this one buffer, so the whole job is a single pass that restores the
+// base underneath: the theme's plate where it has one, its background colour where it does
+// not. That is what lets decoration live in the baked background instead of in a layer above
+// the map, which is the entire reason the Flight Tracker got zones first.
+static void wx_apply_zones(uint16_t *dst) {
+    if (!dst || theme_style::weather().zoneCount <= 0) return;
+    const uint16_t bg = rgb565(theme_style::weather().bg);
+    const bool havePlate = wx_plate_have() && s_plateCrop;
+    int cleared = 0;
+    for (int y = 0; y < WX_RADAR_SIZE; ++y) {
+        uint16_t *row = dst + (size_t)y * WX_RADAR_SIZE;
+        const uint16_t *src = havePlate ? s_plateCrop + (size_t)y * WX_RADAR_SIZE : nullptr;
+        for (int x = 0; x < WX_RADAR_SIZE; ++x) {
+            if (!wx_in_zone(x, y)) continue;
+            row[x] = src ? src[x] : bg;
+            cleared++;
+        }
+    }
+    Serial.printf("[wxradar] zones cleared %d px of map\n", cleared);
+}
+
 void wx_plate_blit(uint16_t *dst) {
     if (s_plateCrop && dst)
         memcpy(dst, s_plateCrop, (size_t)WX_RADAR_SIZE * WX_RADAR_SIZE * sizeof(uint16_t));
@@ -526,6 +582,7 @@ int wx_radar_fetch_frame(double lat, double lon, int zoomTier, uint32_t gen, int
     }
     draw_map();
     composite_zoom(zoomTier);
+    wx_apply_zones(wx_radar_back_buffer());
     wx_radar_commit_frame(slot, gen, s_times[slot], lat, lon);
     Serial.printf("[wxradar] gen %lu frame %d/%d @%lu (tier=%d, %lu px)\n",
                   (unsigned long)gen, slot + 1, s_availFrames, (unsigned long)s_times[slot],

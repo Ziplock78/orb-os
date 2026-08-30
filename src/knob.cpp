@@ -64,7 +64,7 @@ static volatile uint32_t s_isrLastDirMs = 0;
 static volatile int      s_isrRunLen    = 0;
 static volatile int32_t  s_anchor       = 0;   // rawPos at the last COMMITTED detent
 static volatile int32_t  s_detent       = 0;   // committed detents; the one true stream
-static volatile uint32_t s_rockMs       = 0;   // the rightward detent that completed a left->right
+static volatile uint32_t s_rockMs       = 0;   // the detent that completed a reversal, either way
 static volatile uint32_t s_rockGapMs    = 0;
 static volatile bool s_pendingPress = false;
 static volatile bool s_pendingLong  = false;
@@ -111,13 +111,25 @@ static const int8_t kQuadTable[16] = {
 static void IRAM_ATTR on_detent(int dir) {
     s_detent += dir;
     const uint32_t now = (uint32_t)(esp_timer_get_time() / 1000);
-    // A rock is a SHORT turn back, then forward, as one gesture.
-    //   run length : the turn back was a flick, not a scroll
+    // A rock is a SHORT turn one way, then straight back, as one gesture.
+    //   run length : the turn into the reversal was a flick, not a scroll
     //   gap        : one gesture rather than two decisions
     //   minimum gap: a hand cannot reverse in five milliseconds. Anything faster is the
     //                encoder, not the person, and treating it as input is what let a
     //                resting knob open the menu.
-    if (s_isrLastDir == -1 && dir == 1 && s_isrRunLen <= ROCK_MAX_RUN) {
+    //
+    // EITHER direction. This used to require left-then-right specifically, on the reasoning
+    // that one fixed order halves the reversals that can trigger it for no cost in how hard
+    // the gesture is to perform. The cost turned out to be real and just unmeasured: the
+    // owner reaches for the menu without thinking about which way his hand goes first, so
+    // half of his attempts did nothing and the gesture read as unreliable. Changed
+    // 2026-08-29 to satisfy UX-011, which is written the way the hand actually moves.
+    //
+    // The margin that was given up is covered by what remains: the run-length rule, which is
+    // what actually stopped ordinary browsing from qualifying, the gap window at both ends,
+    // and the fact that input_router does not test for a rock at all while the menu is
+    // already open, so a false positive can only ever happen inside an app.
+    if (s_isrLastDir != 0 && dir != s_isrLastDir && s_isrRunLen <= ROCK_MAX_RUN) {
         const uint32_t gap = now - s_isrLastDirMs;
         if (gap >= ROCK_MIN_GAP_MS && gap <= ROCK_MAX_GAP_MS) {
             s_rockGapMs = gap;
@@ -211,10 +223,16 @@ void knob::poll() {
         //
         // Only on a reversal, so it is quiet during ordinary turning in one direction.
         if (s_lastDir != 0 && dir != s_lastDir) {
+            // Annotated from the GAP, which poll() owns. Direction no longer narrows
+            // anything, and the other gate is the ISR's run length, which cannot be read
+            // from here without racing the detent that produced this line. The gap is the
+            // number this log exists to expose anyway: it is what gets tuned.
+            const uint32_t gap = now - s_lastDirMs;
             Serial.printf("[knob] REVERSAL %s->%s gap=%lums%s\n",
                           s_lastDir > 0 ? "R" : "L", dir > 0 ? "R" : "L",
-                          (unsigned long)(now - s_lastDirMs),
-                          (s_lastDir == -1 && dir == 1) ? "  (counts as a rock candidate)" : "");
+                          (unsigned long)gap,
+                          (gap >= ROCK_MIN_GAP_MS && gap <= ROCK_MAX_GAP_MS)
+                              ? "  (in the rock window; run length decides)" : "");
         }
         s_lastDir   = dir;
         s_lastDirMs = now;
