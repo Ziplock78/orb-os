@@ -624,38 +624,38 @@ static void applyThemeSettings() {
                                              ? ADSB_MAX_AIRCRAFT : rs.maxAircraft;
     if (rs.minAltFt   >= 0)    g_minAltFt  = rs.minAltFt;
     if (rs.hideGround >= 0)    g_hideGround = (rs.hideGround != 0);
+    // Clamped again here even though theme_style clamped it on the way in: this is the
+    // value deadZoneKm() divides the dial by, and it is the one operational setting with
+    // no device-side control, so there is nowhere to correct it from if it lands wrong.
+    if (rs.deadZonePx >= 0)    g_deadZonePx = (rs.deadZonePx > (int)RADAR_R_OUTER_PX)
+                                              ? (int)RADAR_R_OUTER_PX : rs.deadZonePx;
     // Same flag main.cpp's poll loop reads to decide whether to fabricate traffic (see
     // "simulated" in the ADS-B poll branch below) — the badge tracks it here so the two
     // can never drift apart, one deciding what is drawn and the other saying so.
     radar::setSimulatedBadge(rs.simulate);
-    Serial.printf("[theme] applied: rangeKm=%.0f maxAircraft=%d minAltFt=%d hideGround=%d simulate=%d\n",
-                  (double)g_settings.rangeKm, g_maxAc, g_minAltFt, (int)g_hideGround, (int)rs.simulate);
+    Serial.printf("[theme] applied: rangeKm=%.0f maxAircraft=%d minAltFt=%d hideGround=%d deadZonePx=%d simulate=%d\n",
+                  (double)g_settings.rangeKm, g_maxAc, g_minAltFt, (int)g_hideGround,
+                  g_deadZonePx, (int)rs.simulate);
 }
 
 static void loadSettings() {
     Preferences p;
     p.begin("capsuleradar", true);
+    // The owner's, and nothing outranks it. This used to be followed by a
+    // CUSTOM_HAS_RADAR_HOME block that overwrote both from whichever design was last
+    // compiled in, on every boot, without persisting anything: every unit flashed from one
+    // push sat on that push's coordinates, the setup page's lat/lon box accepted an address
+    // and silently discarded it, and GPS re-centring was compiled out to stop it fighting
+    // back. A theme is data about how the Orb LOOKS; where it is standing is the owner's
+    // to say, from Settings, the setup page, or a GPS fix.
     g_settings.homeLat = p.getDouble("homeLat", HOME_LAT_DEFAULT);
     g_settings.homeLon = p.getDouble("homeLon", HOME_LON_DEFAULT);
-#if CUSTOM_HAS_RADAR_HOME
-    // Launch Kit is the source of truth for location: a pushed design's own
-    // Latitude/Longitude override whatever's saved in NVS (and the on-device
-    // Settings/IP/GPS detection, see below), so the editor, simulator, and Orb
-    // all center on the exact same coordinates. Not persisted — same
-    // one-shot-per-flash model as range; a re-push (or reflash) is how location
-    // changes, matching "the editor is the source of truth".
-    g_settings.homeLat = CUSTOM_RADAR_HOME_LAT;
-    g_settings.homeLon = CUSTOM_RADAR_HOME_LON;
-#endif
+    // Range, and below it max-aircraft, are read from the owner's saved settings here and
+    // may then be overridden by the active theme in applyThemeSettings(), which runs after
+    // this. The CUSTOM_RADAR_RANGE_KM / CUSTOM_RADAR_MAXAC blocks that used to sit in
+    // between are gone: a value a theme does not state falls back to what this device has
+    // saved, not to what somebody else's design happened to weld in.
     g_settings.rangeKm = p.getFloat("rangeKm", RANGE_KM_DEFAULT);
-#if CUSTOM_HAS_RADAR_RANGE
-    // A pushed design's own Range slider is authoritative for what the scope
-    // captures (and what the range banner shows) until the next push — not
-    // persisted to NVS, so an on-device zoom afterward still works normally
-    // for the rest of this session; it just won't survive a reboot without a
-    // fresh push, same one-shot-per-boot precedent as CUSTOM_BOOT_TARGET.
-    g_settings.rangeKm = CUSTOM_RADAR_RANGE_KM;
-#endif
     g_brightnessDay    = p.getInt("bright", BRIGHTNESS_DEFAULT);
     g_volume           = p.getInt("vol", 60);
     g_muted            = p.getBool("mute", false);
@@ -666,9 +666,6 @@ static void loadSettings() {
     g_useGps           = p.getBool("usegps", false);
     g_trailLen         = p.getInt("traillen", 2);
     g_maxAc            = p.getInt("maxac", 12);
-#if CUSTOM_HAS_RADAR_MAXAC
-    g_maxAc = CUSTOM_RADAR_MAXAC;   // a pushed design's own "max aircraft shown" cap, same one-shot-per-boot precedent as range/boot-target
-#endif
     // Clamp after both sources: an Orb that ran an earlier build has a larger number sitting
     // in NVS (20, 40, 60), and a theme built before the ceiling moved can still carry one.
     // Neither should be able to reintroduce a count the scope no longer supports.
@@ -1567,26 +1564,14 @@ static void handleSave() {
         if (i >= 0 && i < TZOPTS_N) p.putString("tz", TZOPTS[i].tz);
     }
     p.end();
-    // A Launch Kit design can PIN the location (CUSTOM_HAS_RADAR_HOME), and loadSettings()
-    // then overwrites whatever is in the store on every boot. The coordinates above are
-    // written and immediately outranked. Saying "Saved" and nothing else is how a person
-    // ends up typing their address into this box repeatedly, watching the Orb restart, and
-    // concluding the Orb is broken.
-#if CUSTOM_HAS_RADAR_HOME
-    const bool pinned = g_web.hasArg("lat") || g_web.hasArg("lon");
-    if (pinned) Serial.printf("[web] save: location is pinned by the installed design to "
-                              "%.5f, %.5f — the coordinates above were stored but will not "
-                              "be used\n", (double)CUSTOM_RADAR_HOME_LAT, (double)CUSTOM_RADAR_HOME_LON);
-#else
-    const bool pinned = false;
-#endif
-    String page = "<meta http-equiv=refresh content='6;url=/'><body style='background:#06100a;"
-                  "color:#1dff86;font-family:sans-serif;padding:24px'>Saved. Restarting&hellip;";
-    if (pinned) page += "<p style='color:#ffb23c;max-width:34em;line-height:1.5'>Your centre point "
-                        "comes from the design installed on this Orb, so the latitude and longitude "
-                        "here will not take effect. Change it in the design and push it again.</p>";
-    page += "</body>";
-    g_web.send(200, "text/html", page);
+    // The warning that used to be built here is gone with the thing it warned about. A
+    // design could PIN the location, loadSettings() re-applied the pin on every boot, and
+    // the coordinates typed into this box were written and immediately outranked — so this
+    // page had to say "Saved" and then take it back in the next paragraph. Location is the
+    // owner's now, no installed design can outrank it, and "Saved" is simply true.
+    g_web.send(200, "text/html",
+               "<meta http-equiv=refresh content='6;url=/'><body style='background:#06100a;"
+               "color:#1dff86;font-family:sans-serif;padding:24px'>Saved. Restarting&hellip;</body>");
     delay(400);
     ESP.restart();
 }
@@ -2246,27 +2231,18 @@ void setup() {
         int t = p.getInt("theme", 4);
         g_showSweep = p.getBool("sweep", true);
         g_showAirports = p.getBool("airports", true);
-        // Read only when the active theme has no opinion. This block runs AFTER
-        // applyThemeSettings(), so assigning unconditionally undid the theme's altitude
-        // floor and ground filter a few lines after they were applied: a design could state
-        // both, have them read correctly out of radar_style.json, and still fly the Orb's
-        // own stored values. Same ordering fault the comment above applyThemeSettings
-        // describes for range and aircraft count, which those two were already spared
-        // because nothing re-reads them here.
+        // Read only when the active theme has no opinion, and nothing follows this that
+        // reads them again. Three CUSTOM_RADAR_{HIDEGROUND,MINALT,DEADZONE} blocks used to
+        // sit immediately below and assign unconditionally, which made the guard above
+        // ornamental: applyThemeSettings() applied the theme's altitude floor and ground
+        // filter, and sixty lines later the macros put the last-pushed design's values back
+        // over the top of them. A theme could state both, have both parsed correctly off
+        // the card, see them logged as applied, and still fly neither.
         {
             const theme_style::Radar &rs = theme_style::radar();
             if (rs.hideGround < 0) g_hideGround = p.getBool("hideground", false);
             if (rs.minAltFt   < 0) g_minAltFt   = p.getInt("minalt", 0);
         }
-#if CUSTOM_HAS_RADAR_HIDEGROUND
-        g_hideGround = (bool)CUSTOM_RADAR_HIDEGROUND;   // a pushed design's own Scope settings, same one-shot-per-boot precedent as range/max-aircraft
-#endif
-#if CUSTOM_HAS_RADAR_MINALT
-        g_minAltFt = CUSTOM_RADAR_MINALT;
-#endif
-#if CUSTOM_HAS_RADAR_DEADZONE
-        g_deadZonePx = CUSTOM_RADAR_DEADZONE_PX;   // pushed-design only: there's no device-side control for it, since it's sized against the design's own center artwork
-#endif
         g_milOnly = p.getBool("milonly", false);
         // Migrate the old quarter-turn setting (rot=0..3) without changing existing
         // installations' orientation. New firmware stores actual degrees separately.
@@ -2988,9 +2964,10 @@ void loop() {
             if (rtc_write(&utc)) { g_rtcSynced = true; Serial.println("[rtc] saved NTP time"); }
         }
         // GPS auto-location (-G variant): re-centre the radar when the fix moves enough.
-        // Suppressed while a Launch Kit design pins the location — the pushed home is
-        // the source of truth so the Orb keeps matching the editor/simulator exactly.
-#if !CUSTOM_HAS_RADAR_HOME
+        // No longer suppressed by an installed design. It used to be compiled out entirely
+        // whenever a push pinned the location, which is the shape of the same mistake twice:
+        // the pin overrode the owner, and then the feature that would have corrected the pin
+        // was removed so it could not fight back. An owner who turned GPS on gets GPS.
         if (g_useGps) {
             double glat, glon;
             if (gps_location(&glat, &glon) &&
@@ -3003,7 +2980,6 @@ void loop() {
                 Serial.printf("[gps] re-centred to %.4f, %.4f\n", glat, glon);
             }
         }
-#endif
     }
 
     // face-down -> screen off (IMU); flip face-up to wake

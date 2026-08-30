@@ -25,17 +25,26 @@
 //     clock_static{1,2}.png; geometry from the "hands" block in clock_style.json.
 //   - Which apps appear in the knob menu, from /themes/<slug>/theme.json.
 //   - Radar sweep/blip rotation pivots, and the radar layer order.
-//   - Radar's operational params (home lat/lon, range, max aircraft, hide-ground,
-//     min-altitude) — device config baked alongside style in the same header, but
-//     already just a one-time boot default the user can (and typically does)
-//     override live afterward; a stale default is a minor inconvenience, not a
-//     visual bug.
-//   - The CUSTOM_HAS_* show/hide gates themselves (whether a banner/highlight/menu
-//     slot exists at all) stay compile-time: whichever theme was pushed last decides
-//     if the code path is compiled in. If it is, this module makes ITS VALUES correct
-//     per active theme; if a different installed theme never used that element at
-//     all, it may still show (with that theme's own values, or the compiled default)
-//     rather than correctly staying hidden.
+//   - Radar's operational params: range, max aircraft, hide-ground, min-altitude and
+//     the centre dead zone all travel in radar_style.json now. The compile-time
+//     CUSTOM_HAS_RADAR_{RANGE,MAXAC,HIDEGROUND,MINALT,DEADZONE} overrides that used to
+//     sit alongside them in main.cpp are gone, not merely outranked: two of them
+//     (hide-ground, min-altitude) ran AFTER applyThemeSettings() and silently undid a
+//     theme that had stated both, which is the failure this whole module exists to stop.
+//   - Home lat/lon deliberately does NOT travel. It is the owner's, not the theme's: a
+//     design that moved somebody's Orb to the designer's city on install would be the
+//     device reconfiguring itself over a choice its owner had already made. It comes
+//     from Settings, the setup page, or GPS, and nothing on the card can outrank that.
+//     CUSTOM_HAS_RADAR_HOME, which pinned every unit flashed from one push to that
+//     push's coordinates and quietly made the setup page's lat/lon box a no-op, is
+//     deleted rather than migrated.
+//   - Most of the remaining CUSTOM_HAS_* show/hide gates have been demoted to seeding a
+//     runtime default: the SD art path runs whatever the macro says, and the draw sites
+//     test a `show` field this module fills in. What is still a real compile-time gate,
+//     and therefore still decided by whichever theme was pushed last, is the four master
+//     switches (CUSTOM_HAS_MENU, CUSTOM_HAS_SETTINGS, CUSTOM_HAS_RADAR,
+//     CUSTOM_HAS_RADAR_STYLE) and the menu's three per-slot gates. Those are the next
+//     migration, not a standing limitation.
 #include <lvgl.h>
 
 namespace theme_style {
@@ -248,7 +257,22 @@ namespace theme_style {
 //      The weather map drew roads at a hard-coded grey and had no coastline at all, so a
 //      theme could set roadColor and roadsEnabled and watch neither do anything. An Orb
 //      below this level draws no coastline and keeps the fixed grey.
-constexpr int THEME_CAPS = 33;
+//  34  the Flight Tracker's centre dead zone as theme data (deadZonePx), and the end of the
+//      compile-time overrides that sat on top of the scope's other operational values. The
+//      dead zone was the last of the six with no key at all: CUSTOM_RADAR_DEADZONE_PX only,
+//      set by recompiling, with no device-side control either, so a files-only theme could
+//      not ask for one and could not work around not having one.
+//
+//      The other half of this level is a removal, and it is the part worth reading. Range
+//      and max-aircraft already had keys and already won, because their macros ran inside
+//      loadSettings() before applyThemeSettings(). Hide-ground and min-altitude had keys
+//      that were read, applied, and then unconditionally overwritten sixty lines later by
+//      their macros — a theme could state both, have both parsed correctly off the card,
+//      and fly neither. All five macros are gone now rather than reordered.
+//
+//      An Orb below this level ignores deadZonePx and draws no dead zone unless one was
+//      welded into its firmware, which is exactly what every theme built before this got.
+constexpr int THEME_CAPS = 34;
 
 struct ClockText {
     bool     show   = false;
@@ -696,6 +720,17 @@ struct Radar {
     // recompiling (CUSTOM_RADAR_RANGE_KM), so a files-only theme had no way to say it.
     float    rangeKm         = -1.0f;
     int      hideGround      = -1;     // 1 = never show aircraft on the ground, 0 = show, -1 = unset
+    // A blind circle at the middle of the dial, in PIXELS, inside which no aircraft is
+    // drawn. Sized in pixels rather than km because what it exists to clear is the
+    // design's own centre artwork — a hub, a compass rose, a logo — and that artwork is a
+    // fixed size on the glass whatever the range happens to be. Converted against the live
+    // range at use (see deadZoneKm() in main.cpp), so zooming keeps it covering the same
+    // ink. -1 is "no opinion", the same sentinel the four above use.
+    //
+    // Was CUSTOM_RADAR_DEADZONE_PX, and it was the one operational value with no
+    // device-side control at all, so a files-only theme could neither state it nor work
+    // around not being able to.
+    int      deadZonePx      = -1;
     // Synthesised traffic instead of the live feed. For judging a design without waiting
     // on whatever happens to be overhead, and for watching masking behave against motion
     // that is predictable rather than whatever the sky is doing.

@@ -26,6 +26,7 @@ static struct {
 #include "custom_radar.h"     // CUSTOM_SWEEP_* / CUSTOM_BLIP_* / CUSTOM_SEL_* / CUSTOM_OFFRANGE_* / CUSTOM_CENTER_* / CUSTOM_HAS_RTEXT{1..4} / CUSTOM_RTEXT{n}_*
 #include "custom_settings.h"  // CUSTOM_SETTINGS_*
 #include "intel.h"           // INTEL_MAX_ITEMS
+#include "config.h"          // RADAR_R_OUTER_PX — the dial a dead zone is clamped against
 #include "custom_hands.h"    // CUSTOM_HAS_{HOUR,MINUTE,SECOND,STATIC1,STATIC2} / CUSTOM_*_PIVOT_* / CUSTOM_HAND_ORDER
 #include "custom_apps.h"     // CUSTOM_APP_* — compiled fallback for the per-theme app roster
 #include "custom_menu.h"      // CUSTOM_HAS_MENU_{CURRENT,PREV,NEXT} / CUSTOM_MENU_{...}_*
@@ -704,6 +705,11 @@ void load() {
                 if (km > 0.0f) s_radar.rangeKm = km < 1.0f ? 1.0f : (km > 500.0f ? 500.0f : km);
             }
             if (doc["hideGround"].is<bool>())    s_radar.hideGround     = doc["hideGround"].as<bool>() ? 1 : 0;
+            // Clamped to the dial rather than trusted. A dead zone wider than the scope
+            // hides every contact there is, which looks exactly like a dead feed, and this
+            // is the one operational value with no device-side control to undo it with.
+            if (doc["deadZonePx"].is<int>())
+                s_radar.deadZonePx = clampi(doc["deadZonePx"].as<int>(), 0, (int)RADAR_R_OUTER_PX);
             if (doc["simulate"].is<bool>())      s_radar.simulate       = doc["simulate"].as<bool>();
             if (doc["sweepPivotX"].is<int>())    s_radar.sweepPivotX    = doc["sweepPivotX"].as<int>();
             if (doc["sweepPivotY"].is<int>())    s_radar.sweepPivotY    = doc["sweepPivotY"].as<int>();
