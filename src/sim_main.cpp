@@ -603,10 +603,14 @@ static void sim_register_apps(lv_obj_t *radarScreen) {
                    []() { ui_show_view(0); radar::knobEnter(); }, // onEnter: show scope, then land in default view
                    radar::knobExit,                               // onExit: free style + reset selection
                    !theme_style::apps().flight);
+#if !APPS_LAUNCH_ONE
     app_shell::add(radarScreen, theme_style::names().weather,
                    []() { static bool fc = false; fc = !fc; ui_set_weather_forecast(fc); },  // push toggles WX/forecast
                    nullptr, false, []() { wx_map_prepare(g_set.homeLat, g_set.homeLon, 0); ui_weather_art_attach(); ui_show_view(1); }, nullptr, !theme_style::apps().weather);
     app_shell::add(survScreen,  theme_style::names().surveillance, nullptr, nullptr, false, nullptr, nullptr, !theme_style::apps().surveillance);
+#else
+    (void)survScreen;   // built above; not on launch one's roster (CUT-01)
+#endif
     // init() FIRST, and this is not a style preference.
     //
     // screen() returns null until init() has built it, and add() quietly rejects a null
@@ -625,11 +629,13 @@ static void sim_register_apps(lv_obj_t *radarScreen) {
     // The Stock Ticker, between News and Settings, matching main.cpp. Fetched once here for
     // the same reason News is: the device does this from a network task the simulator has
     // no equivalent of, and a headless screenshot of an empty screen tells nobody anything.
+#if !APPS_LAUNCH_ONE
     tickerview::init();
     if (ticker_fetch_step()) tickerview::onQuotesReady();
     app_shell::add(tickerview::screen(), theme_style::names().ticker,
                    tickerview::onPress, tickerview::onTurn, false,
                    tickerview::onEnter, tickerview::onExit, !theme_style::apps().ticker);
+#endif
     // After the Ticker, matching main.cpp. The selftests below address apps by index, so the
     // two lineups have to stay in the same order or the simulator stops standing in for the
     // device at exactly the moment someone is using it to check one.
@@ -1004,9 +1010,13 @@ int main(int argc, char **argv) {
         app_shell::selectApp(app_shell::APP_CLOCK);
         lv_timer_handler();
 
-        printf("[selftest] roster from theme '%s': clock=%d flight=%d weather=%d surv=%d\n",
+        // What the THEME asks for, which is not the same as what this build carries — see
+        // APPS_LAUNCH_ONE. Reported as the theme's opinion so the two cannot be confused.
+        printf("[selftest] roster from theme '%s': clock=%d flight=%d weather=%d surv=%d "
+               "(build carries %d apps)\n",
                theme_select::activeSlug(), theme_style::apps().clock, theme_style::apps().flight,
-               theme_style::apps().weather, theme_style::apps().surveillance);
+               theme_style::apps().weather, theme_style::apps().surveillance,
+               app_shell::count());
         {   // Hand geometry now travels per theme too (clock_style.json "hands"), so a
             // theme switch no longer leaves the previous theme's hands on the new face.
             const theme_style::Clock &cs = theme_style::clock();
@@ -1345,7 +1355,17 @@ int main(int argc, char **argv) {
         static Uint32 wxAt = 0;
         if (wxShot) {
             if (wxStep == 0 && now - start > 3000) {
+#if APPS_LAUNCH_ONE
+                // The weather map is not on this build's roster (CUT-01), so there is
+                // nothing for this harness to photograph. Said rather than silently
+                // capturing whatever screen happens to be up, which is how the --shot
+                // harness quietly photographed the Clock for six weeks.
+                printf("[sim] --wxshot: the weather map is not in this build "
+                       "(APPS_LAUNCH_ONE in config.h). Nothing to capture.\n");
+                run = false;
+#else
                 app_shell::selectApp(app_shell::APP_WEATHER);
+#endif
                 wxStep = 1; wxAt = now;
             } else if (wxStep == 1 && now - wxAt > 6000) {
                 char path[300]; snprintf(path, sizeof(path), "%s-a.bmp", wxShot);

@@ -7,9 +7,33 @@
 // "1.4.2", said "up to date", and left an Orb missing everything in that list. THEME_CAPS
 // exists because this stopped moving; it covers theme settings and nothing else, so a new
 // command or a deleted screen is invisible to it. Move this too.
-#define FW_VERSION "1.76.0"   // shown on the web config page + Stats screen
+#define FW_VERSION "1.77.0"   // shown on the web config page + Stats screen
 // Edit pins below: replace every -1 with the value from the Waveshare factory demo
 // (see docs/HARDWARE.md and docs/SETUP.md). Do NOT guess them.
+
+// ---------- Which apps this build ships (CUT-01) ----------
+// Launch one is exactly Clock, Flight tracker, News and Settings. Weather, Surveillance
+// and the Stock Ticker come off the roster.
+//
+// ABSENT, not present and disabled, and the distinction is UX-042's: every app that ships
+// is on every unit, so an app that is not ready is not shipped rather than shipped dark.
+// A theme can already hide an app it does not want (theme.json's roster, and the `hidden`
+// flag app_shell::add takes); that is a design's choice about a finished app, which is a
+// different thing from a product not carrying one yet.
+//
+// One switch rather than deleted code, because the cut list is explicit that these three
+// are "real, wanted, and waiting" and that nothing there is cancelled. Setting this to 0
+// brings all three back exactly as they were.
+//
+// This is uniform across every unit, which is what keeps it inside UX-042: the requirement
+// forbids holding a feature back from SOME buyers, not shipping a product that does not
+// have it yet.
+//
+// The firmware still PARSES weather_style.json and ticker_style.json, and Apps/Names keep
+// their fields, because TC-008 says a shipped parameter is never removed. THEME_CAPS stays
+// at 34 for the same reason; Studio hides the controls behind its own flag rather than the
+// device pretending it never understood them.
+#define APPS_LAUNCH_ONE 1
 
 // ---------- Home location ----------
 // A PLACEHOLDER, and deliberately not a place. The device has exactly two location inputs

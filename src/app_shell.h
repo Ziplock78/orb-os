@@ -1,4 +1,5 @@
 #pragma once
+#include "config.h"   // APPS_LAUNCH_ONE — which apps this build carries
 #include <lvgl.h>
 // The app shell: the "channel changer". Holds an ordered list of full-screen
 // apps (each is one LVGL screen) and flips between them when the knob turns.
@@ -41,13 +42,21 @@ namespace app_shell {
     // into the wrong screen on a factory-reset boot", and sim_main.cpp records the same
     // fault happening once before with APP_INTEL. Two warnings in prose, two occurrences.
     // So this is now checked at boot rather than trusted: see app_shell::verifySlots().
+    // APPS_LAUNCH_ONE (config.h) takes Weather, Surveillance and the Ticker off the
+    // roster for launch one. The slots go with them rather than being left as holes:
+    // a slot naming an app nobody registers is the fault verifySlots() exists to catch,
+    // and leaving three of them deliberately would make the check cry wolf for ever.
     enum Slot {
         APP_CLOCK = 0,
         APP_FLIGHT,
+#if !APPS_LAUNCH_ONE
         APP_WEATHER,
         APP_SURVEILLANCE,
+#endif
         APP_INTEL,
+#if !APPS_LAUNCH_ONE
         APP_TICKER,
+#endif
         APP_SETTINGS,
         APP_COUNT,
     };

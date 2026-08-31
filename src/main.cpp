@@ -505,7 +505,9 @@ static void adsb_task(void*) {
             if (g_wxOpened) {
                 g_wxOpened = false;
                 wx_phase_set(WX_PHASE_BUFFERS);
+#if !APPS_LAUNCH_ONE
                 if (theme_style::apps().weather) wx_radar_begin();
+#endif
                 wxFillIdx = 0; ++wxGen; nextWxRadarAt = nowMs;
                 wx_phase_set(WiFi.status() == WL_CONNECTED ? WX_PHASE_INDEX : WX_PHASE_NO_WIFI);
             }
@@ -591,7 +593,9 @@ static void adsb_task(void*) {
             // kilobyte for a whole watchlist, so like the headlines there is nothing here
             // worth spreading over several passes; the step owns its own timing and returns
             // immediately when nothing is due, which is almost every pass.
+#if !APPS_LAUNCH_ONE
             if (theme_style::apps().ticker && ticker_fetch_step()) g_tickerDirty = true;
+#endif
             // Then the on-demand lookups for the selected aircraft. Their timeouts are kept
             // short (see photo_client / route_client) so a slow photo server can't freeze the
             // feed for long; the next loop iteration polls again as soon as they return.
@@ -2410,10 +2414,14 @@ void setup() {
     // onEnter takes the canvas, onExit gives it back. It answers neither a turn nor a press.
     app_shell::add(clockview::screen(), theme_style::names().clock, nullptr, nullptr, false, clockview::onEnter, clockview::onExit, !theme_style::apps().clock);
     app_shell::add(radarScreen, theme_style::names().flight, radar_press_custom_or_theme, radar_turn_select, false, radar_show_home_custom, radar_exit_release_style, !theme_style::apps().flight);
+#if !APPS_LAUNCH_ONE
     app_shell::add(radarScreen, theme_style::names().weather,  weather_press_cycle, nullptr, false, radar_show_weather, radar_hide_weather, !theme_style::apps().weather);
     spycamview::init();
     psram_mark("after spycamview");
+#endif
+#if !APPS_LAUNCH_ONE
     app_shell::add(spycamview::screen(), theme_style::names().surveillance, spycamview::onPress, spycamview::onTurn, false, nullptr, nullptr, !theme_style::apps().surveillance);  // push cycles cams; clip loads lazily on commit
+#endif
     // Intel before Settings. It used to be appended after, purely because the jumps below
     // were written as bare integers and moving anything would have pointed the jumps at
     // the wrong screen. They name app_shell::Slot now, so the menu can be ordered the way it
@@ -2422,11 +2430,13 @@ void setup() {
     psram_mark("after intelview");
     app_shell::add(intelview::screen(), theme_style::names().headlines,
                    intelview::onPress, intelview::onTurn, false, intelview::onEnter, intelview::onExit, !theme_style::apps().headlines);  // push fetches now, or toggles scroll mode when the type size overflows; onEnter resets to the top
+#if !APPS_LAUNCH_ONE
     tickerview::init();
     psram_mark("after tickerview");
     app_shell::add(tickerview::screen(), theme_style::names().ticker,
                    tickerview::onPress, tickerview::onTurn, false,
                    tickerview::onEnter, tickerview::onExit, !theme_style::apps().ticker);  // turn steps the watchlist; onEnter takes the strip canvas only when the design curves it
+#endif
     settingsview::init();
     psram_mark("after settingsview");
     app_shell::add(settingsview::screen(), theme_style::names().settings,
@@ -2435,6 +2445,25 @@ void setup() {
     // Before anything jumps to a slot by name. See app_shell::verifySlots(): the enum and
     // the registration order above have drifted apart twice, and both times the only
     // symptom was the wrong screen appearing with nothing said about it.
+#if APPS_LAUNCH_ONE
+    // A theme is allowed to ask for an app this build does not carry — theme.json's roster
+    // is the design's opinion about a finished product, and TC-008 keeps those keys alive
+    // whether or not this firmware acts on them. But asking and silently getting nothing is
+    // the shape of every fault this week, so it is said out loud once, here, naming the app.
+    {
+        const theme_style::Apps &ta = theme_style::apps();
+        const struct { bool want; const char *name; } cut[] = {
+            { ta.weather,      "Weather Radar" },
+            { ta.surveillance, "Surveillance"  },
+            { ta.ticker,       "Stock Ticker"  },
+        };
+        for (const auto &c : cut)
+            if (c.want)
+                Serial.printf("[shell] theme asks for \"%s\" but this build does not carry it "
+                              "(CUT-01, APPS_LAUNCH_ONE in config.h). Its settings are still "
+                              "read and kept; nothing draws them.\n", c.name);
+    }
+#endif
     app_shell::verifySlots(settingsview::screen());
     app_shell::begin();                // start on the clock (index 0 — see comment above)
     psram_mark("after app_shell::begin");
