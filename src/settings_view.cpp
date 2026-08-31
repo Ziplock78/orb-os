@@ -63,7 +63,8 @@ namespace {
     // the scrollable list of recent cities you reach from that menu.
     enum Mode { MODE_MENU, MODE_DISPLAY, MODE_BRIGHT, MODE_LOCATION, MODE_RECENT, MODE_SEARCH, MODE_SOUND, MODE_VOLUME, MODE_ABOUT,
                 MODE_WIFI_LIST, MODE_WIFI_PASSWORD, MODE_WIFI_STATUS, MODE_RESET_CONFIRM, MODE_UNITS, MODE_CHIME_SELECT,
-                MODE_THEME_SELECT, MODE_THEME_NOTICE, MODE_DESIGN_SELECT, MODE_DESIGN_NOTICE, MODE_RANGE };
+                MODE_THEME_SELECT, MODE_THEME_NOTICE, MODE_DESIGN_SELECT, MODE_DESIGN_NOTICE, MODE_RANGE,
+                MODE_FIRSTBOOT, MODE_FIRSTBOOT_PHONE };
 
     // --- main settings menu ---
     // ITEM_RANGE was added when touch (and with it the on-screen zoom button) was
@@ -260,6 +261,21 @@ namespace {
     // drift apart again.
     char      s_netInfo[112] = "";     // last line handed to setNetInfo(), replayed on page open
     lv_obj_t *s_aboutImg  = nullptr;   // decoded fresh each time (see refresh_about()) — cheap, avoids relying on splash_art's shared decode buffer staying valid
+    // --- first-boot WiFi choice (UX-019 as amended 2026-08-30, UX-022) ---
+    //
+    // The one screen on the device that offers a choice the owner did not arrive wanting to
+    // make. UX-005 forbids that everywhere else and the amendment carves out this screen
+    // only: the first minute with a new object is the one moment where somebody who cannot
+    // find their way has no fallback and no reason to persist. The on-device path is
+    // pre-selected, so the default is still a single press.
+    enum { FB_ONDEVICE = 0, FB_PHONE, FB_COUNT };
+    const char *FB_LABELS[FB_COUNT] = { "Choose a network here", "Use my phone instead" };
+    lv_obj_t *s_fbPage  = nullptr;
+    lv_obj_t *s_fbHl    = nullptr;
+    lv_obj_t *s_fbItems[FB_COUNT] = { nullptr, nullptr };
+    int       s_fbSel   = FB_ONDEVICE;
+    lv_obj_t *s_fbPhonePage = nullptr;
+
     lv_obj_t *s_resetPage = nullptr;   // Reset: warning + confirm, push to wipe, turn to cancel
 
     // WiFi setup pages (encoder-driven, same look as the rest of Settings)
@@ -540,6 +556,11 @@ namespace {
 
     void refresh_locmenu() { wheel_layout(s_lmItems, LM_COUNT, s_lmSel, s_lmHl); }
 
+    // Same wheel every other menu uses, deliberately. The mockup drew a ">" against the
+    // chosen row; the wheel's own highlight pill already says that, in the grammar the rest
+    // of the device has taught, and a second marker would be the only one of its kind here.
+    void refresh_firstboot() { wheel_layout(s_fbItems, FB_COUNT, s_fbSel, s_fbHl); }
+
     void refresh_recent() {
         if (s_recCount == 0) {
             lv_label_set_text(s_recName, "No recent cities");
@@ -633,6 +654,8 @@ namespace {
         // the one page that has to give its memory back when it leaves the screen.
         splash_lines::release();
         lv_obj_add_flag(s_resetPage, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_add_flag(s_fbPage, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_add_flag(s_fbPhonePage, LV_OBJ_FLAG_HIDDEN);
         lv_obj_add_flag(s_wifiListPage, LV_OBJ_FLAG_HIDDEN);
         lv_obj_add_flag(s_wifiPassPage, LV_OBJ_FLAG_HIDDEN);
         lv_obj_add_flag(s_wifiStatusPage, LV_OBJ_FLAG_HIDDEN);
@@ -653,6 +676,8 @@ namespace {
         else if (m == MODE_VOLUME)   { lv_obj_clear_flag(s_volPage, LV_OBJ_FLAG_HIDDEN); refresh_vol(); }
         else if (m == MODE_ABOUT)    { lv_obj_clear_flag(s_aboutPage, LV_OBJ_FLAG_HIDDEN); refresh_about(); }
         else if (m == MODE_RESET_CONFIRM) { lv_obj_clear_flag(s_resetPage, LV_OBJ_FLAG_HIDDEN); }
+        else if (m == MODE_FIRSTBOOT)       { lv_obj_clear_flag(s_fbPage, LV_OBJ_FLAG_HIDDEN); refresh_firstboot(); }
+        else if (m == MODE_FIRSTBOOT_PHONE) { lv_obj_clear_flag(s_fbPhonePage, LV_OBJ_FLAG_HIDDEN); }
         else if (m == MODE_WIFI_LIST)     { lv_obj_clear_flag(s_wifiListPage, LV_OBJ_FLAG_HIDDEN); refresh_wifi_list(); }
         else if (m == MODE_WIFI_PASSWORD) { lv_obj_clear_flag(s_wifiPassPage, LV_OBJ_FLAG_HIDDEN); refresh_wifi_pass(); }
         else if (m == MODE_WIFI_STATUS)   { lv_obj_clear_flag(s_wifiStatusPage, LV_OBJ_FLAG_HIDDEN); }
@@ -828,6 +853,13 @@ void settingsview::onTurn(int delta) {
         if (s_bri > BRI_MAX) s_bri = BRI_MAX;
         host_set_brightness(s_bri, false);
         refresh_bright();
+    } else if (s_mode == MODE_FIRSTBOOT) {
+        s_fbSel += step;
+        if (s_fbSel < 0) s_fbSel = 0;
+        if (s_fbSel >= FB_COUNT) s_fbSel = FB_COUNT - 1;
+        refresh_firstboot();
+    } else if (s_mode == MODE_FIRSTBOOT_PHONE) {
+        // Nothing to move between. The only action is Back, and it is on the press.
     } else if (s_mode == MODE_LOCATION) {
         s_lmSel += step;
         if (s_lmSel < 0) s_lmSel = 0;
@@ -955,6 +987,23 @@ void settingsview::onEnter() {
 }
 
 void settingsview::onPress() {
+    if (s_mode == MODE_FIRSTBOOT) {
+        if (s_fbSel == FB_ONDEVICE) {
+            // Straight into the scan/pick/type flow that has existed in this file all
+            // along and was unreachable at boot for six weeks behind the CUT-03 enum bug.
+            s_firstBootPrompt = true;
+            start_wifi_scan();
+            show_page(MODE_WIFI_LIST);
+        } else {
+            show_page(MODE_FIRSTBOOT_PHONE);
+        }
+        return;
+    }
+    if (s_mode == MODE_FIRSTBOOT_PHONE) {
+        s_fbSel = FB_ONDEVICE;      // Back lands on the on-device row, as agreed
+        show_page(MODE_FIRSTBOOT);
+        return;
+    }
     if (s_mode == MODE_MENU) {
         if (s_sel == ITEM_DISPLAY) { s_dspSel = 0; show_page(MODE_DISPLAY); }
         else if (s_sel == ITEM_LOCATION) { s_lmSel = 0; show_page(MODE_LOCATION); }
@@ -1227,6 +1276,87 @@ void settingsview::init() {
     lv_obj_set_style_text_color(lmhint, C_GREY, 0);
     lv_obj_set_style_text_font(lmhint, &lv_font_montserrat_14, 0);
     lv_obj_align(lmhint, LV_ALIGN_CENTER, 0, 150);
+
+    // --- first boot: which way do you want to give it WiFi? ---
+    //
+    // Five lines in a 466 px circle. At 90 px above and below centre the chord is still
+    // 430 px wide and the inscribed area is about 330 px tall, so this sits inside the
+    // budget at readable sizes with room left: nothing here is shrunk to fit.
+    s_fbPage = lv_obj_create(s_screen);
+    lv_obj_remove_style_all(s_fbPage);
+    lv_obj_set_size(s_fbPage, SCREEN_W, SCREEN_H); lv_obj_center(s_fbPage);
+    // Opaque black, not a transparent overlay: this is the first thing a stranger sees and
+    // it must not have the clock it cannot trust showing through from behind.
+    lv_obj_set_style_bg_color(s_fbPage, lv_color_black(), 0);
+    lv_obj_set_style_bg_opa(s_fbPage, LV_OPA_COVER, 0);
+    lv_obj_clear_flag(s_fbPage, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_t *fbTitle = lv_label_create(s_fbPage);
+    lv_label_set_text(fbTitle, "The Orb needs WiFi");
+    lv_obj_set_style_text_color(fbTitle, lv_color_white(), 0);
+    lv_obj_set_style_text_font(fbTitle, &lv_font_montserrat_20, 0);
+    lv_obj_align(fbTitle, LV_ALIGN_CENTER, 0, -122);
+    // Load-bearing, not decoration. The S3 has no 5 GHz radio, so a 5 GHz-only network
+    // never appears in the scan at all — and before this line the screen offered no reason
+    // why, leaving a stranger looking at a list with their own network missing from it.
+    lv_obj_t *fbBand = lv_label_create(s_fbPage);
+    lv_label_set_text(fbBand, "2.4 GHz only");
+    lv_obj_set_style_text_color(fbBand, C_DIM, 0);
+    lv_obj_set_style_text_font(fbBand, &lv_font_montserrat_16, 0);
+    lv_obj_align(fbBand, LV_ALIGN_CENTER, 0, -92);
+    s_fbHl = lv_obj_create(s_fbPage);
+    style_highlight(s_fbHl);
+    for (int i = 0; i < FB_COUNT; ++i) {
+        s_fbItems[i] = lv_label_create(s_fbPage);
+        lv_label_set_text(s_fbItems[i], FB_LABELS[i]);
+        // Font, opacity, position: wheel_layout(), called from refresh_firstboot().
+    }
+    // A sixth line, and the one addition to the agreed copy. This is the only screen whose
+    // audience has never touched the knob before, so the one place the grammar cannot be
+    // assumed. Same wording and position the location menu already uses.
+    lv_obj_t *fbHint = lv_label_create(s_fbPage);
+    lv_label_set_text(fbHint, "turn to choose, push to select");
+    lv_obj_set_style_text_color(fbHint, C_GREY, 0);
+    lv_obj_set_style_text_font(fbHint, &lv_font_montserrat_14, 0);
+    lv_obj_align(fbHint, LV_ALIGN_CENTER, 0, 150);
+
+    // --- first boot: the phone path ---
+    //
+    // Instruction only. The access point is already running by the time this screen can be
+    // reached: autoConnect() raises "The Orb Setup" before main.cpp selects Settings, so
+    // there is nothing to start here and nothing to tear down on the way back.
+    s_fbPhonePage = lv_obj_create(s_screen);
+    lv_obj_remove_style_all(s_fbPhonePage);
+    lv_obj_set_size(s_fbPhonePage, SCREEN_W, SCREEN_H); lv_obj_center(s_fbPhonePage);
+    lv_obj_set_style_bg_color(s_fbPhonePage, lv_color_black(), 0);
+    lv_obj_set_style_bg_opa(s_fbPhonePage, LV_OPA_COVER, 0);
+    lv_obj_clear_flag(s_fbPhonePage, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_t *fpLead = lv_label_create(s_fbPhonePage);
+    lv_label_set_text(fpLead, "On your phone, join");
+    lv_obj_set_style_text_color(fpLead, C_DIM, 0);
+    lv_obj_set_style_text_font(fpLead, &lv_font_montserrat_16, 0);
+    lv_obj_align(fpLead, LV_ALIGN_CENTER, 0, -78);
+    // The network name is the one thing on this screen a person has to copy correctly, so
+    // it is the one thing set larger than everything around it.
+    lv_obj_t *fpSsid = lv_label_create(s_fbPhonePage);
+    lv_label_set_text(fpSsid, "The Orb Setup");
+    lv_obj_set_style_text_color(fpSsid, lv_color_white(), 0);
+    lv_obj_set_style_text_font(fpSsid, &lv_font_montserrat_28, 0);
+    lv_obj_align(fpSsid, LV_ALIGN_CENTER, 0, -36);
+    lv_obj_t *fpL1 = lv_label_create(s_fbPhonePage);
+    lv_label_set_text(fpL1, "A page opens by itself.");
+    lv_obj_set_style_text_color(fpL1, lv_color_white(), 0);
+    lv_obj_set_style_text_font(fpL1, &lv_font_montserrat_16, 0);
+    lv_obj_align(fpL1, LV_ALIGN_CENTER, 0, 24);
+    lv_obj_t *fpL2 = lv_label_create(s_fbPhonePage);
+    lv_label_set_text(fpL2, "Pick your network there.");
+    lv_obj_set_style_text_color(fpL2, lv_color_white(), 0);
+    lv_obj_set_style_text_font(fpL2, &lv_font_montserrat_16, 0);
+    lv_obj_align(fpL2, LV_ALIGN_CENTER, 0, 52);
+    lv_obj_t *fpBack = lv_label_create(s_fbPhonePage);
+    lv_label_set_text(fpBack, LV_SYMBOL_LEFT "  Back");
+    lv_obj_set_style_text_color(fpBack, C_GREY, 0);
+    lv_obj_set_style_text_font(fpBack, &lv_font_montserrat_20, 0);
+    lv_obj_align(fpBack, LV_ALIGN_CENTER, 0, 120);
 
     // --- recent cities page (single-item scroller) ---
     s_recPage = lv_obj_create(s_screen);
@@ -1692,10 +1822,15 @@ lv_obj_t *settingsview::screen() { return s_screen; }
 // setup" flag set (fresh out of the box, or just after a Reset) — jumps straight past
 // the main menu into the WiFi list with a first-run prompt instead of the usual hint.
 void settingsview::openWifiSetupPrompt() {
-    s_firstBootPrompt = true;
-    s_sel = ITEM_WIFI;
-    start_wifi_scan();
-    show_page(MODE_WIFI_LIST);
+    // The choice screen first, not the scan. Both paths lead somewhere that works, and the
+    // on-device one is pre-selected so the default is still a single press — see the
+    // FB_LABELS block above for why this screen is allowed to ask at all.
+    //
+    // s_firstBootPrompt is set when the on-device row is taken rather than here, because it
+    // is what swaps the WiFi list's hint text and the list is no longer where this lands.
+    s_sel   = ITEM_WIFI;
+    s_fbSel = FB_ONDEVICE;
+    show_page(MODE_FIRSTBOOT);
 }
 
 // Called once from main.cpp's setup() right after a Launch Kit push leaves a

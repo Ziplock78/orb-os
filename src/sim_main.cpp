@@ -727,6 +727,14 @@ int main(int argc, char **argv) {
     // The "Ready" notice, for the same reason: it exists for a few seconds on real
     // hardware after an update and there is no other way to look at it.
     const char *readyShot  = (argc >= 3 && strcmp(argv[1], "--readyshot")  == 0) ? argv[2] : NULL;
+    // --wifishot <prefix>: the first-boot WiFi choice and the phone screen behind it.
+    //
+    // Same reason as the three above — on hardware these exist only on a device with no
+    // saved network, and the only way to reach that state is to wipe a working Orb's WiFi,
+    // which is not something to do to somebody's device to look at a layout. This screen in
+    // particular has to be checkable without that: it is the first thing a stranger ever
+    // sees, five lines in a circle, and the whole of CUT-03 was a screen nobody had reached.
+    const char *wifiShot   = (argc >= 3 && strcmp(argv[1], "--wifishot")   == 0) ? argv[2] : NULL;
     // The bake screen, for the same reason as the two above: on hardware it exists only for
     // the fifteen seconds after picking a theme, and it is three labels at fixed offsets,
     // which is exactly the layout that quietly overlaps when one of them gains a line.
@@ -750,7 +758,7 @@ int main(int argc, char **argv) {
     // --newsshot is headless but drives the KNOB, so it needs the full app lineup that only
     // interactive mode registers. It is the one capture that walks the shell rather than
     // putting a single screen up directly.
-    const bool  interactive = !shotPath && !gifPath && !updateShot && !readyShot && !bakeShot;
+    const bool  interactive = !shotPath && !gifPath && !updateShot && !readyShot && !bakeShot && !wifiShot;
     (void)wxShot;   // live knob/app-shell only outside headless capture
     (void)setShot;
 
@@ -877,7 +885,9 @@ int main(int argc, char **argv) {
         cloud_image_commit(1784397900UL, SIM_HOME_LAT, SIM_HOME_LON);
     }
     ui_on_data_updated();
-    if (interactive) sim_register_apps(radarScreen);   // live 6-app switcher driven by the virtual knob
+    // --wifishot needs the real roster too: it drives Settings through app_shell exactly as
+    // the device does, so a capture cannot be reached with no apps registered.
+    if (interactive || wifiShot) sim_register_apps(radarScreen);   // live app switcher driven by the virtual knob
 #if CUSTOM_BOOT_TARGET == 1
     // Set only by the splash push (the clock push clears it, even if a custom
     // splash is still baked in) — so this is genuinely "you just pushed the
@@ -1292,6 +1302,24 @@ int main(int argc, char **argv) {
         // headless capture of the firmware-update overlay (--updateshot <path>) or the
         // ready notice (--readyshot <path>). Same block: both are the same panel.
         static bool updateSaved = false;
+        // Later than the other captures: the boot splash holds for about two seconds and
+        // then fades, and at 1800 ms this photographed the splash instead of the screen.
+        if (wifiShot && !updateSaved && now - start > 6000) {
+            updateSaved = true;
+            char path[300];
+            app_shell::selectApp(app_shell::APP_SETTINGS);
+            app_shell::setCaptured(true);
+            settingsview::openWifiSetupPrompt();      // screen 1, on-device row selected
+            lv_timer_handler(); lv_refr_now(NULL);
+            snprintf(path, sizeof(path), "%s-1-choice", wifiShot);
+            sim_save_frame(path);
+            settingsview::onTurn(1);                  // move to "Use my phone instead"
+            settingsview::onPress();                  // screen 2
+            lv_timer_handler(); lv_refr_now(NULL);
+            snprintf(path, sizeof(path), "%s-2-phone", wifiShot);
+            sim_save_frame(path);
+            run = false;
+        }
         if ((updateShot || readyShot || bakeShot) && !updateSaved && now - start > 1800) {
             updateSaved = true;
             if (readyShot)     update_ui::ready(true);           // the after-an-update variant
