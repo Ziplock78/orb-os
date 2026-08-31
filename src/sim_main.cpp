@@ -635,6 +635,7 @@ static void sim_register_apps(lv_obj_t *radarScreen) {
     // device at exactly the moment someone is using it to check one.
     app_shell::add(settingsview::screen(), theme_style::names().settings,
                    settingsview::onPress, settingsview::onTurn, true, settingsview::onEnter, settingsview::onExit, false);
+    app_shell::verifySlots(settingsview::screen());   // same check the device runs, same reason
     app_shell::begin();   // start on Clock (index 0), matching the device
 }
 
@@ -1482,7 +1483,16 @@ int main(int argc, char **argv) {
             app_shell::begin();
 
             // Settings: jump straight there, no slide, and grab the base menu list.
-            app_shell::selectApp(app_shell::APP_SETTINGS);
+            //
+            // By position, NOT app_shell::APP_SETTINGS. This harness registers its own
+            // reduced roster above — six entries, two of them placeholders, no Stock
+            // Ticker — so the Slot enum does not describe it. The enum jump used to work
+            // here purely because APP_SETTINGS was 5 and this list also happened to put
+            // Settings at 5; the moment the enum was corrected for the device's real
+            // roster, that became an out-of-range no-op and this screenshot would have
+            // quietly captured the Clock instead, with nothing in the log to say so.
+            // Settings is the last app registered above, and that is what is asserted here.
+            app_shell::selectApp(app_shell::count() - 1);
             lv_timer_handler();
             lv_refr_now(NULL);
             SDL_RenderClear(s_ren);

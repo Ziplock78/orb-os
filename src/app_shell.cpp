@@ -308,6 +308,54 @@ void app_shell::turnCurrent(int delta) {
     if (s_count && s_apps[s_cur].onTurn) s_apps[s_cur].onTurn(delta);
 }
 
+// Does the Slot enum still describe the roster that actually registered?
+//
+// Two checks, because they catch different mistakes. The count catches an app INSERTED
+// without an enum entry, which is what happened with the Stock Ticker: seven apps
+// registered against six named slots, so every slot from the insertion point onward meant
+// the wrong screen. The pointer catches a REORDER, where the count still agrees and only
+// the meaning has moved.
+//
+// Settings is the one verified by identity because it is the slot the firmware jumps to
+// without being asked — at boot with no network, and after a factory reset — which makes it
+// the one whose failure a person meets before they have any reason to suspect software.
+// By pointer, not by name: theme_style::names().settings is the theme's to change.
+//
+// Loud on purpose, and on the same channel as the rest of the boot log, because the fault
+// this replaces produced no output at all. It does not halt: a device that boots to the
+// wrong screen is still a device somebody can turn the knob on, and refusing to start would
+// be a worse failure than the one being reported.
+bool app_shell::verifySlots(lv_obj_t *settingsScreen) {
+    bool ok = true;
+
+    if (s_count != APP_COUNT) {
+        Serial.printf("[shell] SLOT TABLE IS WRONG: %d apps registered, enum names %d. "
+                      "An app was added to main.cpp/sim_main.cpp without a Slot entry in "
+                      "app_shell.h, so every selectApp() at or past the insertion point "
+                      "goes to the wrong screen.\n", s_count, (int)APP_COUNT);
+        ok = false;
+    }
+
+    if (APP_SETTINGS >= s_count || s_apps[APP_SETTINGS].screen != settingsScreen) {
+        Serial.printf("[shell] SLOT TABLE IS WRONG: APP_SETTINGS is %d but slot %d holds "
+                      "\"%s\". A boot with no network jumps there to open WiFi setup, so it "
+                      "will land on that screen instead and the owner will see no way to "
+                      "connect.\n", (int)APP_SETTINGS, (int)APP_SETTINGS,
+                      (APP_SETTINGS < s_count && s_apps[APP_SETTINGS].name)
+                          ? s_apps[APP_SETTINGS].name : "(nothing)");
+        ok = false;
+    }
+
+    if (!ok) {
+        Serial.printf("[shell] registered roster, in order:\n");
+        for (int i = 0; i < s_count; ++i)
+            Serial.printf("[shell]   %d: %s%s\n", i,
+                          s_apps[i].name ? s_apps[i].name : "(unnamed)",
+                          s_apps[i].hidden ? "  (hidden)" : "");
+    }
+    return ok;
+}
+
 void app_shell::begin() {
     // Build the app-switcher overlay on the top layer so it floats over every screen.
     s_overlay = lv_obj_create(lv_layer_top());

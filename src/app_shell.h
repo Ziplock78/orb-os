@@ -63,6 +63,18 @@ namespace app_shell {
                     app_action_t onEnter = nullptr, app_action_t onExit = nullptr, bool hidden = false);
     void begin();                                  // show the first app (no animation)
 
+    // Check that the Slot enum above still describes the roster that actually registered,
+    // and shout if it does not. Call once after the last add(), before anything jumps to a
+    // slot. Returns true when the two agree.
+    //
+    // This exists because the enum has drifted from the registration order twice, both
+    // times silently, and both times the prose comment that warned about it was already
+    // there. A wrong slot number does not crash and does not log: it just quietly shows the
+    // wrong screen, which is indistinguishable from a broken device to the person holding
+    // it. `settingsScreen` is checked by POINTER rather than by name, because a theme may
+    // relabel Settings to anything it likes and the label is therefore worthless as proof.
+    bool verifySlots(lv_obj_t *settingsScreen);
+
     void next();          // advance to the next app (knob right), slides left
     void prev();          // go to the previous app (knob left), slides right
     void pressCurrent();  // knob pushed: run the current app's press handler, if any

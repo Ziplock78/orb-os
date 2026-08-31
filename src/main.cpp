@@ -2432,6 +2432,10 @@ void setup() {
     app_shell::add(settingsview::screen(), theme_style::names().settings,
                    settingsview::onPress, settingsview::onTurn,
                    true, settingsview::onEnter, settingsview::onExit, false);  // captures the knob on entry; onEnter resets to the menu and takes the text canvas, onExit gives it back
+    // Before anything jumps to a slot by name. See app_shell::verifySlots(): the enum and
+    // the registration order above have drifted apart twice, and both times the only
+    // symptom was the wrong screen appearing with nothing said about it.
+    app_shell::verifySlots(settingsview::screen());
     app_shell::begin();                // start on the clock (index 0 — see comment above)
     psram_mark("after app_shell::begin");
 
