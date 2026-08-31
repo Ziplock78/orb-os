@@ -35,6 +35,22 @@ repository:
 
 When work closes or changes a cut list item, name it by number.
 
+## How work is done here
+
+Five rules. They exist because each one was learned by nearly getting it wrong.
+
+1. **Firmware runs on a real Orb before it reaches Studio.** `publish-firmware.sh` stages a
+   binary; `wrangler deploy` is what hands it to strangers. Never run the deploy on a build
+   that has not booted on hardware, however clean the audit is.
+2. **One cut list item, one commit.** Never start a second item on top of the first one's
+   uncommitted work. Two items in one pile cannot be undone separately.
+3. **Personal permissions go in `.claude/settings.local.json`.** Never `settings.json`, which
+   is not gitignored and would ship to anyone who clones this repo.
+4. **Name the `CUT-nn` a change serves.** If it serves none, say so before doing it rather
+   than after.
+5. **A regression found in your own recent commit outranks the task in hand.** Say it plainly
+   and early, the way the GPS re-centre guard was caught.
+
 ## What we're building
 A live ADS-B aircraft radar for the **Waveshare ESP32-S3-Touch-AMOLED-1.75** (round 466×466 AMOLED, capacitive touch). It's an evolution of the classic 240×240 GC9A01 "plane radar": same idea (pull nearby aircraft from an online ADS-B feed over WiFi, plot them on a radar scope centered on the user), but redesigned for a full-color high-res round AMOLED with touch, IMU, RTC and a speaker.
 
