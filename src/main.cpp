@@ -35,7 +35,6 @@
 #include "theme_style.h"   // per-theme app roster (theme_style::apps())
 #include "display.h"                  // M0: CO5300 + LVGL bring-up
 #include "imu_qmi8658.h"             // face-down sleep
-#include "gps.h"                     // LC76G GNSS (-G variant only)
 #include "battery.h"                 // AXP2101 battery gauge
 #include "rtc_pcf85063.h"            // PCF85063 RTC (offline clock + date)
 #include "audio.h"                   // ES8311 alert pings
@@ -123,8 +122,16 @@ static bool                  g_hideGround   = false;                 // skip on-
 static int                   g_minAltFt     = 0;                     // only show aircraft above this altitude, ft (0 = off) (web/NVS)
 static int                   g_deadZonePx   = 0;                     // ignore aircraft inside this many px of scope center (0 = off) (pushed design)
 static bool                  g_milOnly      = false;                 // only show military-flagged aircraft (web/NVS)
+// Has a real location ever been established on this device? (NVS "locSet")
+//
+// Read by core 0 to decide whether polling the aircraft feed is worth doing at all, and by
+// the status tick to tell the Flight Tracker whether it can honestly draw a sky. False on a
+// fresh or factory-reset device until either the network lookup succeeds or the owner picks
+// somewhere in Settings. Without it there was no difference between a device that had never
+// located itself and one legitimately sitting on the compiled default, so a failed lookup
+// showed the default's sky with the same confidence as a real fix.
+static volatile bool         g_locationSet  = false;
 static int                   g_rotation = 0;                         // clockwise display rotation, 0..359° (web/NVS)
-static bool                  g_useGps = false;                       // auto-set home from the LC76G GPS (-G variant) (web/NVS)
 static int                   g_trailLen = 2;                         // aircraft trails 0=off 1=short 2=med 3=long (web/NVS)
 static int                   g_maxAc = 12;                           // max aircraft drawn on the scope (web/NVS)
 static bool                  g_bigText = false;                      // accessibility: large fonts (web/NVS, applied at boot)
@@ -340,7 +347,12 @@ static void adsb_task(void*) {
             const uint32_t pollInterval =
                 (g_pollOverrideMs ? g_pollOverrideMs
                                   : (g_onBattery ? POLL_INTERVAL_BATTERY_MS : POLL_INTERVAL_MS)) + adsbBackoffMs;
-            if (radarActive && (lastPoll == 0 || nowMs - lastPoll >= pollInterval)) {  // aircraft feed, Flight Tracker only
+            // g_locationSet: no centre, no query. The coordinates are 0,0 until the network
+            // lookup or Settings supplies a real one, and asking a free non-commercial API
+            // every few seconds for the traffic over the Gulf of Guinea is a request nobody
+            // wanted answered. The scope says "Location not set" meanwhile, so the silence
+            // is explained rather than looking like a dead feed.
+            if (radarActive && g_locationSet && (lastPoll == 0 || nowMs - lastPoll >= pollInterval)) {  // aircraft feed, Flight Tracker only
                 lastPoll = nowMs;
                 static int failCount = 0;
                 // poll() tries the fallback provider after a primary failure; keep the HUD
@@ -624,38 +636,47 @@ static void applyThemeSettings() {
                                              ? ADSB_MAX_AIRCRAFT : rs.maxAircraft;
     if (rs.minAltFt   >= 0)    g_minAltFt  = rs.minAltFt;
     if (rs.hideGround >= 0)    g_hideGround = (rs.hideGround != 0);
+    // Clamped again here even though theme_style clamped it on the way in: this is the
+    // value deadZoneKm() divides the dial by, and it is the one operational setting with
+    // no device-side control, so there is nowhere to correct it from if it lands wrong.
+    if (rs.deadZonePx >= 0)    g_deadZonePx = (rs.deadZonePx > (int)RADAR_R_OUTER_PX)
+                                              ? (int)RADAR_R_OUTER_PX : rs.deadZonePx;
     // Same flag main.cpp's poll loop reads to decide whether to fabricate traffic (see
     // "simulated" in the ADS-B poll branch below) — the badge tracks it here so the two
     // can never drift apart, one deciding what is drawn and the other saying so.
     radar::setSimulatedBadge(rs.simulate);
-    Serial.printf("[theme] applied: rangeKm=%.0f maxAircraft=%d minAltFt=%d hideGround=%d simulate=%d\n",
-                  (double)g_settings.rangeKm, g_maxAc, g_minAltFt, (int)g_hideGround, (int)rs.simulate);
+    Serial.printf("[theme] applied: rangeKm=%.0f maxAircraft=%d minAltFt=%d hideGround=%d deadZonePx=%d simulate=%d\n",
+                  (double)g_settings.rangeKm, g_maxAc, g_minAltFt, (int)g_hideGround,
+                  g_deadZonePx, (int)rs.simulate);
 }
 
 static void loadSettings() {
     Preferences p;
     p.begin("capsuleradar", true);
+    // The owner's, and nothing outranks it. This used to be followed by a
+    // CUSTOM_HAS_RADAR_HOME block that overwrote both from whichever design was last
+    // compiled in, on every boot, without persisting anything: every unit flashed from one
+    // push sat on that push's coordinates, the setup page's lat/lon box accepted an address
+    // and silently discarded it, and GPS re-centring was compiled out to stop it fighting
+    // back. A theme is data about how the Orb LOOKS; where it is standing is the owner's
+    // to say, from the network it joined or from Settings.
     g_settings.homeLat = p.getDouble("homeLat", HOME_LAT_DEFAULT);
     g_settings.homeLon = p.getDouble("homeLon", HOME_LON_DEFAULT);
-#if CUSTOM_HAS_RADAR_HOME
-    // Launch Kit is the source of truth for location: a pushed design's own
-    // Latitude/Longitude override whatever's saved in NVS (and the on-device
-    // Settings/IP/GPS detection, see below), so the editor, simulator, and Orb
-    // all center on the exact same coordinates. Not persisted — same
-    // one-shot-per-flash model as range; a re-push (or reflash) is how location
-    // changes, matching "the editor is the source of truth".
-    g_settings.homeLat = CUSTOM_RADAR_HOME_LAT;
-    g_settings.homeLon = CUSTOM_RADAR_HOME_LON;
-#endif
+    // Whether those two mean anything yet. The defaults are 0,0 and are never drawn: until
+    // this is true the scope says so instead of guessing, and the feed is not polled.
+    //
+    // The fallback is isKey("homeLat"), not false, and that is the whole upgrade path. Every
+    // Orb already in the world has a good homeLat in NVS and has never heard of locSet, so a
+    // plain `false` would have told all of them they had no location, blanked their scope and
+    // stopped their feed on the strength of a key this build invented. A stored coordinate IS
+    // an established location; only a device that has never had one gets the new state.
+    g_locationSet      = p.getBool("locSet", p.isKey("homeLat"));
+    // Range, and below it max-aircraft, are read from the owner's saved settings here and
+    // may then be overridden by the active theme in applyThemeSettings(), which runs after
+    // this. The CUSTOM_RADAR_RANGE_KM / CUSTOM_RADAR_MAXAC blocks that used to sit in
+    // between are gone: a value a theme does not state falls back to what this device has
+    // saved, not to what somebody else's design happened to weld in.
     g_settings.rangeKm = p.getFloat("rangeKm", RANGE_KM_DEFAULT);
-#if CUSTOM_HAS_RADAR_RANGE
-    // A pushed design's own Range slider is authoritative for what the scope
-    // captures (and what the range banner shows) until the next push — not
-    // persisted to NVS, so an on-device zoom afterward still works normally
-    // for the rest of this session; it just won't survive a reboot without a
-    // fresh push, same one-shot-per-boot precedent as CUSTOM_BOOT_TARGET.
-    g_settings.rangeKm = CUSTOM_RADAR_RANGE_KM;
-#endif
     g_brightnessDay    = p.getInt("bright", BRIGHTNESS_DEFAULT);
     g_volume           = p.getInt("vol", 60);
     g_muted            = p.getBool("mute", false);
@@ -663,12 +684,8 @@ static void loadSettings() {
     g_soundChime       = p.getBool("sndChime", false);
     g_alertMode        = p.getInt("alertmode", 2);
     g_proximityKm      = p.getFloat("proxkm", 0.0f);
-    g_useGps           = p.getBool("usegps", false);
     g_trailLen         = p.getInt("traillen", 2);
     g_maxAc            = p.getInt("maxac", 12);
-#if CUSTOM_HAS_RADAR_MAXAC
-    g_maxAc = CUSTOM_RADAR_MAXAC;   // a pushed design's own "max aircraft shown" cap, same one-shot-per-boot precedent as range/boot-target
-#endif
     // Clamp after both sources: an Orb that ran an earlier build has a larger number sitting
     // in NVS (20, 40, 60), and a theme built before the ceiling moved can still carry one.
     // Neither should be able to reintroduce a count the scope no longer supports.
@@ -956,21 +973,52 @@ void host_wx_zoom_set(int tier) {
     g_wxZoomChanged = true;   // adsb_task refetches with the new range on its next pass
 }
 
-// Set home location from the Settings menu and reboot to re-center radar + weather
-// (mirrors the web /save handler, which also restarts). Reuses the hold-warning overlay
-// (built in build_hold_warning()) for a visible countdown first — a silent 250ms-later
-// reboot was jarring with no explanation of what was happening or why.
-void host_set_location(double lat, double lon) {
+// Write a location down. Split out of host_set_location() so the boot-time lookup can save
+// a position WITHOUT the reboot below it: an Orb that restarted on its own because it
+// worked out where it was would be the device reconfiguring itself, which UX-048 forbids.
+static void persist_location(double lat, double lon) {
     Preferences p;
     p.begin("capsuleradar", false);
     p.putDouble("homeLat", lat);
     p.putDouble("homeLon", lon);
+    // The device now knows where it is, and will not ask the network again on later boots.
+    // Nothing else distinguishes "never located" from "located, and it happens to be here",
+    // which is how a failed lookup used to present as a confident wrong position.
+    p.putBool("locSet", true);
     // Also clears the post-Reset "needs setup" flag (see host_factory_reset()) — the
     // auto-locate path (host_locate_current()) lands here directly on success, without
     // going through host_wifi_connected_reboot(), so that was the one path that left
     // the flag stuck set and kept forcing WiFi setup open on every boot after.
     p.putBool("needsWifiSetup", false);
     p.end();
+    g_locationSet = true;
+}
+
+// Move the scope to a new centre while the device is running. This is the body of the GPS
+// re-centre block that used to live in loop(): GPS is gone as a location input (UX-025,
+// UX-026) but the live-apply it did was the useful half, and the boot-time lookup needs
+// exactly it. Everything downstream of the centre re-reads g_settings, and the aircraft
+// feed has to be told explicitly or adsb_task keeps querying the old circle.
+static void apply_location_live(double lat, double lon) {
+    g_settings.homeLat = lat;
+    g_settings.homeLon = lon;
+    // Set the radius too (same formula as boot/zoom), or adsb_task re-begins with a
+    // stale/zero g_requeryKm and fetches 0 aircraft.
+    g_requeryKm = queryRadiusKm();
+    g_requery = true;
+}
+
+// Set home location from the Settings menu and reboot to re-center radar + weather
+// (mirrors the web /save handler, which also restarts). Reuses the hold-warning overlay
+// (built in build_hold_warning()) for a visible countdown first — a silent 250ms-later
+// reboot was jarring with no explanation of what was happening or why.
+//
+// The reboot is fine HERE and only here: every caller is a person who just picked a place,
+// and UX-049 wants a step that takes the device out of service to say so, which the
+// countdown does. The boot-time lookup uses persist_location() + apply_location_live()
+// instead, because nobody asked it for anything.
+void host_set_location(double lat, double lon) {
+    persist_location(lat, lon);
 
     if (g_holdWarning && g_holdWarningLbl) {
         lv_obj_clear_flag(g_holdWarning, LV_OBJ_FLAG_HIDDEN);
@@ -1114,7 +1162,14 @@ static void posix_tz_from_offset(long offsetSec, char *out, size_t n) {
     else         snprintf(out, n, "<%c%02d%02d>%d:%02d", sign, aH, aM, wh, wm);
 }
 
-bool host_locate_current() {
+// Ask the network where it is. ONE copy of the lookup, shared by the two callers below,
+// because they differ only in what they do afterwards: the Settings item reboots to apply,
+// and the boot-time retry must not. Fills lat/lon and records the city in recents and the
+// timezone in NVS — both of those belong to the lookup rather than to either caller, since
+// they are true the moment the answer arrives however it gets applied.
+//
+// Returns false on any failure, having changed nothing but possibly the timezone.
+static bool ip_lookup_location(double &lat, double &lon) {
     if (WiFi.status() != WL_CONNECTED) return false;
     WiFiClient client;
     HTTPClient http;
@@ -1130,33 +1185,63 @@ bool host_locate_current() {
     JsonDocument doc;
     if (deserializeJson(doc, body)) return false;
     if (String((const char *)(doc["status"] | "")) != "success") return false;
-    const double lat = doc["lat"] | 1000.0;
-    const double lon = doc["lon"] | 1000.0;
-    if (lat >= -90 && lat <= 90 && lon >= -180 && lon <= 180) {
-        const char *city   = doc["city"]   | "";
-        const char *region = doc["region"] | "";
-        if (city[0]) {
-            char nm[40];
-            snprintf(nm, sizeof(nm), "%s%s%s", city, region[0] ? ", " : "", region);
-            host_recents_add(nm, lat, lon);            // remember where we landed
-        }
-        // Derive + persist the timezone before the reboot, so the clock comes back on
-        // local time. host_set_location() writes homeLat/Lon and reboots (never returns).
-        const long off = doc["offset"] | 0x7FFFFFFFL;
-        if (off != 0x7FFFFFFFL && off >= -50400 && off <= 50400) {
-            char tz[24];
-            posix_tz_from_offset(off, tz, sizeof(tz));
-            g_tz = tz;
-            Preferences p;
-            p.begin("capsuleradar", false);
-            p.putString("tz", tz);
-            p.end();
-            Serial.printf("[locate] tz offset %lds -> %s\n", off, tz);
-        }
-        host_set_location(lat, lon);   // saves + reboots — does not return
-        return true;
+    const double la = doc["lat"] | 1000.0;
+    const double lo = doc["lon"] | 1000.0;
+    if (!(la >= -90 && la <= 90 && lo >= -180 && lo <= 180)) return false;
+
+    const char *city   = doc["city"]   | "";
+    const char *region = doc["region"] | "";
+    if (city[0]) {
+        char nm[40];
+        snprintf(nm, sizeof(nm), "%s%s%s", city, region[0] ? ", " : "", region);
+        host_recents_add(nm, la, lo);            // remember where we landed
     }
-    return false;
+    // Derive + persist the timezone, so the clock reads local wherever this landed.
+    const long off = doc["offset"] | 0x7FFFFFFFL;
+    if (off != 0x7FFFFFFFL && off >= -50400 && off <= 50400) {
+        char tz[24];
+        posix_tz_from_offset(off, tz, sizeof(tz));
+        g_tz = tz;
+        Preferences p;
+        p.begin("capsuleradar", false);
+        p.putString("tz", tz);
+        p.end();
+        Serial.printf("[locate] tz offset %lds -> %s\n", off, tz);
+    }
+    lat = la; lon = lo;
+    return true;
+}
+
+// Settings > Location > Current, and the tail of first-boot WiFi setup. Somebody asked for
+// this, so applying it by restarting is honest and is announced by the countdown inside
+// host_set_location(). Returns false only if the lookup failed, in which case it has not
+// rebooted and the caller still has a screen to put a message on.
+bool host_locate_current() {
+    double lat = 0, lon = 0;
+    if (!ip_lookup_location(lat, lon)) return false;
+    host_set_location(lat, lon);   // saves + reboots — does not return
+    return true;
+}
+
+// The same lookup, for a device that has never had a location established: one attempt per
+// boot, applied WITHOUT a restart. Nobody asked for this one, so it may not take the device
+// out of service to apply itself (UX-048) — persist_location() and apply_location_live()
+// exist to make that possible.
+//
+// This is the path that stops a failed first-boot lookup from being permanent. Before it,
+// a stranger whose network blocked the lookup during setup sat on the compiled default
+// forever, with no retry and nothing on the dial admitting the position was a guess.
+static void host_locate_if_unset() {
+    if (g_locationSet) return;
+    double lat = 0, lon = 0;
+    if (!ip_lookup_location(lat, lon)) {
+        Serial.println("[locate] no location set and the lookup failed; "
+                       "the scope will say so until one is picked in Settings");
+        return;
+    }
+    persist_location(lat, lon);
+    apply_location_live(lat, lon);
+    Serial.printf("[locate] located to %.4f, %.4f without a restart\n", lat, lon);
 }
 
 // Free city search (Open-Meteo geocoding, no key). Fills names/lats/lons with up to
@@ -1396,14 +1481,6 @@ static void handleRoot() {
                  i, TZOPTS[i].offMin, TZOPTS[i].dst, g_tz == TZOPTS[i].tz ? " selected" : "", TZOPTS[i].label);
         tzopts += o;
     }
-    String gpsRow;   // only on the -G variant: offer to auto-set the centre from GPS
-    if (gps_present()) {
-        gpsRow  = "<label><input type=checkbox class=ck ";
-        gpsRow += g_useGps ? "checked" : "";
-        gpsRow += " onchange='gp(this.checked)'>Use GPS for location</label>";
-        gpsRow += "<div style='font-size:12px;opacity:.6;margin:-2px 0 6px'>"
-                  "When on, the location above is used until the GPS gets a fix, then it takes over.</div>";
-    }
     static const size_t BUFSZ = 10240;
     static char *buf = (char *)ps_malloc(BUFSZ);   // PSRAM: keep this big page buffer off the scarce
     if (!buf) return;                              //   internal heap (the contiguous RAM mbedTLS needs)
@@ -1443,7 +1520,9 @@ static void handleRoot() {
         "<div id=map></div>"
         "<label>Center latitude</label><input id=lat name=lat value='%.5f'>"
         "<label>Center longitude</label><input id=lon name=lon value='%.5f'>"
-        "%s"
+        // A "Use GPS for location" checkbox sat here on the -G board. Gone with the input
+        // itself: the device has two location sources and no more (UX-025), and a fix that
+        // quietly moved a location the owner had typed in was the manual one not winning.
         "<label>Display range</label><select name=range>%s</select>"
         "<label>Theme</label><select name=theme>%s</select>"
         "<label>Time zone</label><select name=tz>%s</select>"
@@ -1505,7 +1584,6 @@ static void handleRoot() {
         "function u(v){fetch('/units?v='+v+'&save=1')}"
         "function al(v){fetch('/alerts?mode='+v+'&save=1')}"
         "function px(v){fetch('/alerts?prox='+v+'&save=1')}"
-        "function gp(c){fetch('/gps?v='+(c?1:0)+'&save=1')}"
         // auto-pick the visitor's time zone from their browser clock (only if they haven't set one)
         "var TZSET=%d;(function(){if(TZSET)return;"
         "var d=new Date(),j=new Date(d.getFullYear(),0,1).getTimezoneOffset(),"
@@ -1514,7 +1592,7 @@ static void handleRoot() {
         "for(i=0;i<e.options.length;i++){if(+e.options[i].dataset.off===o&&+e.options[i].dataset.dst===s){b=i;break;}}"
         "if(b<0)for(i=0;i<e.options.length;i++){if(+e.options[i].dataset.off===o){b=i;break;}}"
         "if(b>=0)e.selectedIndex=b;})();</script></body></html>",
-        g_settings.homeLat, g_settings.homeLon, gpsRow.c_str(), ropts.c_str(), topts.c_str(),
+        g_settings.homeLat, g_settings.homeLon, ropts.c_str(), topts.c_str(),
         tzopts.c_str(),
         g_brightnessDay, iopts.c_str(), g_showSweep ? "checked" : "",
         g_showAirports ? "checked" : "", g_hideGround ? "checked" : "", maopts.c_str(), g_milOnly ? "checked" : "",
@@ -1567,26 +1645,14 @@ static void handleSave() {
         if (i >= 0 && i < TZOPTS_N) p.putString("tz", TZOPTS[i].tz);
     }
     p.end();
-    // A Launch Kit design can PIN the location (CUSTOM_HAS_RADAR_HOME), and loadSettings()
-    // then overwrites whatever is in the store on every boot. The coordinates above are
-    // written and immediately outranked. Saying "Saved" and nothing else is how a person
-    // ends up typing their address into this box repeatedly, watching the Orb restart, and
-    // concluding the Orb is broken.
-#if CUSTOM_HAS_RADAR_HOME
-    const bool pinned = g_web.hasArg("lat") || g_web.hasArg("lon");
-    if (pinned) Serial.printf("[web] save: location is pinned by the installed design to "
-                              "%.5f, %.5f — the coordinates above were stored but will not "
-                              "be used\n", (double)CUSTOM_RADAR_HOME_LAT, (double)CUSTOM_RADAR_HOME_LON);
-#else
-    const bool pinned = false;
-#endif
-    String page = "<meta http-equiv=refresh content='6;url=/'><body style='background:#06100a;"
-                  "color:#1dff86;font-family:sans-serif;padding:24px'>Saved. Restarting&hellip;";
-    if (pinned) page += "<p style='color:#ffb23c;max-width:34em;line-height:1.5'>Your centre point "
-                        "comes from the design installed on this Orb, so the latitude and longitude "
-                        "here will not take effect. Change it in the design and push it again.</p>";
-    page += "</body>";
-    g_web.send(200, "text/html", page);
+    // The warning that used to be built here is gone with the thing it warned about. A
+    // design could PIN the location, loadSettings() re-applied the pin on every boot, and
+    // the coordinates typed into this box were written and immediately outranked — so this
+    // page had to say "Saved" and then take it back in the next paragraph. Location is the
+    // owner's now, no installed design can outrank it, and "Saved" is simply true.
+    g_web.send(200, "text/html",
+               "<meta http-equiv=refresh content='6;url=/'><body style='background:#06100a;"
+               "color:#1dff86;font-family:sans-serif;padding:24px'>Saved. Restarting&hellip;</body>");
     delay(400);
     ESP.restart();
 }
@@ -1809,19 +1875,6 @@ static void handleRotate() {   // arbitrary clockwise display rotation, applied 
             Preferences p;
             p.begin("capsuleradar", false);
             p.putInt("rotDeg", g_rotation);
-            p.end();
-        }
-    }
-    g_web.send(200, "text/plain", "ok");
-}
-
-static void handleGps() {   // auto-set the centre point from the LC76G GPS (-G variant)
-    if (g_web.hasArg("v")) {
-        g_useGps = g_web.arg("v").toInt() != 0;
-        if (g_web.hasArg("save")) {
-            Preferences p;
-            p.begin("capsuleradar", false);
-            p.putBool("usegps", g_useGps);
             p.end();
         }
     }
@@ -2246,27 +2299,18 @@ void setup() {
         int t = p.getInt("theme", 4);
         g_showSweep = p.getBool("sweep", true);
         g_showAirports = p.getBool("airports", true);
-        // Read only when the active theme has no opinion. This block runs AFTER
-        // applyThemeSettings(), so assigning unconditionally undid the theme's altitude
-        // floor and ground filter a few lines after they were applied: a design could state
-        // both, have them read correctly out of radar_style.json, and still fly the Orb's
-        // own stored values. Same ordering fault the comment above applyThemeSettings
-        // describes for range and aircraft count, which those two were already spared
-        // because nothing re-reads them here.
+        // Read only when the active theme has no opinion, and nothing follows this that
+        // reads them again. Three CUSTOM_RADAR_{HIDEGROUND,MINALT,DEADZONE} blocks used to
+        // sit immediately below and assign unconditionally, which made the guard above
+        // ornamental: applyThemeSettings() applied the theme's altitude floor and ground
+        // filter, and sixty lines later the macros put the last-pushed design's values back
+        // over the top of them. A theme could state both, have both parsed correctly off
+        // the card, see them logged as applied, and still fly neither.
         {
             const theme_style::Radar &rs = theme_style::radar();
             if (rs.hideGround < 0) g_hideGround = p.getBool("hideground", false);
             if (rs.minAltFt   < 0) g_minAltFt   = p.getInt("minalt", 0);
         }
-#if CUSTOM_HAS_RADAR_HIDEGROUND
-        g_hideGround = (bool)CUSTOM_RADAR_HIDEGROUND;   // a pushed design's own Scope settings, same one-shot-per-boot precedent as range/max-aircraft
-#endif
-#if CUSTOM_HAS_RADAR_MINALT
-        g_minAltFt = CUSTOM_RADAR_MINALT;
-#endif
-#if CUSTOM_HAS_RADAR_DEADZONE
-        g_deadZonePx = CUSTOM_RADAR_DEADZONE_PX;   // pushed-design only: there's no device-side control for it, since it's sized against the design's own center artwork
-#endif
         g_milOnly = p.getBool("milonly", false);
         // Migrate the old quarter-turn setting (rot=0..3) without changing existing
         // installations' orientation. New firmware stores actual degrees separately.
@@ -2396,7 +2440,6 @@ void setup() {
 
     imu_begin();       // face-down sleep (no-op if the IMU isn't detected)
     battery_begin();   // AXP2101 (no-op if not detected / no battery)
-    gps_begin();       // LC76G GNSS (no-op if not the -G variant)
     battery_enable_codec_rail();   // power the ES8311 analog rail before audio init
 
     setenv("TZ", g_tz.c_str(), 1); tzset();   // local time for display even before NTP (loadSettings ran above)
@@ -2687,7 +2730,6 @@ void setup() {
     g_web.on("/maxac", handleMaxAc);
     g_web.on("/bigtext", handleBigText);
     g_web.on("/rotate", handleRotate);
-    g_web.on("/gps", handleGps);
     g_web.on("/units", handleUnits);
 #if ORB_OTA_ENABLED
     g_web.on("/update", HTTP_GET, handleUpdatePage);
@@ -2766,7 +2808,6 @@ void loop() {
         const uint32_t until = millis() + 40;
         while (orb_link::transferActive() && (int32_t)(millis() - until) < 0) orb_link::poll();
     }
-    if (g_useGps) gps_poll();       // pull NMEA from the LC76G (only when GPS auto-location is on)
 
     // scheduled reboot after a fresh WiFi config (see setSaveConfigCallback)
     if (g_rebootAtMs && (int32_t)(millis() - g_rebootAtMs) >= 0) { delay(50); ESP.restart(); }
@@ -2962,10 +3003,20 @@ void loop() {
         // freeze but the icon would otherwise stay white.
         const bool feedFresh = wifiUp && (millis() - g_lastFeedOkMs < 18000UL);
         ui_set_status(wifiUp, feedFresh, rssi, clk);
+        // First time WiFi is seen up on a device with no location, ask the network where it
+        // is. Here rather than in setup() because WiFi associates seconds after boot, and
+        // once per boot rather than on a timer because a network that refuses the lookup
+        // will keep refusing it and the owner can always pick a place in Settings instead.
+        static bool s_locateTried = false;
+        if (!s_locateTried && wifiUp && !g_locationSet) {
+            s_locateTried = true;
+            host_locate_if_unset();
+        }
         // Same two facts, said in words on the scope itself. The HUD's amber bars already
         // encode this, but a colour change on a signal icon is not something anyone reads as
         // "somebody else's server is down" — which is what it almost always means.
-        radar::setFeedStatus(wifiUp, (uint32_t)((millis() - g_lastFeedOkMs) / 1000UL));
+        radar::setFeedStatus(wifiUp, (uint32_t)((millis() - g_lastFeedOkMs) / 1000UL),
+                             g_locationSet);
         char net[112];
         if (WiFi.status() == WL_CONNECTED)
             // IP + the active centre point (helps users verify what actually got saved)
@@ -2977,9 +3028,6 @@ void loop() {
         const bool bpresent = battery_present();
         ui_set_battery(battery_percent(), battery_charging(), bpresent);
         g_onBattery = bpresent && !battery_charging();
-        // GPS HUD/Stats: 0 = off/no module (hidden), 1 = acquiring, 2 = fix
-        const int gpsState = (!g_useGps || !gps_present()) ? 0 : (gps_has_fix() ? 2 : 1);
-        ui_set_gps(gpsState, gps_satellites());
         // once NTP has a real fix, persist it to the RTC (core 1 only)
         if (!g_rtcSynced && time(nullptr) > 1700000000L) {
             time_t now = time(nullptr);
@@ -2987,23 +3035,16 @@ void loop() {
             gmtime_r(&now, &utc);
             if (rtc_write(&utc)) { g_rtcSynced = true; Serial.println("[rtc] saved NTP time"); }
         }
-        // GPS auto-location (-G variant): re-centre the radar when the fix moves enough.
-        // Suppressed while a Launch Kit design pins the location — the pushed home is
-        // the source of truth so the Orb keeps matching the editor/simulator exactly.
-#if !CUSTOM_HAS_RADAR_HOME
-        if (g_useGps) {
-            double glat, glon;
-            if (gps_location(&glat, &glon) &&
-                geo::haversineKm(g_settings.homeLat, g_settings.homeLon, glat, glon) > 1.0) {
-                g_settings.homeLat = glat; g_settings.homeLon = glon;   // radar/coastline recenter
-                // re-query the new area — set the radius too (same formula as boot/zoom), or
-                // adsb_task would re-begin with a stale/zero g_requeryKm and fetch 0 aircraft.
-                g_requeryKm = queryRadiusKm();
-                g_requery = true;                                       // adsb_task re-queries the new area
-                Serial.printf("[gps] re-centred to %.4f, %.4f\n", glat, glon);
-            }
-        }
-#endif
+        // GPS used to re-centre the radar from here whenever a fix moved more than a
+        // kilometre. It is gone. UX-025 gives the device two location inputs — the network
+        // it joins, and a location the owner picks in Settings — and says the manual one
+        // always wins; a third input that moved the centre on its own could not be
+        // reconciled with that. UX-026 is blunter still: GPS is never read, on any board,
+        // ever. The LC76G driver stays in the tree (src/gps.cpp) and nothing calls it.
+        //
+        // The live re-centre this block performed was worth keeping, and it did not go: it
+        // is apply_location_live() below, which is what the boot-time lookup uses to move
+        // the scope without a reboot.
     }
 
     // face-down -> screen off (IMU); flip face-up to wake

@@ -34,7 +34,7 @@
 #include "app_theme.h"
 #include "theme_select.h"
 #include "update_ui.h"   // --updateshot, below
-#include "theme_style.h"   // per-theme app roster (theme_style::apps())
+#include "theme_style.h"   // per-theme app roster (apps()) + the scope's operational values (radar())
 #include "settings_view.h"
 #include "custom_boot_target.h"  // CUSTOM_BOOT_TARGET — set by whichever Launch Kit push (clock/splash/radar) ran last
 #include "custom_apps.h"         // CUSTOM_APP_* — which apps a theme flash includes in the menu
@@ -422,19 +422,21 @@ static std::vector<Aircraft> g_mockAcs;
 static std::vector<Aircraft> g_mockInit;
 static RadarSettings g_set;
 
-// Home location for the whole simulator — the Launch Kit design's pushed
-// Latitude/Longitude when a design is active, else config.h's default. The mock
-// aircraft, the scope center, and the live weather/intel/cloud fetches all key
-// off this, so the simulator centers exactly where the editor and the Orb do
-// (Launch Kit is the source of truth for location). Compile-time, the mirror of
-// the device's CUSTOM_HAS_RADAR_HOME override in main.cpp's loadSettings().
-#if CUSTOM_HAS_RADAR_HOME
-static constexpr double SIM_HOME_LAT = CUSTOM_RADAR_HOME_LAT;
-static constexpr double SIM_HOME_LON = CUSTOM_RADAR_HOME_LON;
-#else
-static constexpr double SIM_HOME_LAT = HOME_LAT_DEFAULT;
-static constexpr double SIM_HOME_LON = HOME_LON_DEFAULT;
-#endif
+// Home location for the whole simulator. The mock aircraft, the scope centre, and the live
+// weather/intel/cloud fetches all key off this.
+//
+// The simulator's own, and no longer config.h's HOME_LAT_DEFAULT, which is now a 0,0
+// placeholder the device never draws: on hardware a real location always arrives from the
+// network or from Settings, and there is neither an NVS nor an IP worth looking up on a
+// desktop. So the desktop picks somewhere and says which. Phoenix, because that is where
+// the hardware being compared against sits; ORBLAT/ORBLON below move it for one run, which
+// is how the weather map gets tested from a city that actually has weather.
+//
+// This used to read CUSTOM_RADAR_HOME_LAT/LON when a push had pinned them, mirroring the
+// same override in main.cpp's loadSettings(); both are gone, because where an Orb is
+// standing belongs to whoever owns it rather than to whoever drew its face.
+static constexpr double SIM_HOME_LAT =   33.4484;
+static constexpr double SIM_HOME_LON = -112.0740;
 
 static Aircraft mk(const char *call, const char *hex, double distKm, double brgDeg,
                    float altFt, float track, float gsKt, int sq) {
@@ -479,13 +481,17 @@ static void mock_init() {
     if (const char *e = getenv("ORBLON")) g_set.homeLon = atof(e);
     if (getenv("ORBLAT") || getenv("ORBLON"))
         printf("[sim] home overridden to %.4f, %.4f\n", g_set.homeLat, g_set.homeLon);
-    g_set.rangeKm = RANGE_KM_DEFAULT;
-#if CUSTOM_HAS_RADAR_RANGE
-    g_set.rangeKm = CUSTOM_RADAR_RANGE_KM;   // a pushed design's own Range slider, matching main.cpp
-#endif
-#if CUSTOM_HAS_RADAR_MAXAC
-    radar::setMaxOnScreen(CUSTOM_RADAR_MAXAC);   // a pushed design's own "max aircraft shown" cap, matching main.cpp
-#endif
+    // Range and aircraft cap from the ACTIVE THEME, the same two fields and the same
+    // sentinels main.cpp's applyThemeSettings() reads, rather than from the macros a push
+    // used to weld in. theme_select::init() has already run in main() by the time mock_init
+    // is called, so radar() here is the card's, not the seed defaults'. Without this the
+    // simulator would answer a question about the design in front of it using values from
+    // whichever design was compiled last, which is the whole fault being removed.
+    const theme_style::Radar &trs = theme_style::radar();
+    g_set.rangeKm = (trs.rangeKm > 0.0f) ? trs.rangeKm : (float)RANGE_KM_DEFAULT;
+    if (trs.maxAircraft > 0)
+        radar::setMaxOnScreen(trs.maxAircraft > ADSB_MAX_AIRCRAFT ? ADSB_MAX_AIRCRAFT
+                                                                 : trs.maxAircraft);
     g_set.rotationDeg = 0.0;
     g_mockAcs.clear();
     // in-range (< 50 km)
@@ -499,14 +505,13 @@ static void mock_init() {
     g_mockAcs.push_back(mk("DLH88X",   "402002", 62.0, 300.0, 39000, 120, 455, 2000));
     g_mockAcs.push_back(mk("BAW777",   "403003", 75.0, 200.0, 41000,  20, 480, 3000));
     g_mockAcs.push_back(mk("UAE9",     "404004", 90.0, 110.0, 38000, 290, 490, 4000));
-#if CUSTOM_HAS_RADAR_DEADZONE
-    // A pushed design's center dead zone, matching main.cpp: a pixel radius on
-    // the glass becomes a km radius against the live range, so it clears the
-    // same center artwork whatever the range is. Applied to the mock set itself
-    // rather than per frame, so mock_step()'s respawn can't put traffic back
-    // inside it. Same flat dLat/dLon distance mock_step already uses.
-    if (CUSTOM_RADAR_DEADZONE_PX > 0) {
-        const int    dzPx = CUSTOM_RADAR_DEADZONE_PX > RADAR_R_OUTER_PX ? RADAR_R_OUTER_PX : CUSTOM_RADAR_DEADZONE_PX;
+    // The active theme's centre dead zone, matching main.cpp: a pixel radius on the glass
+    // becomes a km radius against the live range, so it clears the same centre artwork
+    // whatever the range is. Applied to the mock set itself rather than per frame, so
+    // mock_step()'s respawn can't put traffic back inside it. Same flat dLat/dLon distance
+    // mock_step already uses. Was CUSTOM_RADAR_DEADZONE_PX; now deadZonePx off the card.
+    if (trs.deadZonePx > 0) {
+        const int    dzPx = trs.deadZonePx > RADAR_R_OUTER_PX ? RADAR_R_OUTER_PX : trs.deadZonePx;
         const double dzKm = ((double)dzPx / (double)RADAR_R_OUTER_PX) * g_set.rangeKm;
         const double latR = SIM_HOME_LAT * M_PI / 180.0;
         std::vector<Aircraft> kept;
@@ -517,7 +522,6 @@ static void mock_init() {
         }
         g_mockAcs.swap(kept);
     }
-#endif
     g_mockInit = g_mockAcs;
 }
 

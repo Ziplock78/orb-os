@@ -2871,7 +2871,7 @@ void tickSweep() { /* sweep self-animates via lv_timer */ }
 //
 // Only after a real gap: aircraft arrive every ten seconds and a single missed poll is
 // normal, so warning at the first hiccup would train people to ignore this.
-void setFeedStatus(bool wifiUp, uint32_t staleSec) {
+void setFeedStatus(bool wifiUp, uint32_t staleSec, bool locationKnown) {
     if (!s_feedWarn) return;
     // While the big "Loading" box is still up it is already saying this, in more words.
     if (s_loadingPending) { show(s_feedWarn, false); return; }
@@ -2901,7 +2901,15 @@ void setFeedStatus(bool wifiUp, uint32_t staleSec) {
     // full of normal-looking traffic. This is the fix Zion found live, on the device,
     // 2026-08-24. One clock, so the banner and the first dimmed pixel can never disagree
     // about whether anything is stale.
-    if (staleSec >= AC_DIM_START_MS / 1000) msg = "No aircraft data";
+    //
+    // Location outranks staleness, and is checked first for that reason. With no centre
+    // there is nothing to query and therefore never any traffic, so "No aircraft data"
+    // would be perfectly true and completely useless — it describes the symptom of a
+    // device that does not know where it is, and sends the reader to look at the feed.
+    // This still obeys the rule above: whether a location has ever been established is a
+    // fact read straight out of NVS, not a diagnosis of anything.
+    if (!locationKnown) msg = "Location not set\nSettings " LV_SYMBOL_RIGHT " Location";
+    else if (staleSec >= AC_DIM_START_MS / 1000) msg = "No aircraft data";
     // Log only on change: this is called every status tick, and a line per tick would bury
     // the feed diagnostics underneath it.
     static const char *s_shown = nullptr;

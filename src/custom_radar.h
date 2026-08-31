@@ -39,19 +39,17 @@
 #define CUSTOM_CENTER_COLOR 0xB5442E
 #define CUSTOM_CENTER_INNER_RADIUS 2
 #define CUSTOM_CENTER_INNER_COLOR 0x6B8F71
-#define CUSTOM_HAS_RADAR_RANGE 1
-#define CUSTOM_RADAR_RANGE_KM 31.00f
-#define CUSTOM_HAS_RADAR_MAXAC 1
-#define CUSTOM_RADAR_MAXAC 5
-#define CUSTOM_HAS_RADAR_HIDEGROUND 1
-#define CUSTOM_RADAR_HIDEGROUND 1
-#define CUSTOM_HAS_RADAR_MINALT 1
-#define CUSTOM_RADAR_MINALT 1250
-#define CUSTOM_HAS_RADAR_DEADZONE 1
-#define CUSTOM_RADAR_DEADZONE_PX 60
-#define CUSTOM_HAS_RADAR_HOME 1
-#define CUSTOM_RADAR_HOME_LAT 28.538300
-#define CUSTOM_RADAR_HOME_LON -81.379200
+// The scope's operational settings used to be welded in here, and are not any more.
+// CUSTOM_HAS_RADAR_{RANGE,MAXAC,HIDEGROUND,MINALT,DEADZONE} and their five values moved
+// into radar_style.json at THEME_CAPS 34; CUSTOM_HAS_RADAR_HOME and the two coordinates
+// beside them were deleted outright rather than moved, because where an Orb is standing
+// belongs to whoever owns it and not to whoever drew its face.
+//
+// What was here shipped Orlando — 28.538300, -81.379200 — in every binary built from this
+// tree, along with a 31 km range, five aircraft, a 1250 ft floor and a 60 px dead zone. A
+// stranger who flashed it got somebody else's sky and no way to say otherwise. Do not
+// reintroduce this block: a value that belongs to one design does not belong in the
+// firmware every design is flashed onto. See CUT-18.
 #define CUSTOM_RADAR_LAYER_ORDER { 3, 5, 1, 2, 0, 4 }
 #define CUSTOM_RADAR_LAYER_ORDER_N 6
 #ifdef __cplusplus
