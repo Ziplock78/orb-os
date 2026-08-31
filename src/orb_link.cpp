@@ -21,6 +21,7 @@
 #include <esp_heap_caps.h> // heap_caps_get_info for the "mem" command
 #include "radar_view.h"  // debugHideLayer for the "layer" command
 void host_set_poll_override(uint32_t ms);   // main.cpp
+void host_location_reset();                 // main.cpp
 
 namespace orb_link {
 namespace {
@@ -347,6 +348,17 @@ void cmd_sweepms(const char *arg) {
     out_send();
 }
 
+// Reproduce "this Orb has never been located" without a factory reset and without having
+// to find a network with no internet on it. Clears locSet only; coordinates, WiFi, theme
+// and every other setting are untouched. See host_location_reset() in main.cpp for why the
+// cheap version of this test matters.
+void cmd_locreset() {
+    host_location_reset();
+    out_reset();
+    out_fmt("{\"ok\":true,\"locationSet\":false}");
+    out_send();
+}
+
 void cmd_mem() {
     multi_heap_info_t hi;
     heap_caps_get_info(&hi, MALLOC_CAP_INTERNAL);
@@ -582,6 +594,7 @@ void dispatch(char *line) {
     else if (!strcmp(line, "poll"))      cmd_poll(arg);
     else if (!strcmp(line, "layer"))     cmd_layer(arg);
     else if (!strcmp(line, "mem"))       cmd_mem();
+    else if (!strcmp(line, "locreset"))  cmd_locreset();
     else if (!strcmp(line, "sweepms"))   cmd_sweepms(arg);
     else if (!strcmp(line, "get-begin")) cmd_get_begin(arg);
     else if (!strcmp(line, "get-data"))  cmd_get_data();

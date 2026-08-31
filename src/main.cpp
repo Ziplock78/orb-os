@@ -131,6 +131,12 @@ static bool                  g_milOnly      = false;                 // only sho
 // located itself and one legitimately sitting on the compiled default, so a failed lookup
 // showed the default's sky with the same confidence as a real fix.
 static volatile bool         g_locationSet  = false;
+// Has this boot already asked the network where it is? One attempt per boot: a network that
+// refuses the lookup will keep refusing it, and the owner can always pick a place in
+// Settings. File scope rather than a static inside loop() so host_location_reset() below can
+// set it — without that, clearing locSet over the debug channel would fire the retry on the
+// very next tick and the state under test would last about a second.
+static bool                  g_locateTried  = false;
 static int                   g_rotation = 0;                         // clockwise display rotation, 0..359° (web/NVS)
 static int                   g_trailLen = 2;                         // aircraft trails 0=off 1=short 2=med 3=long (web/NVS)
 static int                   g_maxAc = 12;                           // max aircraft drawn on the scope (web/NVS)
@@ -1006,6 +1012,37 @@ static void apply_location_live(double lat, double lon) {
     // stale/zero g_requeryKm and fetches 0 aircraft.
     g_requeryKm = queryRadiusKm();
     g_requery = true;
+}
+
+// Forget that a location was ever established, and nothing else. Debug channel only
+// (`?orb locreset`, see orb_link.cpp).
+//
+// This exists because the only other way to reach the "no location" state is a factory
+// reset plus a network with no route to the internet. That is a bad test harness: it takes
+// minutes, it wipes WiFi and the theme selection which have nothing to do with the thing
+// under test, and it depends on arranging a broken network on purpose — which already cost
+// an evening when a phone hotspot turned out to have working data and the failure path
+// never ran at all.
+//
+// "Location not set" is the promise this firmware makes to a stranger whose lookup failed,
+// and a promise nobody can re-check in seconds is one that quietly rots the next time this
+// code is touched.
+//
+// The coordinates are deliberately left in NVS. locSet is the flag every reader consults,
+// so clearing it alone reproduces exactly what a failed first-boot lookup leaves behind,
+// and leaving the numbers means Settings > Location > Recent can put things back in two
+// clicks. g_locateTried is set so the once-per-boot retry does not immediately undo this;
+// a reboot with WiFi up is the intended way out, along with Settings > Location.
+void host_location_reset() {
+    Preferences p;
+    p.begin("capsuleradar", false);
+    p.putBool("locSet", false);
+    p.end();
+    g_locationSet = false;
+    g_locateTried = true;   // do not re-locate until the next boot
+    Serial.println("[locate] locSet cleared by ?orb locreset — the scope should now read "
+                   "\"Location not set\" and stop polling. Reboot with WiFi up, or use "
+                   "Settings > Location, to restore it.");
 }
 
 // Set home location from the Settings menu and reboot to re-center radar + weather
@@ -3007,9 +3044,8 @@ void loop() {
         // is. Here rather than in setup() because WiFi associates seconds after boot, and
         // once per boot rather than on a timer because a network that refuses the lookup
         // will keep refusing it and the owner can always pick a place in Settings instead.
-        static bool s_locateTried = false;
-        if (!s_locateTried && wifiUp && !g_locationSet) {
-            s_locateTried = true;
+        if (!g_locateTried && wifiUp && !g_locationSet) {
+            g_locateTried = true;
             host_locate_if_unset();
         }
         // Same two facts, said in words on the scope itself. The HUD's amber bars already
