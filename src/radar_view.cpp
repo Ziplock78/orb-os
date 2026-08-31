@@ -2873,6 +2873,27 @@ void tickSweep() { /* sweep self-animates via lv_timer */ }
 // normal, so warning at the first hiccup would train people to ignore this.
 void setFeedStatus(bool wifiUp, uint32_t staleSec, bool locationKnown) {
     if (!s_feedWarn) return;
+    // No location is not a thing that waiting fixes, so it DISMISSES the loading notice
+    // instead of queueing behind it.
+    //
+    // Without this the two states deadlock, and it is the deadlock that matters: the notice
+    // is raised by knobEnter() whenever the scope is empty, and cleared only by update(),
+    // which runs when a poll delivers a snapshot. The poll is gated on having a location.
+    // So an Orb that does not know where it is can never clear the notice, and the early
+    // return below meant the one message that explains why was suppressed by it. The screen
+    // said "Loading aircraft and location data" with a counter ticking upward, for ever,
+    // which is exactly the open-ended wait the charter forbids under S1 — and it was worse
+    // than the plain bug, because the label is deliberately theme-proof so nothing could
+    // style it away either.
+    //
+    // Clearing the flag also releases the sweep (sweep_timer_cb returns early while it is
+    // set), so the dial turns over an empty scope with the banner on it. That is the right
+    // picture: the instrument is alive, the sky is not the problem, and the words say so.
+    if (!locationKnown && s_loadingPending) {
+        s_loadingPending = false;
+        if (s_loading)    show(s_loading, false);
+        if (s_loadTicker) show(s_loadTicker, false);
+    }
     // While the big "Loading" box is still up it is already saying this, in more words.
     if (s_loadingPending) { show(s_feedWarn, false); return; }
     // STATE ONLY, NEVER A CAUSE.
