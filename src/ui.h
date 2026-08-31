@@ -17,7 +17,6 @@ void ui_weather_art_release(void);
 void ui_set_status(bool wifiUp, bool feedOk, int rssi, const char *clock);  // HUD: signal bars (count=RSSI, colour: red=down, amber=stale feed, white=ok) + clock
 void ui_set_battery(int pct, bool charging, bool present);  // top HUD battery indicator
 void ui_set_date(const char *date);  // top HUD date line (e.g. "08 Jun 2026")
-void ui_set_gps(int state, int sats);   // GPS indicator: state 0=off/hidden 1=acquiring 2=fix
 void ui_splash_show(void);  // branded boot splash (auto-fades, covers init time)
 void ui_apply_theme(int theme);  // repaint the HUD chrome to match the active radar theme
 // Range moved to Settings > Range (settings_view.cpp, host_set_range_km). The scope's own

@@ -113,7 +113,13 @@ void setSweepFrameMs(uint32_t ms);
 // small banner naming the actual culprit once a gap is real (45 s), because a blank scope
 // looks the same from the desk whether the network dropped, the firmware wedged, or the
 // feed provider is having a bad night — and it is nearly always the last one.
-void setFeedStatus(bool wifiUp, uint32_t staleSec);
+//
+// locationKnown is the device's NVS "locSet": false means no location has ever been
+// established, which the banner reports INSTEAD of staleness, since a scope with no centre
+// has nothing to be stale about. One banner either way — the screen is allowed exactly one
+// advisory and this is it. The simulator always passes true; it has no NVS and its centre
+// comes from SIM_HOME_LAT / ORBLAT.
+void setFeedStatus(bool wifiUp, uint32_t staleSec, bool locationKnown);
 
 // Replace the "Loading aircraft and location data" notice with the truth, while it is still
 // up. That notice only clears when the first aircraft arrive, so a feed that never answers

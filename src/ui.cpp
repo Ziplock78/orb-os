@@ -76,7 +76,6 @@ static lv_obj_t *s_photo = nullptr, *s_photoCredit = nullptr;   // aircraft phot
 static char s_lastRouteReq[12] = "";
 static lv_obj_t *s_hudWifi = nullptr, *s_hudCount = nullptr, *s_hudClock = nullptr, *s_hudBatt = nullptr, *s_hudDate = nullptr;
 static lv_obj_t *s_hudBars[4] = { nullptr, nullptr, nullptr, nullptr };   // WiFi signal-strength bars
-static lv_obj_t *s_hudGps   = nullptr;   // HUD satellite icon (hidden unless GPS auto-location is on)
 static lv_obj_t *s_weatherNow = nullptr, *s_weatherMeta = nullptr, *s_weatherDays = nullptr;
 static lv_obj_t *s_wxCanvas = nullptr, *s_wxStatus = nullptr, *s_wxAirport = nullptr;
 static lv_obj_t *s_wxPlate = nullptr;
@@ -383,24 +382,6 @@ void ui_set_battery(int pct, bool charging, bool present) {
 
 void ui_set_date(const char *date) {
     if (s_hudDate && date) lv_label_set_text(s_hudDate, date);
-}
-
-// GPS indicator. state: 0 = off / no module (hidden), 1 = acquiring (amber), 2 = fix (green).
-// The fuller "GPS fix, N sats" line this also used to write lived on the Stats screen and
-// went with it; the HUD icon carries the same information in less space.
-void ui_set_gps(int state, int sats) {
-    if (state <= 0) {                                 // hidden when GPS auto-location is off
-        if (s_hudGps) lv_label_set_text(s_hudGps, "");
-        return;
-    }
-    const bool fix = (state >= 2);
-    const lv_color_t col = fix ? UI_GREEN : lv_color_hex(0xFFB23C);   // amber while acquiring
-    if (s_hudGps) {
-        char b[16];
-        snprintf(b, sizeof(b), LV_SYMBOL_GPS "%d", sats);
-        lv_label_set_text(s_hudGps, b);
-        lv_obj_set_style_text_color(s_hudGps, col, 0);
-    }
 }
 
 // The frame the loop is currently sitting on, from the newest (possibly still-filling)
@@ -1196,12 +1177,6 @@ void ui_create(void) {
         lv_obj_clear_flag(s_hudBars[i], LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
     }
 
-    s_hudGps = lv_label_create(s_tileRadar);     // GPS satellite icon (between WiFi bars and count)
-    lv_obj_set_style_text_font(s_hudGps, F14(), 0);
-    lv_obj_set_style_text_color(s_hudGps, UI_GREEN, 0);
-    lv_label_set_text(s_hudGps, "");             // hidden until ui_set_gps() says GPS is on
-    lv_obj_align(s_hudGps, LV_ALIGN_TOP_MID, -62, 50);
-
     s_hudCount = lv_label_create(s_tileRadar);
     lv_obj_set_style_text_font(s_hudCount, F14(), 0);
     lv_obj_set_style_text_color(s_hudCount, UI_INK, 0);
@@ -1233,7 +1208,6 @@ void ui_create(void) {
     // pushed design's own scope has no room reserved for it and never drew it
     // in the editor, so hide it here rather than have it float over the design.
     lv_obj_add_flag(s_hudWifi, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_add_flag(s_hudGps, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(s_hudCount, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(s_hudClock, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(s_hudBatt, LV_OBJ_FLAG_HIDDEN);

@@ -425,13 +425,18 @@ static RadarSettings g_set;
 // Home location for the whole simulator. The mock aircraft, the scope centre, and the live
 // weather/intel/cloud fetches all key off this.
 //
-// It is config.h's default and ORBLAT/ORBLON below, and it is no longer a design's to set.
+// The simulator's own, and no longer config.h's HOME_LAT_DEFAULT, which is now a 0,0
+// placeholder the device never draws: on hardware a real location always arrives from the
+// network or from Settings, and there is neither an NVS nor an IP worth looking up on a
+// desktop. So the desktop picks somewhere and says which. Phoenix, because that is where
+// the hardware being compared against sits; ORBLAT/ORBLON below move it for one run, which
+// is how the weather map gets tested from a city that actually has weather.
+//
 // This used to read CUSTOM_RADAR_HOME_LAT/LON when a push had pinned them, mirroring the
 // same override in main.cpp's loadSettings(); both are gone, because where an Orb is
-// standing belongs to whoever owns it rather than to whoever drew its face. On the device
-// the equivalent of these two is NVS, set from Settings, the setup page, or a GPS fix.
-static constexpr double SIM_HOME_LAT = HOME_LAT_DEFAULT;
-static constexpr double SIM_HOME_LON = HOME_LON_DEFAULT;
+// standing belongs to whoever owns it rather than to whoever drew its face.
+static constexpr double SIM_HOME_LAT =   33.4484;
+static constexpr double SIM_HOME_LON = -112.0740;
 
 static Aircraft mk(const char *call, const char *hex, double distKm, double brgDeg,
                    float altFt, float track, float gsKt, int sq) {

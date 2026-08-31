@@ -7,19 +7,27 @@
 // "1.4.2", said "up to date", and left an Orb missing everything in that list. THEME_CAPS
 // exists because this stopped moving; it covers theme settings and nothing else, so a new
 // command or a deleted screen is invisible to it. Move this too.
-#define FW_VERSION "1.72.0"   // shown on the web config page + Stats screen
+#define FW_VERSION "1.73.1"   // shown on the web config page + Stats screen
 // Edit pins below: replace every -1 with the value from the Waveshare factory demo
 // (see docs/HARDWARE.md and docs/SETUP.md). Do NOT guess them.
 
-// ---------- Home location (default: Phoenix, AZ) ----------
-// Fallback only. Launch Kit is the source of truth for location: a pushed
-// design's Latitude/Longitude (CUSTOM_RADAR_HOME_*) overrides this on both the
-// device and the simulator, and the device also stores a runtime override in
-// NVS via the captive portal. This default is what a fresh device / an
-// un-pushed simulator centers on, kept in sync with Launch Kit's own editor
-// default so all three line up out of the box.
-#define HOME_LAT_DEFAULT   33.4484
-#define HOME_LON_DEFAULT  -112.0740
+// ---------- Home location ----------
+// A PLACEHOLDER, and deliberately not a place. The device has exactly two location inputs
+// (UX-025): the network it joins, looked up at the end of WiFi setup and retried on any
+// later boot that finds none set, and a location the owner picks in Settings, which always
+// wins. Neither is compiled in.
+//
+// This was Phoenix, the owner's own city, and before it a pushed design's coordinates could
+// override even that. Either way a stranger whose lookup had not run yet was shown somebody
+// else's sky with nothing on the dial saying so. Now `locSet` in NVS records whether a real
+// location has ever been established, the Flight Tracker says "Location not set" until one
+// has, and the aircraft feed is not polled at all — so these two numbers are never drawn
+// and never queried. They exist so the projection maths has a valid double to hold.
+//
+// The simulator keeps its own centre (SIM_HOME_LAT in sim_main.cpp, ORBLAT/ORBLON to move
+// it), because there is no NVS on the desktop and nothing to look up an IP against.
+#define HOME_LAT_DEFAULT   0.0
+#define HOME_LON_DEFAULT   0.0
 
 // ---------- Radar ----------
 #define RANGE_KM_DEFAULT    30.0f          // display range (outer ring). Query is wider, see below.
