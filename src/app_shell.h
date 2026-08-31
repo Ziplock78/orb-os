@@ -25,12 +25,29 @@ namespace app_shell {
     // Registration in main.cpp and sim_main.cpp follows this order, and every jump names a
     // slot. To move an app in the menu, move it here and move its add() call to match.
     // Settings stays last: it is the drawer everything else is not.
+    //
+    // APP_TICKER was missing from here for six weeks, and this is the second time this list
+    // has gone out of step with the registration order. The Stock Ticker was added as a
+    // seventh app in 1.58.0 and registered between News and Settings, but nobody added it
+    // to this enum — so APP_SETTINGS stayed 5, which by then was the Ticker. Every
+    // selectApp(APP_SETTINGS) in the tree quietly went to the wrong screen, including the
+    // one at main.cpp's boot that is supposed to open WiFi setup on a device with no
+    // network. The result was an Orb that came up after a factory reset showing the
+    // Ticker's background plate with no quotes on it, no WiFi prompt anywhere, and a knob
+    // captured by a screen nobody could see. Its owner concluded his own product was
+    // frozen. See CUT-03 / UX-022.
+    //
+    // The comment above already warned that moving an app "would have turned selectApp(4)
+    // into the wrong screen on a factory-reset boot", and sim_main.cpp records the same
+    // fault happening once before with APP_INTEL. Two warnings in prose, two occurrences.
+    // So this is now checked at boot rather than trusted: see app_shell::verifySlots().
     enum Slot {
         APP_CLOCK = 0,
         APP_FLIGHT,
         APP_WEATHER,
         APP_SURVEILLANCE,
         APP_INTEL,
+        APP_TICKER,
         APP_SETTINGS,
         APP_COUNT,
     };
