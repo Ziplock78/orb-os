@@ -64,7 +64,7 @@ namespace {
     enum Mode { MODE_MENU, MODE_DISPLAY, MODE_BRIGHT, MODE_LOCATION, MODE_RECENT, MODE_SEARCH, MODE_SOUND, MODE_VOLUME, MODE_ABOUT,
                 MODE_WIFI_LIST, MODE_WIFI_PASSWORD, MODE_WIFI_STATUS, MODE_RESET_CONFIRM, MODE_UNITS, MODE_CHIME_SELECT,
                 MODE_THEME_SELECT, MODE_THEME_NOTICE, MODE_DESIGN_SELECT, MODE_DESIGN_NOTICE, MODE_RANGE,
-                MODE_FIRSTBOOT, MODE_FIRSTBOOT_PHONE };
+                MODE_FIRSTBOOT, MODE_FIRSTBOOT_PHONE, MODE_NO_SDCARD };
 
     // --- main settings menu ---
     // ITEM_RANGE was added when touch (and with it the on-screen zoom button) was
@@ -274,7 +274,19 @@ namespace {
     lv_obj_t *s_fbHl    = nullptr;
     lv_obj_t *s_fbItems[FB_COUNT] = { nullptr, nullptr };
     int       s_fbSel   = FB_ONDEVICE;
+    // Set when boot wanted the WiFi choice but the card notice had to come first.
+    bool      s_pendingWifiSetup = false;
     lv_obj_t *s_fbPhonePage = nullptr;
+
+    // --- no readable SD card (UX-024) ---
+    //
+    // Dismissible with a press, deliberately. UX-024 asks the Orb to SAY it needs a card,
+    // in words rather than an error code; it does not ask it to refuse to run, and UX-041
+    // says a screen the owner cannot turn away from is its own fault. The device does in
+    // fact still work without a card — it falls back to the flash-baked artwork — so
+    // trapping somebody on this notice would break a working Orb to report a degraded one.
+    // Said once, unmissably, at the only moment it is actionable.
+    lv_obj_t *s_noSdPage = nullptr;
 
     lv_obj_t *s_resetPage = nullptr;   // Reset: warning + confirm, push to wipe, turn to cancel
 
@@ -656,6 +668,7 @@ namespace {
         lv_obj_add_flag(s_resetPage, LV_OBJ_FLAG_HIDDEN);
         lv_obj_add_flag(s_fbPage, LV_OBJ_FLAG_HIDDEN);
         lv_obj_add_flag(s_fbPhonePage, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_add_flag(s_noSdPage, LV_OBJ_FLAG_HIDDEN);
         lv_obj_add_flag(s_wifiListPage, LV_OBJ_FLAG_HIDDEN);
         lv_obj_add_flag(s_wifiPassPage, LV_OBJ_FLAG_HIDDEN);
         lv_obj_add_flag(s_wifiStatusPage, LV_OBJ_FLAG_HIDDEN);
@@ -678,6 +691,7 @@ namespace {
         else if (m == MODE_RESET_CONFIRM) { lv_obj_clear_flag(s_resetPage, LV_OBJ_FLAG_HIDDEN); }
         else if (m == MODE_FIRSTBOOT)       { lv_obj_clear_flag(s_fbPage, LV_OBJ_FLAG_HIDDEN); refresh_firstboot(); }
         else if (m == MODE_FIRSTBOOT_PHONE) { lv_obj_clear_flag(s_fbPhonePage, LV_OBJ_FLAG_HIDDEN); }
+        else if (m == MODE_NO_SDCARD)       { lv_obj_clear_flag(s_noSdPage, LV_OBJ_FLAG_HIDDEN); }
         else if (m == MODE_WIFI_LIST)     { lv_obj_clear_flag(s_wifiListPage, LV_OBJ_FLAG_HIDDEN); refresh_wifi_list(); }
         else if (m == MODE_WIFI_PASSWORD) { lv_obj_clear_flag(s_wifiPassPage, LV_OBJ_FLAG_HIDDEN); refresh_wifi_pass(); }
         else if (m == MODE_WIFI_STATUS)   { lv_obj_clear_flag(s_wifiStatusPage, LV_OBJ_FLAG_HIDDEN); }
@@ -997,6 +1011,13 @@ void settingsview::onPress() {
         } else {
             show_page(MODE_FIRSTBOOT_PHONE);
         }
+        return;
+    }
+    if (s_mode == MODE_NO_SDCARD) {
+        // Said once. Where it goes next is whatever the boot would have shown anyway: the
+        // WiFi choice if there is also no network, otherwise out to the app switcher.
+        if (s_pendingWifiSetup) { s_pendingWifiSetup = false; s_fbSel = FB_ONDEVICE; show_page(MODE_FIRSTBOOT); }
+        else { app_shell::setCaptured(false); app_shell::openSwitcher(); }
         return;
     }
     if (s_mode == MODE_FIRSTBOOT_PHONE) {
@@ -1357,6 +1378,39 @@ void settingsview::init() {
     lv_obj_set_style_text_color(fpBack, C_GREY, 0);
     lv_obj_set_style_text_font(fpBack, &lv_font_montserrat_20, 0);
     lv_obj_align(fpBack, LV_ALIGN_CENTER, 0, 120);
+
+    // --- no readable SD card ---
+    s_noSdPage = lv_obj_create(s_screen);
+    lv_obj_remove_style_all(s_noSdPage);
+    lv_obj_set_size(s_noSdPage, SCREEN_W, SCREEN_H); lv_obj_center(s_noSdPage);
+    lv_obj_set_style_bg_color(s_noSdPage, lv_color_black(), 0);
+    lv_obj_set_style_bg_opa(s_noSdPage, LV_OPA_COVER, 0);
+    lv_obj_clear_flag(s_noSdPage, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_t *sdTitle = lv_label_create(s_noSdPage);
+    // The same voice as "The Orb needs WiFi", on purpose: these are the two things it can
+    // be missing, and a person who meets both should not have to learn two tones.
+    lv_label_set_text(sdTitle, "The Orb needs\nan SD card");
+    lv_obj_set_style_text_color(sdTitle, lv_color_white(), 0);
+    lv_obj_set_style_text_font(sdTitle, &lv_font_montserrat_20, 0);
+    lv_obj_set_style_text_align(sdTitle, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_align(sdTitle, LV_ALIGN_CENTER, 0, -60);
+    // Why, in one line. UX-006: nothing on screen is unexplained. Without this the notice
+    // is a demand with no reason attached, which is the shape of an error code in words.
+    lv_obj_t *sdWhy = lv_label_create(s_noSdPage);
+    lv_label_set_text(sdWhy, "Designs live on the card.");
+    lv_obj_set_style_text_color(sdWhy, C_DIM, 0);
+    lv_obj_set_style_text_font(sdWhy, &lv_font_montserrat_16, 0);
+    lv_obj_align(sdWhy, LV_ALIGN_CENTER, 0, 16);
+    lv_obj_t *sdHow = lv_label_create(s_noSdPage);
+    lv_label_set_text(sdHow, "Insert one and restart.");
+    lv_obj_set_style_text_color(sdHow, lv_color_white(), 0);
+    lv_obj_set_style_text_font(sdHow, &lv_font_montserrat_16, 0);
+    lv_obj_align(sdHow, LV_ALIGN_CENTER, 0, 46);
+    lv_obj_t *sdHint = lv_label_create(s_noSdPage);
+    lv_label_set_text(sdHint, "push to carry on without one");
+    lv_obj_set_style_text_color(sdHint, C_GREY, 0);
+    lv_obj_set_style_text_font(sdHint, &lv_font_montserrat_14, 0);
+    lv_obj_align(sdHint, LV_ALIGN_CENTER, 0, 130);
 
     // --- recent cities page (single-item scroller) ---
     s_recPage = lv_obj_create(s_screen);
@@ -1821,6 +1875,16 @@ lv_obj_t *settingsview::screen() { return s_screen; }
 // Called once from main.cpp's setup() when the device booted with the "needs WiFi
 // setup" flag set (fresh out of the box, or just after a Reset) — jumps straight past
 // the main menu into the WiFi list with a first-run prompt instead of the usual hint.
+// UX-024. `alsoNeedsWifi` chains the two notices rather than letting one hide the other: a
+// device out of the box with neither card nor network is missing two things and should say
+// both, in the order they have to be fixed. The card comes first because it is the one that
+// needs somebody to go and find a physical object.
+void settingsview::openNoSdCardNotice(bool alsoNeedsWifi) {
+    s_pendingWifiSetup = alsoNeedsWifi;
+    s_sel = ITEM_WIFI;
+    show_page(MODE_NO_SDCARD);
+}
+
 void settingsview::openWifiSetupPrompt() {
     // The choice screen first, not the scan. Both paths lead somewhere that works, and the
     // on-device one is pre-selected so the default is still a single press — see the

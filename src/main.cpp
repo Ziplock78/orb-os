@@ -2564,7 +2564,21 @@ void setup() {
     // through scan/pick/password on the screen itself, and the same moment the portal is
     // up on "The Orb Setup" for anyone who would rather type on a phone.
     if (!wifiUp) wantWifiSetup = true;
-    if (wantWifiSetup) {
+    // UX-024, and it comes before the WiFi choice on purpose. Both are things the Orb is
+    // missing, and the card is the one that needs somebody to go and find a physical
+    // object, so it is the one worth saying while they are still standing at the desk.
+    //
+    // The notice is dismissible and the boot continues either way: the device really does
+    // run without a card, on the flash-baked artwork, so refusing to start would break a
+    // working Orb in order to report a degraded one. What it must not do is stay silent,
+    // which is what it did until now — sdcard::begin() returned false, printed one line to
+    // a serial port nobody was watching, and the owner was left to work out for themselves
+    // why no design would install.
+    if (!sdcard::mounted()) {
+        app_shell::selectApp(app_shell::APP_SETTINGS);
+        app_shell::setCaptured(true);
+        settingsview::openNoSdCardNotice(wantWifiSetup);   // chains into WiFi setup if that is owed too
+    } else if (wantWifiSetup) {
         app_shell::selectApp(app_shell::APP_SETTINGS);
         app_shell::setCaptured(true);   // Settings captures the knob on entry; match that
         settingsview::openWifiSetupPrompt();

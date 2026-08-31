@@ -1318,6 +1318,12 @@ int main(int argc, char **argv) {
             lv_timer_handler(); lv_refr_now(NULL);
             snprintf(path, sizeof(path), "%s-2-phone", wifiShot);
             sim_save_frame(path);
+            // UX-024's notice, captured from the same run: on hardware it needs a device
+            // with the card physically pulled, which is a worse way to check a layout.
+            settingsview::openNoSdCardNotice(false);
+            lv_timer_handler(); lv_refr_now(NULL);
+            snprintf(path, sizeof(path), "%s-3-nosd", wifiShot);
+            sim_save_frame(path);
             run = false;
         }
         if ((updateShot || readyShot || bakeShot) && !updateSaved && now - start > 1800) {

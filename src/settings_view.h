@@ -15,6 +15,7 @@ namespace settingsview {
     // Called once from main.cpp's setup() after a fresh boot or a Reset — jumps straight
     // into WiFi setup with a first-run prompt instead of the normal menu/hint.
     void      openWifiSetupPrompt();
+    void      openNoSdCardNotice(bool alsoNeedsWifi);   // UX-024; push dismisses
 
     // Called once from main.cpp's setup() when a Launch Kit push left a custom
     // splash active — jumps straight to the About page (the same splash art,
