@@ -306,6 +306,32 @@ namespace {
     // Said once, unmissably, at the only moment it is actionable.
     lv_obj_t *s_noSdPage = nullptr;
 
+    // Is the page currently on screen part of the path from "no network" to "network"?
+    // Those screens are SYSTEM CHROME: fixed white on black, the compiled font, no theme
+    // lookups at all. Everything else in Settings stays themed as before.
+    //
+    // Three reasons, and the third is the one that decides it.
+    //
+    // A theme can wreck the layout, which is the obvious one. Themes live on the SD card,
+    // and this path is reachable when there is no readable card at all — the no-card notice
+    // most of all — so styling it from theme data is a recovery screen depending on a file
+    // whose absence is the thing being recovered from. And there is no way out: a theme that
+    // renders these screens illegibly can only be changed from Settings, which needs a
+    // working device, which needs setup. A bad theme would strand a stranger with no path
+    // back and nothing on screen to explain why.
+    //
+    // The network list and the character strip are reachable from Settings on a working
+    // device too, so they are unthemed there as well. That is deliberate rather than a side
+    // effect: they are recovery surfaces and it is honest for them to look like it.
+    //
+    // The splash is NOT in this set even though it precedes setup. It is decorative and
+    // transient, and a splash that renders badly still lets you reach everything below.
+    bool s_systemChrome = false;
+    bool mode_is_system_chrome(Mode m) {
+        return m == MODE_NO_SDCARD  || m == MODE_FIRSTBOOT      || m == MODE_FIRSTBOOT_PHONE
+            || m == MODE_WIFI_LIST  || m == MODE_WIFI_PASSWORD  || m == MODE_WIFI_STATUS;
+    }
+
     lv_obj_t *s_resetPage = nullptr;   // Reset: warning + confirm, push to wipe, turn to cancel
 
     // WiFi setup pages (encoder-driven, same look as the rest of Settings)
@@ -339,6 +365,13 @@ namespace {
     // matching wheel_layout()'s own already-shared color/shape.
     void style_highlight(lv_obj_t *hl) {
         lv_obj_remove_style_all(hl);
+        if (s_systemChrome) {   // setup path: fixed, so no theme can hide the selection
+            lv_obj_set_size(hl, 300, 44);
+            lv_obj_set_style_radius(hl, 10, 0);
+            lv_obj_set_style_bg_color(hl, C_HL, 0);
+            lv_obj_set_style_bg_opa(hl, LV_OPA_COVER, 0);
+            return;
+        }
 #if CUSTOM_HAS_SETTINGS
         const theme_style::Settings &ss = theme_style::settings();
         lv_obj_set_size(hl, ss.hlW, ss.hlH);
@@ -409,6 +442,16 @@ namespace {
             if      (ad == 0) font = &lv_font_montserrat_20;
             else if (ad == 1) font = &lv_font_montserrat_16;
             else              font = &lv_font_montserrat_14;
+            if (s_systemChrome) {
+                // Same drawing the stock build uses, and deliberately not the theme's: a
+                // theme that set itemOpa low or its colours to black would make the way out
+                // of this screen invisible, and this is the one screen nobody can leave to
+                // go and change the theme.
+                lv_obj_set_style_text_font(items[i], font, 0);
+                lv_obj_set_style_text_opa(items[i], opa, 0);
+                lv_obj_set_style_text_color(items[i], i == sel ? C_WHITE : C_GREY, 0);
+                continue;
+            }
 #if CUSTOM_HAS_SETTINGS
           // The theme's own opacity for this row, MULTIPLIED into the wheel's distance fade
           // rather than replacing it. The fade is what makes the wheel read as a wheel; a
@@ -656,6 +699,8 @@ namespace {
 
     void show_page(Mode m) {
         s_mode = m;
+        // Before the refresh_*() calls below, which is where the drawing decisions happen.
+        s_systemChrome = mode_is_system_chrome(m);
         // The wheel-list text canvas (settings_text) is the topmost child of
         // s_screen — drawn over whichever page is visible — but it's only ever
         // cleared inside wheel_layout(), called from each *list* page's own
