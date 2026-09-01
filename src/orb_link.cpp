@@ -22,6 +22,8 @@
 #include "radar_view.h"  // debugHideLayer for the "layer" command
 void host_set_poll_override(uint32_t ms);   // main.cpp
 void host_location_reset();                 // main.cpp
+void host_wifi_saved_ssid(char *out, size_t n);   // main.cpp — NAME only, never the password
+void host_wifi_restore_saved();                   // main.cpp — put the backed-up network back
 
 namespace orb_link {
 namespace {
@@ -359,6 +361,34 @@ void cmd_locreset() {
     out_send();
 }
 
+// The stored network's name, so a failed-attempt test can be run and checked without a
+// reboot and without anybody reading a secret off a wire. Deliberately name-only: the
+// question this answers is "is the owner's network still there", and the password is not
+// part of that answer.
+void cmd_wifisaved() {
+    char ssid[40];
+    host_wifi_saved_ssid(ssid, sizeof(ssid));
+    out_reset();
+    out_str("{\"ok\":true,\"saved\":");
+    out_json_string(ssid);
+    out_str("}");
+    out_send();
+}
+
+// The safety net for testing the one above. If a failed attempt does destroy the stored
+// network despite the backup, this puts it back from our own namespace without the owner
+// having to type a password again — which is the thing that has now cost him two evenings.
+void cmd_wifirestore() {
+    host_wifi_restore_saved();
+    char ssid[40];
+    host_wifi_saved_ssid(ssid, sizeof(ssid));
+    out_reset();
+    out_str("{\"ok\":true,\"saved\":");
+    out_json_string(ssid);
+    out_str("}");
+    out_send();
+}
+
 void cmd_mem() {
     multi_heap_info_t hi;
     heap_caps_get_info(&hi, MALLOC_CAP_INTERNAL);
@@ -595,6 +625,8 @@ void dispatch(char *line) {
     else if (!strcmp(line, "layer"))     cmd_layer(arg);
     else if (!strcmp(line, "mem"))       cmd_mem();
     else if (!strcmp(line, "locreset"))  cmd_locreset();
+    else if (!strcmp(line, "wifisaved")) cmd_wifisaved();
+    else if (!strcmp(line, "wifirestore")) cmd_wifirestore();
     else if (!strcmp(line, "sweepms"))   cmd_sweepms(arg);
     else if (!strcmp(line, "get-begin")) cmd_get_begin(arg);
     else if (!strcmp(line, "get-data"))  cmd_get_data();

@@ -46,6 +46,7 @@ extern void host_wifi_scan_start();
 extern int  host_wifi_scan_result(char names[][33], int8_t *rssi, bool *isOpen, int maxN);
 extern void host_wifi_connect(const char *ssid, const char *pass);
 extern void host_wifi_commit_credentials(const char *ssid, const char *pass);  // only once associated
+extern void host_wifi_restore_saved();   // put the previous network back after a failed attempt
 extern int  host_wifi_connect_status();
 extern void host_wifi_connected_reboot();
 extern void host_factory_reset();          // wipes WiFi + all saved settings, reboots
@@ -953,6 +954,41 @@ namespace {
             // that has to be truly readable, and it was the same size as its neighbours.
             lv_obj_set_style_text_font(s_wkStrip[k], hot ? &lv_font_montserrat_44 : &lv_font_montserrat_22, 0);
         }
+        // Position from MEASURED widths, not a fixed pitch.
+        //
+        // These sat on a 48 px pitch set once when the page was built, which is right for
+        // single glyphs and wrong for DEL, OK and Back — they are words, so they are wider
+        // than any character even at the small size, and the selected one at 44 px is wider
+        // still. The three of them are adjacent at the end of the strip, so scrolling into
+        // them put a large OK straight through DEL on one side and Back on the other.
+        //
+        // Measuring and walking outward from the selected cell handles any mix of widths,
+        // so a longer key label later cannot bring this back.
+        {
+            constexpr int GAP = 18;      // clear space between neighbouring keys, px
+            constexpr int Y   = 20;      // the strip's line, unchanged
+            int w[7];
+            for (int k = 0; k < 7; ++k) {
+                lv_point_t sz;
+                lv_txt_get_size(&sz, lv_label_get_text(s_wkStrip[k]),
+                                (k == 3) ? &lv_font_montserrat_44 : &lv_font_montserrat_22,
+                                0, 0, LV_COORD_MAX, LV_TEXT_FLAG_NONE);
+                w[k] = sz.x;
+            }
+            lv_obj_align(s_wkStrip[3], LV_ALIGN_CENTER, 0, Y);
+            int edge = w[3] / 2;                       // outward to the right
+            for (int k = 4; k < 7; ++k) {
+                const int cx = edge + GAP + w[k] / 2;
+                lv_obj_align(s_wkStrip[k], LV_ALIGN_CENTER, cx, Y);
+                edge = cx + w[k] / 2;
+            }
+            edge = -w[3] / 2;                          // and to the left
+            for (int k = 2; k >= 0; --k) {
+                const int cx = edge - GAP - w[k] / 2;
+                lv_obj_align(s_wkStrip[k], LV_ALIGN_CENTER, cx, Y);
+                edge = cx - w[k] / 2;
+            }
+        }
     }
 
     void start_wifi_scan() {
@@ -1015,6 +1051,10 @@ namespace {
             }
             if (st == 0) return;                        // still connecting
             s_wifiConnecting = false;
+            // Failed or timed out: give the owner back the network they had. host_wifi_connect
+            // stashed it before the attempt, precisely so a wrong password on somebody else's
+            // SSID cannot cost them their own. Costs nothing when there was nothing stored.
+            if (st != 1) host_wifi_restore_saved();
             if (st == 1) {
                 // Associated, so the credentials are finally a fact and can be written. Up
                 // to here WiFi.persistent(false) has kept the previously saved network

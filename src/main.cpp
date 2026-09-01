@@ -1421,9 +1421,71 @@ int host_wifi_scan_result(char names[][33], int8_t *rssi, bool *isOpen, int maxN
 // portal with its good credentials already gone." That call site was fixed and the lesson
 // written down. This one reintroduced it from Settings, because the lesson lived in a
 // comment beside the old caller rather than in the function every caller goes through.
+// Copy whatever network is currently stored into OUR namespace, before anything is allowed
+// to disturb it. Restored by host_wifi_restore_credentials() if the attempt fails.
+//
+// This exists because the previous fix did not work and cost its owner a second setup. That
+// one set WiFi.persistent(false) before WiFi.begin(), on the understanding that begin()
+// would then leave the stored config alone. Whatever the driver actually does, it is not
+// that: a failed attempt against a neighbour's network still destroyed a working one.
+//
+// So this does not reason about the driver at all. capsuleradar is our namespace and nothing
+// in the WiFi stack touches it, so a copy kept there survives whatever begin() decides to do
+// to nvs.net80211. The password is written alongside the SSID; it already lives in plain
+// form in the driver's own namespace on the same flash, so this moves no secret anywhere it
+// was not already, and it is never logged.
+static void wifi_backup_credentials() {
+    wifi_config_t cur = {};
+    if (esp_wifi_get_config(WIFI_IF_STA, &cur) != ESP_OK) return;
+    if (cur.sta.ssid[0] == '\0') return;          // nothing stored yet, nothing to protect
+    Preferences p;
+    p.begin("capsuleradar", false);
+    p.putString("wifiBakSsid", (const char *)cur.sta.ssid);
+    p.putString("wifiBakPass", (const char *)cur.sta.password);
+    p.end();
+    Serial.printf("[wifi] stored network '%s' backed up before the attempt\n",
+                  (const char *)cur.sta.ssid);
+}
+
+// Put it back. Called when an attempt fails or times out, so a wrong password on somebody
+// else's network can never cost the owner the network they had.
+static void wifi_restore_credentials() {
+    Preferences p;
+    p.begin("capsuleradar", true);
+    const String ssid = p.getString("wifiBakSsid", "");
+    const String pass = p.getString("wifiBakPass", "");
+    p.end();
+    if (ssid.isEmpty()) return;
+    WiFi.persistent(true);
+    WiFi.begin(ssid.c_str(), pass.c_str());
+    Serial.printf("[wifi] attempt failed; restored '%s'\n", ssid.c_str());
+}
+
+static void wifi_clear_backup() {
+    Preferences p;
+    p.begin("capsuleradar", false);
+    p.remove("wifiBakSsid");
+    p.remove("wifiBakPass");
+    p.end();
+}
+
+// The stored network's NAME, for ?orb wifisaved. Never the password: the point of the
+// command is to let a failed attempt be tested without a reboot and without anybody having
+// to read a secret off a screen or a serial line.
+void host_wifi_saved_ssid(char *out, size_t n) {
+    wifi_config_t cur = {};
+    out[0] = '\0';
+    if (esp_wifi_get_config(WIFI_IF_STA, &cur) == ESP_OK)
+        snprintf(out, n, "%s", (const char *)cur.sta.ssid);
+}
+
+void host_wifi_restore_saved() { wifi_restore_credentials(); }
+void host_wifi_forget_backup() { wifi_clear_backup(); }
+
 void host_wifi_connect(const char *ssid, const char *pass) {
     if (g_wm.getConfigPortalActive()) g_wm.stopConfigPortal();   // hand off cleanly
-    WiFi.persistent(false);   // candidate only — do not touch what is already stored
+    wifi_backup_credentials();   // the actual protection; see above
+    WiFi.persistent(false);      // belt as well as braces, on the chance it does help
     WiFi.begin(ssid, pass);
 }
 
@@ -1436,6 +1498,7 @@ void host_wifi_connect(const char *ssid, const char *pass) {
 // the link for a moment, and the caller's very next act is either an HTTP location lookup or
 // a reboot — neither of which wants to run through a reconnect.
 void host_wifi_commit_credentials(const char *ssid, const char *pass) {
+    wifi_clear_backup();     // it took, so there is nothing left to fall back to
     WiFi.persistent(true);
     WiFi.begin(ssid, pass);
     const uint32_t until = millis() + 3000;
@@ -2619,6 +2682,11 @@ void setup() {
     // failures, which is exactly the case that stranded the device — but it recovers the
     // common brief blip without waiting for the 20 s retry.
     WiFi.setAutoReconnect(true);
+    // BOUNDED. There was no connect timeout at all, so autoConnect blocked for the library
+    // default while the screen above promised "up to twenty seconds" — measured at about
+    // forty-five on the bench. Twelve is comfortably more than a healthy association needs
+    // and is the number the boot screen can honestly stand behind.
+    g_wm.setConnectTimeout(12);
     const bool wifiUp = g_wm.autoConnect("The Orb Setup");
     if (wifiUp) Serial.println("[wifi] connected");
     else        Serial.println("[wifi] config portal open - join 'The Orb Setup' to set WiFi; UI stays live");
@@ -2627,7 +2695,25 @@ void setup() {
     // clock that cannot tell the time. Both routes are open from here: the knob walks
     // through scan/pick/password on the screen itself, and the same moment the portal is
     // up on "The Orb Setup" for anyone who would rather type on a phone.
-    if (!wifiUp) wantWifiSetup = true;
+    // "Did not connect just now" and "was never configured" are different things, and this
+    // line treated them as the same one. An Orb with a good saved network that was merely
+    // slow, or whose router was still waking up, got sent to the setup screen and asked to
+    // configure something it already knew — which is what happened on the bench: it gave up,
+    // showed setup, and then reconnected on its own moments later.
+    //
+    // The comment fifteen lines above already said the right test is WiFiManager's own
+    // getWiFiSSID(), and warned against exactly this. It is the right test because it reads
+    // what is STORED rather than what happened in the last few seconds.
+    //
+    // With a network stored and simply not up, the Flight Tracker's "No WiFi" banner says so
+    // and WiFi.setAutoReconnect keeps trying, which is the honest pair: report the state,
+    // keep working on it, and do not demand setup for something already set up.
+    const bool haveStoredNetwork = g_wm.getWiFiSSID(true).length() > 0;
+    if (!wifiUp && !haveStoredNetwork) wantWifiSetup = true;
+    if (!wifiUp && haveStoredNetwork)
+        Serial.printf("[wifi] '%s' is stored but did not come up in time; reconnecting in the "
+                      "background rather than asking for setup\n",
+                      g_wm.getWiFiSSID(true).c_str());
     // UX-024, and it comes before the WiFi choice on purpose. Both are things the Orb is
     // missing, and the card is the one that needs somebody to go and find a physical
     // object, so it is the one worth saying while they are still standing at the desk.

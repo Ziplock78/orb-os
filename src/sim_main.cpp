@@ -186,6 +186,9 @@ void host_wifi_connect(const char *, const char *) {}
 // No NVS and no radio here, so there is nothing to protect and nothing to commit. The
 // device version is where the work is: see host_wifi_connect() in main.cpp.
 void host_wifi_commit_credentials(const char *, const char *) {}
+void host_wifi_restore_saved() {}
+void host_wifi_forget_backup() {}
+void host_wifi_saved_ssid(char *out, size_t n) { snprintf(out, n, "%s", ""); }
 int  host_wifi_connect_status() { return 0; }
 void host_wifi_connected_reboot() {}
 void host_factory_reset() {}
@@ -1378,10 +1381,20 @@ int main(int argc, char **argv) {
             // ...and the password strip, part way through a word, with a letter selected.
             settingsview::onPress();                  // pick the highlighted network
             for (int i = 0; i < 6; ++i) { SDL_Delay(40); lv_tick_inc(40); lv_timer_handler(); }
-            for (int i = 0; i < 7; ++i) { settingsview::onTurn(1); settingsview::onPress(); }
-            settingsview::onTurn(5);                  // land on a letter, not DEL/OK/Back
+            // OK selected, with DEL and Back either side of it. Deterministic because the
+            // strip index is 0 on entry and the strip wraps: two detents left is Back, then
+            // OK. This is the frame that shows whether the three word-keys crowd each other,
+            // which a strip of single letters never would.
+            settingsview::onTurn(-1); settingsview::onTurn(-1);
             lv_timer_handler(); lv_refr_now(NULL);
-            snprintf(path, sizeof(path), "%s-6-password", wifiShot);
+            snprintf(path, sizeof(path), "%s-6-password-ok", wifiShot);
+            sim_save_frame(path);
+            // ...and part way through a word, with a letter selected.
+            settingsview::onTurn(1); settingsview::onTurn(1);   // back to the letters
+            for (int i = 0; i < 7; ++i) { settingsview::onTurn(1); settingsview::onPress(); }
+            settingsview::onTurn(5);
+            lv_timer_handler(); lv_refr_now(NULL);
+            snprintf(path, sizeof(path), "%s-7-password-letter", wifiShot);
             sim_save_frame(path);
             run = false;
         }
