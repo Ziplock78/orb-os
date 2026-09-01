@@ -110,11 +110,57 @@ namespace {
     // A Launch Kit push overrides these five per the active SD theme (theme_style.h)
     // — same identifiers, resolved at each reference now instead of baked in as a
     // single shared compile-time constant (see DEFAULT_SEL above for why).
-    #define WHEEL_R        (theme_style::settings().wheelR)        // virtual wheel radius, px
-    #define WHEEL_RX       (theme_style::settings().wheelRx)       // horizontal recede at the far edge, px
-    #define WHEEL_STEP_DEG (theme_style::settings().wheelStepDeg)  // angle per item away from the selection
-    #define WHEEL_CY       (theme_style::settings().wheelCy)       // vertical offset of the stationary highlight/list center, px (0 = dead center)
-    #define WHEEL_FADE     (theme_style::settings().wheelFade)     // opacity falloff steepness — see wheel_layout()'s opa line
+    // Every drawing value a Settings page uses, from ONE place, because the alternative was
+    // tried and it lost. Rule six in CLAUDE.md: when something must never happen, make the
+    // shared path enforce it — a warning beside one call site protects one call site.
+    //
+    // The first pass at making setup screens theme-proof guarded the two spots where the
+    // fault had been noticed, wheel_layout() and style_highlight(). It missed the wheel's
+    // GEOMETRY, which is equally the theme's, and it missed the plate and the glass
+    // entirely — so the network list still drew a themed background, which is what Zion
+    // found next. Guarding the noticed spots is exactly the mistake rule six describes.
+    //
+    // So the theme is no longer reachable from a drawing site at all: everything reads
+    // chrome(), and on the setup path chrome() cannot return theme data. Somebody adding a
+    // setup screen later reaches for chrome() because it is what every neighbour uses, and
+    // is correct without knowing why.
+    struct Chrome {
+        float    wheelR, wheelRx, wheelStepDeg, wheelCy, wheelFade;
+        uint32_t itemColor, selColor, itemGlowColor, selGlowColor;
+        int      itemOpa, selOpa, itemGlow, selGlow;
+        int      hlW, hlH, hlRadius, hlOpacity;
+        uint32_t hlColor;
+        bool     hlShow;
+        bool     themed;   // false on the setup path; see mode_is_system_chrome()
+    };
+    bool s_systemChromeFwd();   // defined with the flag below
+    const Chrome &chrome() {
+        // Fixed, and deliberately the stock values rather than a copy of any theme's.
+        static const Chrome SYSTEM = {
+            150.0f, 26.0f, 26.0f, 0.0f, 1.0f,
+            0xC8D0DA, 0xFFFFFF, 0x000000, 0x000000,
+            255, 255, 0, 0,
+            300, 44, 10, 255,
+            0x2A2E33,
+            true,
+            false,
+        };
+        if (s_systemChromeFwd()) return SYSTEM;
+        static Chrome t;
+        const theme_style::Settings &ss = theme_style::settings();
+        t = Chrome{ (float)ss.wheelR, (float)ss.wheelRx, (float)ss.wheelStepDeg,
+                    (float)ss.wheelCy, (float)ss.wheelFade,
+                    ss.itemColor, ss.selColor, ss.itemGlowColor, ss.selGlowColor,
+                    ss.itemOpa, ss.selOpa, ss.itemGlow, ss.selGlow,
+                    ss.hlW, ss.hlH, ss.hlRadius, ss.hlOpacity, ss.hlColor, ss.hlShow,
+                    true };
+        return t;
+    }
+    #define WHEEL_R        (chrome().wheelR)
+    #define WHEEL_RX       (chrome().wheelRx)
+    #define WHEEL_STEP_DEG (chrome().wheelStepDeg)
+    #define WHEEL_CY       (chrome().wheelCy)
+    #define WHEEL_FADE     (chrome().wheelFade)
 
     // --- sound submenu ---
     enum { SND_RADAR = 0, SND_CHIME, SND_CHIME_SEL, SND_VOLUME, SND_BACK, SND_COUNT };
@@ -327,6 +373,7 @@ namespace {
     // The splash is NOT in this set even though it precedes setup. It is decorative and
     // transient, and a splash that renders badly still lets you reach everything below.
     bool s_systemChrome = false;
+    bool s_systemChromeFwd() { return s_systemChrome; }
     bool mode_is_system_chrome(Mode m) {
         return m == MODE_NO_SDCARD  || m == MODE_FIRSTBOOT      || m == MODE_FIRSTBOOT_PHONE
             || m == MODE_WIFI_LIST  || m == MODE_WIFI_PASSWORD  || m == MODE_WIFI_STATUS;
@@ -365,25 +412,12 @@ namespace {
     // matching wheel_layout()'s own already-shared color/shape.
     void style_highlight(lv_obj_t *hl) {
         lv_obj_remove_style_all(hl);
-        if (s_systemChrome) {   // setup path: fixed, so no theme can hide the selection
-            lv_obj_set_size(hl, 300, 44);
-            lv_obj_set_style_radius(hl, 10, 0);
-            lv_obj_set_style_bg_color(hl, C_HL, 0);
-            lv_obj_set_style_bg_opa(hl, LV_OPA_COVER, 0);
-            return;
-        }
-#if CUSTOM_HAS_SETTINGS
-        const theme_style::Settings &ss = theme_style::settings();
-        lv_obj_set_size(hl, ss.hlW, ss.hlH);
-        lv_obj_set_style_radius(hl, ss.hlRadius, 0);
-        lv_obj_set_style_bg_color(hl, lv_color_hex(ss.hlColor), 0);
-        lv_obj_set_style_bg_opa(hl, ss.hlShow ? (lv_opa_t)ss.hlOpacity : LV_OPA_TRANSP, 0);
-#else
-        lv_obj_set_size(hl, 300, 44);
-        lv_obj_set_style_radius(hl, 10, 0);
-        lv_obj_set_style_bg_color(hl, C_HL, 0);
-        lv_obj_set_style_bg_opa(hl, LV_OPA_COVER, 0);
-#endif
+        // One path. chrome() has already decided whether this page may see the theme.
+        const Chrome &c = chrome();
+        lv_obj_set_size(hl, c.hlW, c.hlH);
+        lv_obj_set_style_radius(hl, c.hlRadius, 0);
+        lv_obj_set_style_bg_color(hl, lv_color_hex(c.hlColor), 0);
+        lv_obj_set_style_bg_opa(hl, c.hlShow ? (lv_opa_t)c.hlOpacity : LV_OPA_TRANSP, 0);
     }
 
     // Shared by every fixed-item menu in Settings (main menu, Display, Sound, Location)
@@ -442,11 +476,11 @@ namespace {
             if      (ad == 0) font = &lv_font_montserrat_20;
             else if (ad == 1) font = &lv_font_montserrat_16;
             else              font = &lv_font_montserrat_14;
-            if (s_systemChrome) {
-                // Same drawing the stock build uses, and deliberately not the theme's: a
-                // theme that set itemOpa low or its colours to black would make the way out
-                // of this screen invisible, and this is the one screen nobody can leave to
-                // go and change the theme.
+            const Chrome &ch = chrome();
+            if (!ch.themed) {
+                // Setup path. Stock sizing and fixed colours, so no theme can hide the words
+                // somebody needs to read in order to leave this screen — and this is the one
+                // screen they cannot leave in order to go and change the theme.
                 lv_obj_set_style_text_font(items[i], font, 0);
                 lv_obj_set_style_text_opa(items[i], opa, 0);
                 lv_obj_set_style_text_color(items[i], i == sel ? C_WHITE : C_GREY, 0);
@@ -457,17 +491,16 @@ namespace {
           // rather than replacing it. The fade is what makes the wheel read as a wheel; a
           // theme asking for faint text is asking for faint text at every position on it.
           const lv_opa_t rowOpa = (lv_opa_t)((int)opa *
-              ((i == sel) ? theme_style::settings().selOpa : theme_style::settings().itemOpa) / 255);
+              ((i == sel) ? ch.selOpa : ch.itemOpa) / 255);
           if (settings_text::available()) {
             lv_obj_set_style_text_opa(items[i], LV_OPA_TRANSP, 0);   // the native label draws nothing; the canvas draws the real glyphs below
             // Positioned above like every other row, so anything reading these objects'
             // geometry still finds them where it expects; simply not drawn.
             if (offDial) continue;
-            const theme_style::Settings &sg = theme_style::settings();
             settings_text::draw_item(lv_label_get_text(items[i]), 233.0f + sx, 233.0f + sy,
-                                     lv_color_hex(i == sel ? sg.selColor : sg.itemColor), rowOpa,
-                                     i == sel ? sg.selGlow : sg.itemGlow,
-                                     lv_color_hex(i == sel ? sg.selGlowColor : sg.itemGlowColor),
+                                     lv_color_hex(i == sel ? ch.selColor : ch.itemColor), rowOpa,
+                                     i == sel ? ch.selGlow : ch.itemGlow,
+                                     lv_color_hex(i == sel ? ch.selGlowColor : ch.itemGlowColor),
                                      i == sel ? theme_font::settings_sel() : theme_font::settings_item());
           } else {
             // No canvas (either it could not be allocated, or the theme asks for no glow
@@ -479,8 +512,7 @@ namespace {
                 i == sel ? theme_font::settings_sel() : theme_font::settings_item(), 0);
             lv_obj_set_style_text_opa(items[i], rowOpa, 0);
             lv_obj_set_style_text_color(items[i],
-                lv_color_hex(i == sel ? theme_style::settings().selColor
-                                      : theme_style::settings().itemColor), 0);
+                lv_color_hex(i == sel ? ch.selColor : ch.itemColor), 0);
             (void)font;   // stock 3-step sizing is not used when a theme is active
           }
 #else
@@ -701,6 +733,35 @@ namespace {
         s_mode = m;
         // Before the refresh_*() calls below, which is where the drawing decisions happen.
         s_systemChrome = mode_is_system_chrome(m);
+        // The plate and the glass are OBJECTS rather than values, so chrome() cannot reach
+        // them and they have to be hidden here. The glass is the worse of the two: it is
+        // move_foreground()'d, so a themed CRT layer sat OVER the setup text rather than
+        // under it. Both are PNGs on the SD card, which is the circularity this whole rule
+        // is about — the no-card notice was being dressed by a file whose absence it exists
+        // to report.
+        if (s_plateImg) { if (s_systemChrome) lv_obj_add_flag(s_plateImg, LV_OBJ_FLAG_HIDDEN);
+                          else                lv_obj_clear_flag(s_plateImg, LV_OBJ_FLAG_HIDDEN); }
+        if (s_ovImg)    { if (s_systemChrome) lv_obj_add_flag(s_ovImg, LV_OBJ_FLAG_HIDDEN);
+                          else                lv_obj_clear_flag(s_ovImg, LV_OBJ_FLAG_HIDDEN); }
+        // The guard, and it is here rather than in a comment because this is the second pass
+        // at the same rule and the first one was a comment. Rule six: a comment cannot fail,
+        // a guard can.
+        //
+        // chrome() makes the VALUES unreachable from a drawing site, which handles the class
+        // of mistake that caused this. Themed ART is an object and cannot be routed the same
+        // way, so it is asserted instead: on a setup page nothing themed may be visible, and
+        // if it is, the device says so by name rather than waiting for somebody to notice a
+        // background at the knob. Costs one comparison per page change.
+        if (s_systemChrome) {
+            const bool plateShown = s_plateImg && !lv_obj_has_flag(s_plateImg, LV_OBJ_FLAG_HIDDEN);
+            const bool glassShown = s_ovImg    && !lv_obj_has_flag(s_ovImg,    LV_OBJ_FLAG_HIDDEN);
+            if (plateShown || glassShown || chrome().themed) {
+                diag::log("settings: THEMED ART ON A SETUP SCREEN (mode %d): plate=%d glass=%d values=%d",
+                          (int)m, (int)plateShown, (int)glassShown, (int)chrome().themed);
+                diag::log("settings: a theme that renders a setup screen illegibly cannot be "
+                          "changed - see mode_is_system_chrome()");
+            }
+        }
         // The wheel-list text canvas (settings_text) is the topmost child of
         // s_screen — drawn over whichever page is visible — but it's only ever
         // cleared inside wheel_layout(), called from each *list* page's own
@@ -1856,6 +1917,10 @@ void settingsview::init() {
     s_wifiListPage = lv_obj_create(s_screen);
     lv_obj_remove_style_all(s_wifiListPage);
     lv_obj_set_size(s_wifiListPage, SCREEN_W, SCREEN_H); lv_obj_center(s_wifiListPage);
+    // Its own opaque ground. remove_style_all leaves a page transparent, which is why the
+    // theme's plate was still showing through the setup path after the text was fixed.
+    lv_obj_set_style_bg_color(s_wifiListPage, lv_color_black(), 0);
+    lv_obj_set_style_bg_opa(s_wifiListPage, LV_OPA_COVER, 0);
     lv_obj_clear_flag(s_wifiListPage, LV_OBJ_FLAG_SCROLLABLE);
     {
         lv_obj_t *wtitle = lv_label_create(s_wifiListPage);
@@ -1890,6 +1955,10 @@ void settingsview::init() {
     s_wifiPassPage = lv_obj_create(s_screen);
     lv_obj_remove_style_all(s_wifiPassPage);
     lv_obj_set_size(s_wifiPassPage, SCREEN_W, SCREEN_H); lv_obj_center(s_wifiPassPage);
+    // Its own opaque ground. remove_style_all leaves a page transparent, which is why the
+    // theme's plate was still showing through the setup path after the text was fixed.
+    lv_obj_set_style_bg_color(s_wifiPassPage, lv_color_black(), 0);
+    lv_obj_set_style_bg_opa(s_wifiPassPage, LV_OPA_COVER, 0);
     lv_obj_clear_flag(s_wifiPassPage, LV_OBJ_FLAG_SCROLLABLE);
     {
         s_wifiPassTitle = lv_label_create(s_wifiPassPage);
@@ -1929,6 +1998,10 @@ void settingsview::init() {
     s_wifiStatusPage = lv_obj_create(s_screen);
     lv_obj_remove_style_all(s_wifiStatusPage);
     lv_obj_set_size(s_wifiStatusPage, SCREEN_W, SCREEN_H); lv_obj_center(s_wifiStatusPage);
+    // Its own opaque ground. remove_style_all leaves a page transparent, which is why the
+    // theme's plate was still showing through the setup path after the text was fixed.
+    lv_obj_set_style_bg_color(s_wifiStatusPage, lv_color_black(), 0);
+    lv_obj_set_style_bg_opa(s_wifiStatusPage, LV_OPA_COVER, 0);
     lv_obj_clear_flag(s_wifiStatusPage, LV_OBJ_FLAG_SCROLLABLE);
     {
         s_wifiStatusLbl = lv_label_create(s_wifiStatusPage);
