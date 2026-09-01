@@ -7,7 +7,7 @@
 // "1.4.2", said "up to date", and left an Orb missing everything in that list. THEME_CAPS
 // exists because this stopped moving; it covers theme settings and nothing else, so a new
 // command or a deleted screen is invisible to it. Move this too.
-#define FW_VERSION "1.77.0"   // shown on the web config page + Stats screen
+#define FW_VERSION "1.78.0"   // shown on the web config page + Stats screen
 // Edit pins below: replace every -1 with the value from the Waveshare factory demo
 // (see docs/HARDWARE.md and docs/SETUP.md). Do NOT guess them.
 
@@ -136,6 +136,10 @@ static const float RANGE_STEPS_KM[] = {10.0f, 20.0f, 30.0f, 50.0f, 100.0f};
 // hold real failover off-device, this feed is genuinely single-sourced, and adsb.lol's
 // slow spells (a 32.2 s TCP connect measured 2026-08-22) are felt directly by the scope.
 #define ADSB_PRIMARY_HOST   "api.adsb.lol"          // GET /v2/point/{lat}/{lon}/{radius_nm}
+// What that host is called ON SCREEN, kept next to the host so the two cannot drift. UX-039
+// wants a failure to name the source that could not be reached, and the full hostname is too
+// long for a banner in a 466 px circle — this is the short form a person can act on.
+#define ADSB_SOURCE_NAME    "adsb.lol"
 #define ADSB_PRIMARY_TLS    0
 // Who this device says it is, to every service it calls.
 //
@@ -211,6 +215,7 @@ static const float RANGE_STEPS_KM[] = {10.0f, 20.0f, 30.0f, 50.0f, 100.0f};
 // The gateway, not a publisher. Plain HTTP for the same reason as everything else here:
 // no TLS on this board. See the long note above intel_fetch.
 #define INTEL_GATEWAY_HOST  "buildtheorb.zionbrock.workers.dev"
+#define INTEL_SOURCE_NAME   "the Orb gateway"      // the same, for the News screen. See ADSB_SOURCE_NAME.
 // The poll interval is theme data now (theme_style::Intel::pollMinutes, THEME_CAPS 11),
 // defaulting to the ten minutes that used to be welded here as INTEL_POLL_MS.
 // A failed poll should not leave the screen empty for the rest of the interval.

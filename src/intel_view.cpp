@@ -325,7 +325,16 @@ const char *empty_reason() {
     // Three full stops, not "…": Montserrat has no glyph at U+2026 and draws an empty box
     // for it. Same reason the gateway sends ASCII in the headlines themselves.
     if (!s_everFetched)                return "Getting the headlines...";
-    return "Headlines unavailable\nWiFi is fine, the service is not answering";
+    // Was "WiFi is fine, the service is not answering", and that first half had to go.
+    // WiFi.status() == WL_CONNECTED means the radio is ASSOCIATED with an access point and
+    // nothing more; it does not mean the device can reach anything. The scope carried this
+    // exact sentence once and it was measured wrong on 2026-08-23 — the service answered a
+    // laptop in 1.3 s while the Orb itself was unreachable over WiFi, so both halves of the
+    // claim were false at the same time. This screen was still making it.
+    //
+    // What is left is only what was observed: this device asked that gateway and got
+    // nothing back. Naming it is UX-039; not explaining it is charter P2.
+    return "Headlines unavailable\n" INTEL_SOURCE_NAME " is not answering";
 }
 
 void exit_scroll_mode() {

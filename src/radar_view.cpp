@@ -2929,8 +2929,26 @@ void setFeedStatus(bool wifiUp, uint32_t staleSec, bool locationKnown) {
     // device that does not know where it is, and sends the reader to look at the feed.
     // This still obeys the rule above: whether a location has ever been established is a
     // fact read straight out of NVS, not a diagnosis of anything.
-    if (!locationKnown) msg = "Location not set\nSettings " LV_SYMBOL_RIGHT " Location";
-    else if (staleSec >= AC_DIM_START_MS / 1000) msg = "No aircraft data";
+    //
+    // THREE STATES, NOT ONE, and that is UX-066: a dead connection, a dead feed and a
+    // device that does not know where it is are three different problems with three
+    // different things to do about them, and until now the last two both said "No aircraft
+    // data". wifiUp has been a parameter of this function the whole time and was never once
+    // read — the caller measured it, passed it in, and the message ignored it.
+    //
+    // Naming adsb.lol does NOT break the rule above, and the distinction is worth being
+    // exact about. What was wrong before was asserting a CAUSE that had not been observed:
+    // "WiFi is fine, the service is not answering" claimed two things the device had no way
+    // to know, and both were false at the time. "adsb.lol is not answering" claims one
+    // thing the device did observe directly — it asked that host, repeatedly, and has had
+    // nothing back for as long as the contacts have been ageing. It does not say why, and
+    // it does not say whose fault it is.
+    //
+    // UX-039's test is whether the owner can tell a dead internet connection from one dead
+    // feed by reading the screen. With one message for both, they could not.
+    if (!wifiUp)             msg = "No WiFi\nYour Orb is fine";
+    else if (!locationKnown) msg = "Location not set\nSettings " LV_SYMBOL_RIGHT " Location";
+    else if (staleSec >= AC_DIM_START_MS / 1000) msg = "No aircraft data\n" ADSB_SOURCE_NAME " is not answering";
     // Log only on change: this is called every status tick, and a line per tick would bury
     // the feed diagnostics underneath it.
     static const char *s_shown = nullptr;
