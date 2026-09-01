@@ -1,6 +1,7 @@
 #include "theme_select.h"
 #include "theme_style.h"
 #include <string.h>
+#include <strings.h>   // strcasecmp — the theme list sorts on display names
 #include <ctype.h>
 #ifdef ARDUINO
 #include <Arduino.h>
@@ -157,6 +158,46 @@ int listInstalled(char out[][MAX_SLUG_LEN]) {
     }
     closedir(d);
 #endif
+
+    // Sorted here, once, so every caller inherits it rather than each one sorting for
+    // itself — five of them read this list. Rule six: the shared path, not a note beside
+    // one caller.
+    //
+    // Before this there was no order at all. Both branches above append whatever the
+    // directory hands back, which is FAT slot order: roughly creation order, except that
+    // deleting a theme leaves a hole the next install reuses, so the list silently
+    // rearranges itself when somebody removes one and adds another. Zion read his as
+    // steampunk, modern, Cold War, Zwaa, aviator and asked what decided it. Nothing did.
+    //
+    // By DISPLAY NAME, not by slug, and that is the part worth getting right. The theme
+    // shown as "Modern" lives in a folder called "the-office", so sorting on slugs files it
+    // under T and produces an order that looks random to the person reading the screen. The
+    // collision comment in settings_view.cpp already warns about that exact confusion.
+    //
+    // Case-insensitive, so "Zwaa" and "aviator" do not end up in separate alphabets.
+    //
+    // Costs one labelFor() per theme, which reads that theme's theme.json. The pages that
+    // call this already rescan the card to build the list, so it is a handful of small
+    // reads on a screen that was doing file I/O anyway, at most MAX_THEMES of them.
+    {
+        char label[MAX_THEMES][32];
+        for (int i = 0; i < n; ++i) theme_style::labelFor(out[i], label[i], sizeof(label[i]));
+        // Insertion sort: n is at most MAX_THEMES and this runs once per screen entry, so
+        // the simple thing that keeps the two arrays in step is the right thing.
+        for (int i = 1; i < n; ++i) {
+            char keySlug[MAX_SLUG_LEN]; char keyLabel[32];
+            strncpy(keySlug, out[i], sizeof(keySlug));   keySlug[sizeof(keySlug) - 1] = 0;
+            strncpy(keyLabel, label[i], sizeof(keyLabel)); keyLabel[sizeof(keyLabel) - 1] = 0;
+            int j = i - 1;
+            while (j >= 0 && strcasecmp(label[j], keyLabel) > 0) {
+                strncpy(out[j + 1], out[j], MAX_SLUG_LEN);   out[j + 1][MAX_SLUG_LEN - 1] = 0;
+                strncpy(label[j + 1], label[j], sizeof(label[j])); label[j + 1][sizeof(label[j]) - 1] = 0;
+                --j;
+            }
+            strncpy(out[j + 1], keySlug, MAX_SLUG_LEN);   out[j + 1][MAX_SLUG_LEN - 1] = 0;
+            strncpy(label[j + 1], keyLabel, sizeof(label[j + 1])); label[j + 1][sizeof(label[j + 1]) - 1] = 0;
+        }
+    }
     return n;
 }
 
