@@ -1072,10 +1072,26 @@ void settingsview::onPress() {
             const int L = (int)strlen(s_pass);
             if (L < (int)sizeof(s_pass) - 1) { s_pass[L] = WKEYS[s_wkbIdx]; s_pass[L + 1] = 0; }
             refresh_wifi_pass();
-        } else if (s_wkbIdx == WK_DEL) {                               // backspace
+        } else if (s_wkbIdx == WK_DEL) {                               // backspace, or the way out
             const int L = (int)strlen(s_pass);
-            if (L > 0) s_pass[L - 1] = 0;
-            refresh_wifi_pass();
+            // Backspace on an empty password goes BACK, and until now it did nothing at all.
+            //
+            // This screen had no exit. The strip is characters, DEL and OK — no Back row —
+            // and Settings captures the knob on entry, so once you were here the only ways
+            // off it were typing a password that connects or holding the knob to reboot.
+            // UX-041 says an app never traps the knob and a broken app is still a screen the
+            // owner can turn away from; a reboot is not turning away from a screen.
+            //
+            // It sits on the first-boot path a stranger walks, which is where it costs most:
+            // pick the wrong network, or reach the password prompt and realise you do not
+            // know it, and the device has nothing to offer but a power cycle.
+            //
+            // Same gesture the city search already uses — backspace past the start of an
+            // empty field leaves — so this is the grammar the device has taught, not a new
+            // one. Back to the network list rather than out to the switcher, because the
+            // list is where the mistake was made and it is one turn from the right network.
+            if (L > 0) { s_pass[L - 1] = 0; refresh_wifi_pass(); }
+            else       { show_page(MODE_WIFI_LIST); }
         } else {                                                       // OK -> connect
             wifi_begin_connect(s_pass);
         }
