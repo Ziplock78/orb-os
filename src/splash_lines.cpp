@@ -3,6 +3,7 @@
 #include "theme_style.h"     // the placement and styling these three lines are allowed
 #include "curved_text.h"     // straight AND arc, one code path, glow included
 #include "font_ladder.h"     // the sizes this binary actually contains
+#include "splash_font.h"     // ...and Inter, for these three lines specifically
 #include "custom_sprite.h"   // custom_overlay() — the glass, decoded flash-then-SD
 #include <stdio.h>
 #include <string.h>
@@ -39,7 +40,7 @@ lv_color_t rgb(uint32_t v) {
 void one_line(const theme_style::SplashText &t, const char *text) {
     if (!text || !*text || !s_buf) return;
     const curved_text::Target dst{ s_buf, W, H };
-    const lv_font_t *f = font_ladder(t.size);
+    const lv_font_t *f = splash_font(t.size);   // Inter, not the compiled stock face
     const lv_color_t col = rgb(t.color);
     const lv_color_t glowCol = rgb(t.glowColor);
     if (t.curved && t.curveR > 0) {
@@ -66,7 +67,7 @@ void repaint() {
     // rather than teaching the glyph code about paragraphs for the sake of one caller.
     const char *credits[] = { "Aircraft data: adsb.lol", "Map data: OpenStreetMap" };
     theme_style::SplashText second = sp.credits;
-    second.y += (int)lv_font_get_line_height(font_ladder(sp.credits.size)) + 4;
+    second.y += (int)lv_font_get_line_height(splash_font(sp.credits.size)) + 4;
     one_line(sp.credits, credits[0]);
     one_line(second, credits[1]);
     if (s_canvas) lv_obj_invalidate(s_canvas);

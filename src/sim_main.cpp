@@ -1356,6 +1356,13 @@ int main(int argc, char **argv) {
             sim_save_frame(path);
             // UX-024's notice, captured from the same run: on hardware it needs a device
             // with the card physically pulled, which is a worse way to check a layout.
+            // The About page, because it is the one screen that shows the three live splash
+            // lines — version, address and credits — which is what changed.
+            settingsview::openAboutPage();
+            for (int i = 0; i < 8; ++i) { SDL_Delay(40); lv_tick_inc(40); lv_timer_handler(); }
+            lv_refr_now(NULL);
+            snprintf(path, sizeof(path), "%s-0-about", wifiShot);
+            sim_save_frame(path);
             settingsview::openNoSdCardNotice(false);
             lv_timer_handler(); lv_refr_now(NULL);
             snprintf(path, sizeof(path), "%s-4-nosd", wifiShot);
