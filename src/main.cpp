@@ -1404,9 +1404,44 @@ int host_wifi_scan_result(char names[][33], int8_t *rssi, bool *isOpen, int maxN
     return count;
 }
 
+// TRY a network without committing to it. The credentials are a candidate until the Orb has
+// actually associated; host_wifi_commit_credentials() below is what makes them permanent.
+//
+// WiFi.persistent() is the whole fix. Its default on this core is TRUE, so WiFi.begin()
+// writes the SSID and password into the driver's own NVS (nvs.net80211) AT THE CALL, before
+// a single packet is exchanged — on intent, with no fact behind it. Pressing OK on a
+// neighbour's network with a wrong password therefore destroyed the working network the
+// owner already had, and a power cycle brought the Orb back asking to be set up again. That
+// is UX-021: setup, once completed, stays completed, and a mistyped password is a weaker
+// event than the power loss and firmware updates that requirement already survives.
+//
+// This is the SECOND time this exact fault has shipped. main.cpp's own comment dated
+// 2026-08-15 records the first: a secrets.h fallback called WiFi.begin() at boot, "it
+// overwrote the user's real saved network on EVERY boot... the device came up in the config
+// portal with its good credentials already gone." That call site was fixed and the lesson
+// written down. This one reintroduced it from Settings, because the lesson lived in a
+// comment beside the old caller rather than in the function every caller goes through.
 void host_wifi_connect(const char *ssid, const char *pass) {
     if (g_wm.getConfigPortalActive()) g_wm.stopConfigPortal();   // hand off cleanly
+    WiFi.persistent(false);   // candidate only — do not touch what is already stored
     WiFi.begin(ssid, pass);
+}
+
+// Now it is true, so now it is written. Called only once the association has actually
+// succeeded, which is the fact the write was missing before.
+//
+// Re-begins with persistence on rather than reaching into the driver's NVS directly: the
+// device is already associated with this exact network, so this is cheap, and it is the one
+// path the Arduino core documents. The short wait afterwards is because a re-begin can drop
+// the link for a moment, and the caller's very next act is either an HTTP location lookup or
+// a reboot — neither of which wants to run through a reconnect.
+void host_wifi_commit_credentials(const char *ssid, const char *pass) {
+    WiFi.persistent(true);
+    WiFi.begin(ssid, pass);
+    const uint32_t until = millis() + 3000;
+    while (WiFi.status() != WL_CONNECTED && millis() < until) delay(50);
+    Serial.printf("[wifi] credentials committed for %s (link %s)\n",
+                  ssid, WiFi.status() == WL_CONNECTED ? "up" : "still settling");
 }
 
 // 0 = still connecting, 1 = connected, 2 = failed/rejected.

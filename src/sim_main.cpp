@@ -166,6 +166,9 @@ void host_chime_preview(int) {}
 void host_wifi_scan_start() {}
 int  host_wifi_scan_result(char[][33], int8_t *, bool *, int) { return 0; }
 void host_wifi_connect(const char *, const char *) {}
+// No NVS and no radio here, so there is nothing to protect and nothing to commit. The
+// device version is where the work is: see host_wifi_connect() in main.cpp.
+void host_wifi_commit_credentials(const char *, const char *) {}
 int  host_wifi_connect_status() { return 0; }
 void host_wifi_connected_reboot() {}
 void host_factory_reset() {}

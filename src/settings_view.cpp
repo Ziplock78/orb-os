@@ -45,6 +45,7 @@ extern void host_chime_preview(int idx);
 extern void host_wifi_scan_start();
 extern int  host_wifi_scan_result(char names[][33], int8_t *rssi, bool *isOpen, int maxN);
 extern void host_wifi_connect(const char *ssid, const char *pass);
+extern void host_wifi_commit_credentials(const char *ssid, const char *pass);  // only once associated
 extern int  host_wifi_connect_status();
 extern void host_wifi_connected_reboot();
 extern void host_factory_reset();          // wipes WiFi + all saved settings, reboots
@@ -184,7 +185,11 @@ namespace {
     bool    s_wifiScanning = false;
     char    s_wifiSelSsid[33] = "";
     bool    s_wifiSelOpen     = false;
-    bool    s_wifiConnecting  = false;
+    bool     s_wifiConnecting  = false;
+    uint32_t s_connectStartMs  = 0;    // bounds the attempt; see wifi_tick()
+    // How long to let an attempt run before calling it failed. Association plus DHCP is a
+    // few seconds on a healthy network; twenty is generous and, crucially, finite.
+    static const uint32_t WIFI_CONNECT_TIMEOUT_MS = 20000;
 
     // password entry (same character-strip picker as the city search)
     char    s_pass[65]  = "";
@@ -194,7 +199,20 @@ namespace {
     const int  N_WKEYS = (int)(sizeof(WKEYS) - 1);
     const int  WK_DEL  = N_WKEYS;          // strip index for backspace
     const int  WK_OK   = N_WKEYS + 1;      // strip index for connect
-    const int  WK_TOTAL = N_WKEYS + 2;
+    // A VISIBLE way out, and the reason it exists is worth keeping.
+    //
+    // This screen first got an escape as a gesture: backspace past the start of an empty
+    // field, matching the city search. It worked, and it did not help. Zion walked the
+    // screen the next morning, emptied the field, found nothing that looked like an exit,
+    // pressed OK because OK was the only exit he could see, and ended up power cycling —
+    // which is the outcome CUT-05 exists to prevent. The gesture was not just
+    // undiscoverable, it was counterintuitive: it asks you to press backspace on an
+    // already-empty field, which nobody has a reason to do.
+    //
+    // UX-004 says nothing in normal use requires reading documentation, and a way out you
+    // have to be told about is documentation. So there is now an item you can scroll to.
+    const int  WK_BACK = N_WKEYS + 2;      // strip index for "give up and go back"
+    const int  WK_TOTAL = N_WKEYS + 3;
 
     constexpr int WIFI_VISIBLE = 5;        // rows shown at once in the scrolling network list
     constexpr int WIFI_ROW_DY  = 44;
@@ -771,6 +789,7 @@ namespace {
             if (idx < 0 || idx >= WK_TOTAL) c[0] = 0;
             else if (idx == WK_DEL) snprintf(c, sizeof(c), "DEL");
             else if (idx == WK_OK)  snprintf(c, sizeof(c), "OK");
+            else if (idx == WK_BACK) snprintf(c, sizeof(c), "Back");
             else if (WKEYS[idx] == ' ') snprintf(c, sizeof(c), "SP");   // show space as "SP"
             else { c[0] = WKEYS[idx]; c[1] = 0; }
             lv_label_set_text(s_wkStrip[k], c);
@@ -790,6 +809,7 @@ namespace {
 
     void wifi_begin_connect(const char *pass) {
         s_wifiConnecting = true;
+        s_connectStartMs = lv_tick_get();   // lv_tick_get, not millis: this file also builds for the desktop simulator
         // s_firstBootPrompt stays set through to the connect result — wifi_tick() uses it
         // to decide whether to auto-locate on success (see there).
         lv_label_set_text_fmt(s_wifiStatusLbl, "Connecting to\n%s...", s_wifiSelSsid);
@@ -822,10 +842,28 @@ namespace {
             diag::log("wifi: scan done, %d networks", s_wifiCount);
             refresh_wifi_list();
         } else if (s_mode == MODE_WIFI_STATUS && s_wifiConnecting) {
-            const int st = host_wifi_connect_status();
+            int st = host_wifi_connect_status();
+            // A BOUNDED attempt, and without this the screen never came back.
+            //
+            // host_wifi_connect_status() only reports failure for WL_CONNECT_FAILED and
+            // WL_NO_SSID_AVAIL. A wrong password on this chip usually settles at
+            // WL_DISCONNECTED or WL_IDLE_STATUS, neither of which is in that list, so the
+            // status stayed 0 for ever. And the press handler ignores input while
+            // s_wifiConnecting is true, so the knob went dead and stayed dead: the exact
+            // hang UX-015 and UX-041 forbid, reached by typing a password wrong.
+            if (st == 0 && lv_tick_get() - s_connectStartMs > WIFI_CONNECT_TIMEOUT_MS) {
+                diag::log("wifi: connect to %s timed out after %lus", s_wifiSelSsid,
+                          (unsigned long)(WIFI_CONNECT_TIMEOUT_MS / 1000));
+                st = 2;   // treat as a plain failure, which already has a screen and a way back
+            }
             if (st == 0) return;                        // still connecting
             s_wifiConnecting = false;
             if (st == 1) {
+                // Associated, so the credentials are finally a fact and can be written. Up
+                // to here WiFi.persistent(false) has kept the previously saved network
+                // untouched, so every path that reaches the failure branch below leaves the
+                // owner exactly where they started. See host_wifi_connect() in main.cpp.
+                host_wifi_commit_credentials(s_wifiSelSsid, s_pass);
                 lv_label_set_text(s_wifiStatusLbl, "Connected!");
                 if (s_firstBootPrompt) {
                     // First-time setup (fresh out of the box, or right after a Reset):
@@ -919,9 +957,12 @@ void settingsview::onTurn(int delta) {
         if (s_wifiSel >= total) s_wifiSel = total - 1;
         refresh_wifi_list();
     } else if (s_mode == MODE_WIFI_PASSWORD) {
-        s_wkbIdx += step;
-        if (s_wkbIdx < 0) s_wkbIdx = 0;
-        if (s_wkbIdx >= WK_TOTAL) s_wkbIdx = WK_TOTAL - 1;
+        // Wraps, per UX-013: no dead end, and no first or last item to get stuck against.
+        // It clamped before, which on an 88-key strip meant scrolling the whole way back to
+        // reach DEL or OK. It also compounds with WK_BACK being last: one detent LEFT from
+        // the first character now lands on Back, so the way out is one turn away wherever
+        // you are standing, rather than eighty-odd.
+        s_wkbIdx = (s_wkbIdx + step + WK_TOTAL) % WK_TOTAL;
         refresh_wifi_pass();
     } else if (s_mode == MODE_THEME_SELECT) {
         s_themeSel += step;
@@ -1092,6 +1133,8 @@ void settingsview::onPress() {
             // list is where the mistake was made and it is one turn from the right network.
             if (L > 0) { s_pass[L - 1] = 0; refresh_wifi_pass(); }
             else       { show_page(MODE_WIFI_LIST); }
+        } else if (s_wkbIdx == WK_BACK) {                              // give up, keep the network list
+            show_page(MODE_WIFI_LIST);
         } else {                                                       // OK -> connect
             wifi_begin_connect(s_pass);
         }
