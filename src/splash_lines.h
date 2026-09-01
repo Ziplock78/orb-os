@@ -12,7 +12,7 @@
 // What it draws, in order, over whatever the parent already shows:
 //
 //   1. the firmware version, the config address, and the data credits, into one canvas
-//   2. clock_overlay.png, the glass and CRT, on top of all of it
+//   2. splash_overlay.png, the glass and CRT, on top of all of it
 //
 // The glass is last and is not negotiable. It is the top layer of every screen on this
 // device, and a screen that puts anything above it looks like a mistake because it is one.

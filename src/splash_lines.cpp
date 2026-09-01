@@ -4,7 +4,7 @@
 #include "curved_text.h"     // straight AND arc, one code path, glow included
 #include "font_ladder.h"     // the sizes this binary actually contains
 #include "splash_font.h"     // ...and Inter, for these three lines specifically
-#include "custom_sprite.h"   // custom_overlay() — the glass, decoded flash-then-SD
+#include "custom_sprite.h"   // splash_overlay() — the glass, decoded flash-then-SD
 #include <stdio.h>
 #include <string.h>
 #ifdef ARDUINO
@@ -115,10 +115,18 @@ void attach(lv_obj_t *parent) {
     // The glass, last, over everything. See the header: this is the whole reason the bake
     // stopped including it.
     //
+    // splash_overlay(), NOT custom_overlay(). custom_overlay() is the CLOCK's glass and
+    // Studio bakes the hand-pivot hub into it, so borrowing it painted a white dot in the
+    // middle of the startup screen and of Settings > About for every theme that reaches
+    // here. Found on the glass by Zion, traced by pulling the file off his own card.
+    //
+    // A theme baked before Studio exports splash_overlay.png returns nullptr and gets no
+    // glass on its splash, which is the right way to fail: a plainer screen, not a dot.
+    //
     // ONLY for themes that ship splash_style.json. An older theme's splash.png already has
     // the glass painted in by the browser, and compositing it again would show it twice.
     if (theme_style::splash().styled)
-    if (const uint8_t *ov = custom_overlay()) {
+    if (const uint8_t *ov = splash_overlay()) {
         s_glassDsc.header.always_zero = 0;
         s_glassDsc.header.w  = W;
         s_glassDsc.header.h  = H;

@@ -123,6 +123,7 @@ bool decode_sd_first(const char *assetName, const uint8_t *flashPng, uint32_t fl
 
 uint16_t *s_plate = nullptr;   bool s_plateTried = false;
 uint8_t  *s_overlay = nullptr; bool s_overlayTried = false;
+uint8_t  *s_splashOv = nullptr; bool s_splashOvTried = false;
 // 0=hour,1=minute,2=second,3=static1,4=static2 — the two statics share this exact
 // same slot/decode machinery, just always drawn at angle 0 (see clock_view.cpp).
 // Slots 0-4 are the hand and static layers the draw order names. Slots 5-7 are the three
@@ -174,6 +175,36 @@ const uint8_t *custom_overlay() {
 #endif
     }
     return s_overlay;
+}
+
+// The splash's own glass, and the reason it is not just custom_overlay().
+//
+// clock_overlay.png is the one overlay Orb Studio bakes the HUB into - the pivot cap the
+// hands appear to turn on (theme-forge.ts, clockOverlayPng -> overlayPng(ov, withHub:true)).
+// The splash has no hands, so borrowing that file put a white dot in the middle of the
+// startup screen and of Settings > About, on every theme that ships splash_style.json.
+// Studio already draws the hub-less variant for exactly this reason - screenOverlayPng(),
+// "the same glass and CRT, without the hub, for the screens that have no hands" - and
+// already exports it as menu_overlay.png, settings_overlay.png and radar_overlay.png. The
+// splash was simply never given one, and the firmware reached for the clock's instead.
+//
+// So: splash_overlay.png, or nothing. NO fallback to clock_overlay.png, because falling
+// back to it is the entire bug. A theme baked before Studio exports this file gets no glass
+// on its splash, which is the right way round - a missing layer is a plainer screen, a
+// wrong layer is a dot nobody can explain.
+const uint8_t *splash_overlay() {
+    if (!s_splashOv && !s_splashOvTried) {
+        s_splashOvTried = true;
+        int w = 0, h = 0;
+        if (const uint8_t *p = theme_art::find_active("splash_overlay.png", theme_art::FMT_RGB565_ALPHA, w, h)) {
+            s_splashOv = (uint8_t *)p;
+            Serial.printf("[custom_sprite] splash overlay: flash-resident %dx%d (0 ms, 0 KB PSRAM)\n", w, h);
+            return s_splashOv;
+        }
+        uint8_t *o = nullptr;
+        if (decode_sd_first("splash_overlay.png", nullptr, 0, true, o, w, h, "splash overlay")) s_splashOv = o;
+    }
+    return s_splashOv;
 }
 
 CustomSprite custom_hand(int kind) {
@@ -237,6 +268,7 @@ void custom_sprite_release() {
     // allocated, so the reference is dropped rather than freed.
     if (s_plate)   { if (!theme_art::owns(s_plate))   { freed += (size_t)SCREEN_W * SCREEN_H * 2; heap_caps_free(s_plate); }   s_plate = nullptr; }
     if (s_overlay) { if (!theme_art::owns(s_overlay)) { freed += (size_t)SCREEN_W * SCREEN_H * 3; heap_caps_free(s_overlay); } s_overlay = nullptr; }
+    if (s_splashOv) { if (!theme_art::owns(s_splashOv)) { freed += (size_t)SCREEN_W * SCREEN_H * 3; heap_caps_free(s_splashOv); } s_splashOv = nullptr; }
     for (int i = 0; i < SLOTS; ++i) if (s_hand[i]) {
         if (!theme_art::owns(s_hand[i])) {
             freed += (size_t)s_handW[i] * s_handH[i] * 3;
@@ -244,7 +276,7 @@ void custom_sprite_release() {
         }
         s_hand[i] = nullptr; s_handW[i] = 0; s_handH[i] = 0;
     }
-    s_plateTried = s_overlayTried = false;
+    s_plateTried = s_overlayTried = s_splashOvTried = false;
     for (int i = 0; i < 5; ++i) s_handTried[i] = false;
     if (freed) Serial.printf("[custom_sprite] released ~%u KB of decoded PSRAM in %u ms\n", (unsigned)(freed / 1024), (unsigned)(millis() - t0));
 }
