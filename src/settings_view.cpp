@@ -260,8 +260,12 @@ namespace {
     const int  WK_BACK = N_WKEYS + 2;      // strip index for "give up and go back"
     const int  WK_TOTAL = N_WKEYS + 3;
 
-    constexpr int WIFI_VISIBLE = 5;        // rows shown at once in the scrolling network list
-    constexpr int WIFI_ROW_DY  = 44;
+    // Four, not five. At 26 px five rows spanned 280 px and pushed the title off the top
+    // while the hint collided with the last row — caught by rendering it, not by reasoning
+    // about it. Larger type means fewer rows, which is the same trade the character strip
+    // makes: this is a scrolling list, so what is visible at once was never the whole set.
+    constexpr int WIFI_VISIBLE = 4;        // rows shown at once in the scrolling network list
+    constexpr int WIFI_ROW_DY  = 56;   // was 44; 26 px rows need the room
 
     // search state
     char   s_str[28]   = "";
@@ -337,6 +341,13 @@ namespace {
     lv_obj_t *s_fbPage  = nullptr;
     lv_obj_t *s_fbHl    = nullptr;
     lv_obj_t *s_fbItems[FB_COUNT] = { nullptr, nullptr };
+    // Fixed rows. Type is large across this whole path because of UX-058: large text mode
+    // is the accessibility answer, and it lives in Settings — which needs a working device,
+    // which needs this path. So these screens are the one place that cannot lean on the
+    // accessibility feature and must be legible to everybody by default. Same circular
+    // dependency as the theme, one layer up.
+    const int FB_ROW1_Y = -40;
+    const int FB_ROW2_Y =  48;
     int       s_fbSel   = FB_ONDEVICE;
     // Set when boot wanted the WiFi choice but the card notice had to come first.
     bool      s_pendingWifiSetup = false;
@@ -661,10 +672,34 @@ namespace {
 
     void refresh_locmenu() { wheel_layout(s_lmItems, LM_COUNT, s_lmSel, s_lmHl); }
 
-    // Same wheel every other menu uses, deliberately. The mockup drew a ">" against the
-    // chosen row; the wheel's own highlight pill already says that, in the grammar the rest
-    // of the device has taught, and a second marker would be the only one of its kind here.
-    void refresh_firstboot() { wheel_layout(s_fbItems, FB_COUNT, s_fbSel, s_fbHl); }
+    // NOT the wheel, and that is the point rather than an omission.
+    //
+    // A wheel is the right shape for a list of unknown length — the network list is one —
+    // and the wrong shape for a fixed choice of two. On the wheel both rows moved and
+    // resized as the knob turned, which reads as "there is more below", and there is not.
+    // Both rows are pinned here and only the highlight travels.
+    void refresh_firstboot() {
+        for (int i = 0; i < FB_COUNT; ++i) {
+            const bool sel = (i == s_fbSel);
+            lv_obj_align(s_fbItems[i], LV_ALIGN_CENTER, 0, i == 0 ? FB_ROW1_Y : FB_ROW2_Y);
+            lv_obj_set_style_text_font(s_fbItems[i], &lv_font_montserrat_26, 0);
+            lv_obj_set_style_text_color(s_fbItems[i], sel ? C_WHITE : C_GREY, 0);
+            lv_obj_set_style_text_opa(s_fbItems[i], LV_OPA_COVER, 0);
+        }
+        // The pill is sized to the WIDEST row rather than to a fixed width. The shared
+        // system-chrome pill is 300 px, which is right for the network list's shorter
+        // entries and too narrow for these two at 26 px — the text hung over both ends of
+        // it. Measuring means the copy can change without anybody remembering to re-measure.
+        lv_coord_t wid = 0;
+        for (int i = 0; i < FB_COUNT; ++i) {
+            lv_point_t sz;
+            lv_txt_get_size(&sz, FB_LABELS[i], &lv_font_montserrat_26,
+                            0, 0, LV_COORD_MAX, LV_TEXT_FLAG_NONE);
+            if (sz.x > wid) wid = sz.x;
+        }
+        lv_obj_set_size(s_fbHl, wid + 44, 52);
+        lv_obj_align(s_fbHl, LV_ALIGN_CENTER, 0, s_fbSel == 0 ? FB_ROW1_Y : FB_ROW2_Y);
+    }
 
     void refresh_recent() {
         if (s_recCount == 0) {
@@ -873,8 +908,19 @@ namespace {
             if (idx < total) {
                 char nm[40];
                 wifi_item_name(idx, nm, sizeof(nm));
+                const bool isSel = (idx == s_wifiSel);
+                // A name too long for the dial is END-elided, because the beginning is the
+                // part people recognise. Three full stops rather than an ellipsis: Montserrat
+                // has no glyph at U+2026 and draws an empty box for it, which intel_view.cpp
+                // already learned the hard way.
+                //
+                // The SELECTED row scrolls instead, so the one network you are about to pick
+                // can always be read in full. Unselected rows never move, so a screen nobody
+                // is touching is still.
+                lv_label_set_long_mode(s_wifiRows[r],
+                    isSel ? LV_LABEL_LONG_SCROLL_CIRCULAR : LV_LABEL_LONG_DOT);
                 lv_label_set_text(s_wifiRows[r], nm);
-                lv_obj_set_style_text_color(s_wifiRows[r], idx == s_wifiSel ? C_WHITE : C_GREY, 0);
+                lv_obj_set_style_text_color(s_wifiRows[r], isSel ? C_WHITE : C_GREY, 0);
             } else {
                 lv_label_set_text(s_wifiRows[r], "");
             }
@@ -888,6 +934,7 @@ namespace {
 
     void refresh_wifi_pass() {
         lv_label_set_text(s_passText, s_pass[0] ? s_pass : "(enter password)");
+        lv_obj_set_style_text_font(s_passText, &lv_font_montserrat_26, 0);   // reading back what you typed matters
         for (int k = 0; k < 7; ++k) {
             const int idx = s_wkbIdx - 3 + k;
             const bool hot = (k == 3);
@@ -900,7 +947,11 @@ namespace {
             else { c[0] = WKEYS[idx]; c[1] = 0; }
             lv_label_set_text(s_wkStrip[k], c);
             lv_obj_set_style_text_color(s_wkStrip[k], hot ? C_WHITE : C_GREY, 0);
-            lv_obj_set_style_text_font(s_wkStrip[k], hot ? &lv_font_montserrat_28 : &lv_font_montserrat_18, 0);
+            // The strip already fades off both edges — it is a scroll, not a row, so it was
+            // never showing the whole set and fewer visible at once costs nothing. Somebody
+            // is picking one character at a time, so the one they are on is the only one
+            // that has to be truly readable, and it was the same size as its neighbours.
+            lv_obj_set_style_text_font(s_wkStrip[k], hot ? &lv_font_montserrat_44 : &lv_font_montserrat_22, 0);
         }
     }
 
@@ -1479,16 +1530,16 @@ void settingsview::init() {
     lv_obj_t *fbTitle = lv_label_create(s_fbPage);
     lv_label_set_text(fbTitle, "The Orb needs WiFi");
     lv_obj_set_style_text_color(fbTitle, lv_color_white(), 0);
-    lv_obj_set_style_text_font(fbTitle, &lv_font_montserrat_20, 0);
-    lv_obj_align(fbTitle, LV_ALIGN_CENTER, 0, -122);
+    lv_obj_set_style_text_font(fbTitle, &lv_font_montserrat_28, 0);
+    lv_obj_align(fbTitle, LV_ALIGN_CENTER, 0, -146);
     // Load-bearing, not decoration. The S3 has no 5 GHz radio, so a 5 GHz-only network
     // never appears in the scan at all — and before this line the screen offered no reason
     // why, leaving a stranger looking at a list with their own network missing from it.
     lv_obj_t *fbBand = lv_label_create(s_fbPage);
     lv_label_set_text(fbBand, "2.4 GHz only");
     lv_obj_set_style_text_color(fbBand, C_DIM, 0);
-    lv_obj_set_style_text_font(fbBand, &lv_font_montserrat_16, 0);
-    lv_obj_align(fbBand, LV_ALIGN_CENTER, 0, -92);
+    lv_obj_set_style_text_font(fbBand, &lv_font_montserrat_20, 0);
+    lv_obj_align(fbBand, LV_ALIGN_CENTER, 0, -108);
     s_fbHl = lv_obj_create(s_fbPage);
     style_highlight(s_fbHl);
     for (int i = 0; i < FB_COUNT; ++i) {
@@ -1499,10 +1550,18 @@ void settingsview::init() {
     // A sixth line, and the one addition to the agreed copy. This is the only screen whose
     // audience has never touched the knob before, so the one place the grammar cannot be
     // assumed. Same wording and position the location menu already uses.
+    // "OR", so the two read as alternatives rather than a sequence. Dim and small: it is
+    // punctuation between the choices, not a third thing to choose.
+    lv_obj_t *fbOr = lv_label_create(s_fbPage);
+    lv_label_set_text(fbOr, "OR");
+    lv_obj_set_style_text_color(fbOr, C_GREY, 0);
+    lv_obj_set_style_text_font(fbOr, &lv_font_montserrat_18, 0);
+    lv_obj_align(fbOr, LV_ALIGN_CENTER, 0, 4);
+
     lv_obj_t *fbHint = lv_label_create(s_fbPage);
     lv_label_set_text(fbHint, "turn to choose, push to select");
     lv_obj_set_style_text_color(fbHint, C_GREY, 0);
-    lv_obj_set_style_text_font(fbHint, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_font(fbHint, &lv_font_montserrat_18, 0);
     lv_obj_align(fbHint, LV_ALIGN_CENTER, 0, 150);
 
     // --- first boot: the phone path ---
@@ -1519,29 +1578,29 @@ void settingsview::init() {
     lv_obj_t *fpLead = lv_label_create(s_fbPhonePage);
     lv_label_set_text(fpLead, "On your phone, join");
     lv_obj_set_style_text_color(fpLead, C_DIM, 0);
-    lv_obj_set_style_text_font(fpLead, &lv_font_montserrat_16, 0);
+    lv_obj_set_style_text_font(fpLead, &lv_font_montserrat_20, 0);
     lv_obj_align(fpLead, LV_ALIGN_CENTER, 0, -78);
     // The network name is the one thing on this screen a person has to copy correctly, so
     // it is the one thing set larger than everything around it.
     lv_obj_t *fpSsid = lv_label_create(s_fbPhonePage);
     lv_label_set_text(fpSsid, "The Orb Setup");
     lv_obj_set_style_text_color(fpSsid, lv_color_white(), 0);
-    lv_obj_set_style_text_font(fpSsid, &lv_font_montserrat_28, 0);
+    lv_obj_set_style_text_font(fpSsid, &lv_font_montserrat_36, 0);
     lv_obj_align(fpSsid, LV_ALIGN_CENTER, 0, -36);
     lv_obj_t *fpL1 = lv_label_create(s_fbPhonePage);
     lv_label_set_text(fpL1, "A page opens by itself.");
     lv_obj_set_style_text_color(fpL1, lv_color_white(), 0);
-    lv_obj_set_style_text_font(fpL1, &lv_font_montserrat_16, 0);
+    lv_obj_set_style_text_font(fpL1, &lv_font_montserrat_22, 0);
     lv_obj_align(fpL1, LV_ALIGN_CENTER, 0, 24);
     lv_obj_t *fpL2 = lv_label_create(s_fbPhonePage);
     lv_label_set_text(fpL2, "Pick your network there.");
     lv_obj_set_style_text_color(fpL2, lv_color_white(), 0);
-    lv_obj_set_style_text_font(fpL2, &lv_font_montserrat_16, 0);
+    lv_obj_set_style_text_font(fpL2, &lv_font_montserrat_22, 0);
     lv_obj_align(fpL2, LV_ALIGN_CENTER, 0, 52);
     lv_obj_t *fpBack = lv_label_create(s_fbPhonePage);
     lv_label_set_text(fpBack, LV_SYMBOL_LEFT "  Back");
     lv_obj_set_style_text_color(fpBack, C_GREY, 0);
-    lv_obj_set_style_text_font(fpBack, &lv_font_montserrat_20, 0);
+    lv_obj_set_style_text_font(fpBack, &lv_font_montserrat_26, 0);
     lv_obj_align(fpBack, LV_ALIGN_CENTER, 0, 120);
 
     // --- no readable SD card ---
@@ -1556,7 +1615,7 @@ void settingsview::init() {
     // be missing, and a person who meets both should not have to learn two tones.
     lv_label_set_text(sdTitle, "The Orb needs\nan SD card");
     lv_obj_set_style_text_color(sdTitle, lv_color_white(), 0);
-    lv_obj_set_style_text_font(sdTitle, &lv_font_montserrat_20, 0);
+    lv_obj_set_style_text_font(sdTitle, &lv_font_montserrat_28, 0);
     lv_obj_set_style_text_align(sdTitle, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_align(sdTitle, LV_ALIGN_CENTER, 0, -60);
     // Why, in one line. UX-006: nothing on screen is unexplained. Without this the notice
@@ -1564,17 +1623,17 @@ void settingsview::init() {
     lv_obj_t *sdWhy = lv_label_create(s_noSdPage);
     lv_label_set_text(sdWhy, "Designs live on the card.");
     lv_obj_set_style_text_color(sdWhy, C_DIM, 0);
-    lv_obj_set_style_text_font(sdWhy, &lv_font_montserrat_16, 0);
+    lv_obj_set_style_text_font(sdWhy, &lv_font_montserrat_20, 0);
     lv_obj_align(sdWhy, LV_ALIGN_CENTER, 0, 16);
     lv_obj_t *sdHow = lv_label_create(s_noSdPage);
     lv_label_set_text(sdHow, "Insert one and restart.");
     lv_obj_set_style_text_color(sdHow, lv_color_white(), 0);
-    lv_obj_set_style_text_font(sdHow, &lv_font_montserrat_16, 0);
+    lv_obj_set_style_text_font(sdHow, &lv_font_montserrat_22, 0);
     lv_obj_align(sdHow, LV_ALIGN_CENTER, 0, 46);
     lv_obj_t *sdHint = lv_label_create(s_noSdPage);
     lv_label_set_text(sdHint, "push to carry on without one");
     lv_obj_set_style_text_color(sdHint, C_GREY, 0);
-    lv_obj_set_style_text_font(sdHint, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_font(sdHint, &lv_font_montserrat_18, 0);
     lv_obj_align(sdHint, LV_ALIGN_CENTER, 0, 130);
 
     // --- recent cities page (single-item scroller) ---
@@ -1926,7 +1985,7 @@ void settingsview::init() {
         lv_obj_t *wtitle = lv_label_create(s_wifiListPage);
         lv_label_set_text(wtitle, "WiFi");
         lv_obj_set_style_text_color(wtitle, C_DIM, 0);
-        lv_obj_set_style_text_font(wtitle, &lv_font_montserrat_16, 0);
+        lv_obj_set_style_text_font(wtitle, &lv_font_montserrat_20, 0);
         lv_obj_align(wtitle, LV_ALIGN_CENTER, 0, -122);   // below the persistent "SETTINGS" header
 
         s_wifiHl = lv_obj_create(s_wifiListPage);
@@ -1941,7 +2000,10 @@ void settingsview::init() {
             lv_label_set_long_mode(s_wifiRows[r], LV_LABEL_LONG_DOT);
             lv_obj_set_width(s_wifiRows[r], 300);
             lv_obj_set_style_text_align(s_wifiRows[r], LV_TEXT_ALIGN_CENTER, 0);
-            lv_obj_set_style_text_font(s_wifiRows[r], &lv_font_montserrat_18, 0);
+            lv_obj_set_style_text_font(s_wifiRows[r], &lv_font_montserrat_26, 0);
+            // Only the selected row ever scrolls (set per-refresh below), so a resting
+            // screen stays still. Width is bounded so LVGL knows when to start.
+            lv_obj_set_width(s_wifiRows[r], 400);
             lv_obj_align(s_wifiRows[r], LV_ALIGN_CENTER, 0, -(WIFI_VISIBLE - 1) * WIFI_ROW_DY / 2 + r * WIFI_ROW_DY);
         }
         s_wifiListHint = lv_label_create(s_wifiListPage);
@@ -1987,7 +2049,10 @@ void settingsview::init() {
             lv_obj_align(s_wkStrip[k], LV_ALIGN_CENTER, (k - 3) * 48, 20);
         }
         s_wifiPassHint = lv_label_create(s_wifiPassPage);
-        lv_label_set_text(s_wifiPassHint, "turn to a key, push to enter it\nscroll to OK to connect");
+        lv_label_set_text(s_wifiPassHint, // Names Back as well as OK. The old wording listed only OK, which is the same
+        // discoverability gap the Back key was added to close — a way out nobody is told
+        // about is a way out nobody finds.
+        "turn to a key, push to enter it\nOK connects, Back returns");
         lv_obj_set_style_text_align(s_wifiPassHint, LV_TEXT_ALIGN_CENTER, 0);
         lv_obj_set_style_text_color(s_wifiPassHint, C_GREY, 0);
         lv_obj_set_style_text_font(s_wifiPassHint, &lv_font_montserrat_14, 0);

@@ -164,7 +164,24 @@ int  host_chime_index() { return 0; }
 void host_chime_set(int) {}
 void host_chime_preview(int) {}
 void host_wifi_scan_start() {}
-int  host_wifi_scan_result(char[][33], int8_t *, bool *, int) { return 0; }
+// A plausible scan, so --wifishot can photograph the network list with something in it.
+// Deliberately includes a name too long for the dial: truncation is a layout decision and a
+// decision nobody can see is one nobody has checked.
+int host_wifi_scan_result(char names[][33], int8_t *rssi, bool *isOpen, int maxN) {
+    static const char *FAKE[] = {
+        "Brock Home", "BT-HUB-9F2A", "Pixel_4821",
+        "VM-Superhub-Guest-Network-5G", "eduroam",
+    };
+    static const int8_t RSSI[] = { -42, -58, -67, -71, -80 };
+    const int n = (int)(sizeof(FAKE) / sizeof(FAKE[0]));
+    const int use = n < maxN ? n : maxN;
+    for (int i = 0; i < use; ++i) {
+        snprintf(names[i], 33, "%s", FAKE[i]);
+        rssi[i] = RSSI[i];
+        isOpen[i] = (i == 4);
+    }
+    return use;
+}
 void host_wifi_connect(const char *, const char *) {}
 // No NVS and no radio here, so there is nothing to protect and nothing to commit. The
 // device version is where the work is: see host_wifi_connect() in main.cpp.
@@ -1324,18 +1341,47 @@ int main(int argc, char **argv) {
             app_shell::setCaptured(true);
             settingsview::openWifiSetupPrompt();      // screen 1, on-device row selected
             lv_timer_handler(); lv_refr_now(NULL);
-            snprintf(path, sizeof(path), "%s-1-choice", wifiShot);
+            snprintf(path, sizeof(path), "%s-1-choice-a", wifiShot);
             sim_save_frame(path);
             settingsview::onTurn(1);                  // move to "Use my phone instead"
+            lv_timer_handler(); lv_refr_now(NULL);
+            snprintf(path, sizeof(path), "%s-2-choice-b", wifiShot);
+            sim_save_frame(path);
             settingsview::onPress();                  // screen 2
             lv_timer_handler(); lv_refr_now(NULL);
-            snprintf(path, sizeof(path), "%s-2-phone", wifiShot);
+            snprintf(path, sizeof(path), "%s-3-phone", wifiShot);
             sim_save_frame(path);
             // UX-024's notice, captured from the same run: on hardware it needs a device
             // with the card physically pulled, which is a worse way to check a layout.
             settingsview::openNoSdCardNotice(false);
             lv_timer_handler(); lv_refr_now(NULL);
-            snprintf(path, sizeof(path), "%s-3-nosd", wifiShot);
+            snprintf(path, sizeof(path), "%s-4-nosd", wifiShot);
+            sim_save_frame(path);
+
+            // The network list, with the fake scan above in it. Two frames are not needed;
+            // one shows a short name selected and a long one truncated beside it.
+            settingsview::openWifiSetupPrompt();
+            settingsview::onPress();                  // "Choose a network here" -> the list
+            // Real time has to pass, not just handler calls: wifi_tick is a 300 ms LVGL
+            // timer and pumping without advancing the clock never fires it, which is how
+            // the first render of this frame photographed "Scanning..." instead of a list.
+            // lv_tick_inc explicitly, not just SDL_Delay. The simulator advances LVGL's
+            // clock once per pass of its main loop (see lv_tick_inc below), and this block
+            // runs inside that pass — so sleeping alone leaves the clock frozen and the
+            // 300 ms wifi_tick never fires. Two renders of this frame photographed
+            // "Scanning..." before that was the answer rather than the timer period.
+            for (int i = 0; i < 16; ++i) { SDL_Delay(60); lv_tick_inc(60); lv_timer_handler(); }
+            lv_timer_handler(); lv_refr_now(NULL);
+            snprintf(path, sizeof(path), "%s-5-list", wifiShot);
+            sim_save_frame(path);
+
+            // ...and the password strip, part way through a word, with a letter selected.
+            settingsview::onPress();                  // pick the highlighted network
+            for (int i = 0; i < 6; ++i) { SDL_Delay(40); lv_tick_inc(40); lv_timer_handler(); }
+            for (int i = 0; i < 7; ++i) { settingsview::onTurn(1); settingsview::onPress(); }
+            settingsview::onTurn(5);                  // land on a letter, not DEL/OK/Back
+            lv_timer_handler(); lv_refr_now(NULL);
+            snprintf(path, sizeof(path), "%s-6-password", wifiShot);
             sim_save_frame(path);
             run = false;
         }
