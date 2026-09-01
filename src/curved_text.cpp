@@ -1,4 +1,5 @@
 #include "curved_text.h"
+#include "diag_log.h"   // the arc guard below says the fault out loud
 #include <math.h>
 #include <string.h>
 
@@ -134,6 +135,13 @@ void curved_text::draw_arc(const Target &dst, const lv_font_t *font, const char 
                            float cx, float cy, float R, float arcDeg,
                            lv_color_t col, int glow, lv_color_t glowCol, lv_opa_t opa) {
     if (!dst.buf || !font || !str || !str[0] || R < 1.0f) return;
+    // An arc has one baseline, so a paragraph cannot be laid along it the way draw_straight
+    // lays one. Said out loud rather than silently welded into a run-on, because that exact
+    // silence is what put "Configure attheorb.local192.168.1.42" on the About screen. Nothing
+    // on a card can reach this today - no theme ships splash_style.json - so it is a tripwire
+    // for whoever curves a multi-line slot first, not a layout decided here in advance.
+    if (strchr(str, '\n'))
+        diag::log("curved_text: draw_arc cannot lay a paragraph on one arc: \"%s\"", str);
     const int n = (int)strlen(str), cap = n < 80 ? n : 80;
     float w[80], total = 0.0f;
     for (int i = 0; i < cap; ++i) {
@@ -170,10 +178,45 @@ void curved_text::draw_arc(const Target &dst, const lv_font_t *font, const char 
     }
 }
 
+// Defined at the bottom of this file: one line, no newlines, the original body.
+static void straight_line_impl(const curved_text::Target &dst, const lv_font_t *font, const char *str,
+                               float bx, float by, lv_color_t col, int glow, lv_color_t glowCol,
+                               int align, lv_opa_t opa, const curved_text::Pill &pill);
+
 void curved_text::draw_straight(const Target &dst, const lv_font_t *font, const char *str,
                                 float bx, float by, lv_color_t col, int glow, lv_color_t glowCol,
-                                int align, lv_opa_t opa, const Pill &pill) {
+                                int align, lv_opa_t opa, const Pill &pill, int lineGap) {
     if (!dst.buf || !font || !str || !str[0]) return;
+
+    // One line is the overwhelmingly common case and takes the identical path it always did:
+    // no copy, no arithmetic, nothing to move a design that already exists.
+    int lines = 1;
+    for (const char *p = str; *p; ++p) if (*p == '\n') ++lines;
+    if (lines == 1) { straight_line_impl(dst, font, str, bx, by, col, glow, glowCol, align, opa, pill); return; }
+
+    // Centre the BLOCK on `by`, which is what the LVGL label these lines replaced did, so
+    // the config address lands on the anchor a design already positioned rather than hanging
+    // off the bottom of it.
+    const float step = (float)lv_font_get_line_height(font) + (float)lineGap;
+    float y = by - (float)(lines - 1) * step * 0.5f;
+    char line[80];
+    for (const char *p = str; ; y += step) {
+        const char *nl = strchr(p, '\n');
+        const size_t len = nl ? (size_t)(nl - p) : strlen(p);
+        const size_t room = len < sizeof(line) - 1 ? len : sizeof(line) - 1;
+        memcpy(line, p, room);
+        line[room] = '\0';
+        straight_line_impl(dst, font, line, bx, y, col, glow, glowCol, align, opa, pill);
+        if (!nl) break;
+        p = nl + 1;
+    }
+}
+
+// One line, already free of newlines: draw_straight's original body, arithmetic untouched.
+static void straight_line_impl(const curved_text::Target &dst, const lv_font_t *font, const char *str,
+                               float bx, float by, lv_color_t col, int glow, lv_color_t glowCol,
+                               int align, lv_opa_t opa, const curved_text::Pill &pill) {
+    if (!str[0]) return;
     const int n = (int)strlen(str), cap = n < 80 ? n : 80;
     float w[80], total = 0.0f;
     for (int i = 0; i < cap; ++i) {

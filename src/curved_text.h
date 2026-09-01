@@ -59,13 +59,33 @@ inline Pill pill_of(const T &t) {
     return { lv_color_hex(t.bg), (lv_opa_t)t.bgOpa, t.radius };
 }
 
-// The same glyph machinery without the arc: one straight line, baseline vertically centred
-// on `by`, laid out by each glyph's own advance width so a digit changing width pushes only
-// the tail of the string and a live value never wobbles.
+// The same glyph machinery without the arc: text on straight baselines, laid out by each
+// glyph's own advance width so a digit changing width pushes only the tail of the string and
+// a live value never wobbles.
+//
+// `str` MAY contain newlines, and this is the only place that gets to know how to lay them.
+// It knows because the alternative was proven on the glass: this used to lay exactly one
+// line, and LVGL reports '\n' as a glyph of zero width, so a caller handing over three lines
+// got all three welded into one run-on that overflowed the dial in both directions. One
+// caller (splash_lines' credits) walked the newline by hand and was fine; the next one (the
+// config address) did not know it had to, and shipped broken. Rule six: the shared path
+// enforces it, because a note beside one call site protects one call site.
+//
+// A block is CENTRED on `by` rather than hung below it, so a one-line string lands exactly
+// where it always did and a three-line one grows both ways. That is the same expression
+// menu_text::draw_wrapped derives and the same one Orb Studio lays its preview with, so a
+// design does not move between the browser and the dial.
+//
 // align: 0 = bx is the start, 1 = bx is the middle, 2 = bx is the end.
-// pill: optional plate behind the words, drawn first. Opa 0, the default, draws none.
+// pill: optional plate behind the words, drawn first. Opa 0, the default, draws none. One
+//   plate per line, each sized to its own line: a single box around a ragged block is a
+//   different shape from the one any design was drawn against.
+// lineGap: extra pixels between lines, on top of the font's own line height. 0 is what an
+//   LVGL label does by default and what the config address needs to sit where it used to.
+//   Note that splash_lines' data credits do NOT come through here: Orb Studio previews them
+//   as two separately anchored lines, so they stay two calls. See the comment there.
 void draw_straight(const Target &dst, const lv_font_t *font, const char *str,
                    float bx, float by, lv_color_t col, int glow, lv_color_t glowCol, int align,
-                   lv_opa_t opa = 255, const Pill &pill = Pill());
+                   lv_opa_t opa = 255, const Pill &pill = Pill(), int lineGap = 0);
 
 }  // namespace curved_text

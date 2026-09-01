@@ -1258,7 +1258,12 @@ int main(int argc, char **argv) {
             ui_set_status(true, true, -58, clk);   // mock: connected, fresh, strong signal
             ui_set_battery(78, false, true);   // mock battery
             ui_set_date("08 Jun 2026");        // mock date
-            settingsview::setNetInfo("Configure at\n" ORB_MDNS_ADDR "\n192.168.1.42");  // mock net info
+            // The SHAPE main.cpp:3227 actually sends, coordinate tail included. It used to
+            // stop at the IP, which is the reason the run-on address line was never visible
+            // here: the real string is 24 characters longer and overflows the dial, the mock
+            // very nearly fit. A mock shorter than the thing it stands in for hides exactly
+            // the faults it exists to catch.
+            settingsview::setNetInfo("Configure at\n" ORB_MDNS_ADDR "\n192.168.1.42  |  28.53830, -81.37920");
         }
         // fulfil route lookups with a mock (the sim has no network)
         char wc[12];

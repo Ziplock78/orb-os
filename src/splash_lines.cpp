@@ -31,13 +31,19 @@ lv_img_dsc_t s_glassDsc{};
 
 // The address line. Held here rather than read from elsewhere because it arrives late: the
 // splash is on screen well before WiFi has an IP, and About can be opened before or after.
-char s_net[64] = ORB_MDNS_ADDR;
+//
+// 112 to match the two buffers this is copied FROM - main.cpp's net[112] and
+// settings_view.cpp's s_netInfo[112]. At 64 it was the short one in the chain and silently
+// clipped the tail: "Configure at\ntheorb.local\n192.168.1.42  |  28.53830, -81.37920" is 62
+// characters and only fit by luck, and a three-digit octet or a three-digit longitude - a
+// stranger in Denver, say - pushed it over.
+char s_net[112] = ORB_MDNS_ADDR;
 
 lv_color_t rgb(uint32_t v) {
     return lv_color_make((uint8_t)(v >> 16), (uint8_t)(v >> 8), (uint8_t)v);
 }
 
-void one_line(const theme_style::SplashText &t, const char *text) {
+void one_line(const theme_style::SplashText &t, const char *text, int lineGap = 0) {
     if (!text || !*text || !s_buf) return;
     const curved_text::Target dst{ s_buf, W, H };
     const lv_font_t *f = splash_font(t.size);   // Inter, not the compiled stock face
@@ -49,7 +55,7 @@ void one_line(const theme_style::SplashText &t, const char *text) {
     } else {
         curved_text::draw_straight(dst, f, text, (float)t.x, (float)t.y,
                                    col, t.glow, glowCol, t.align, (lv_opa_t)t.opa,
-                                   curved_text::pill_of(t));
+                                   curved_text::pill_of(t), lineGap);
     }
 }
 
@@ -62,9 +68,21 @@ void repaint() {
     char ver[48];
     snprintf(ver, sizeof(ver), "The Orb OS v%s", FW_VERSION);
     one_line(sp.version, ver);
+    // Three lines: "Configure at", the mDNS name, and the IP with the active centre point.
+    // They arrive as one string with newlines in it and draw_straight lays them, which is
+    // the whole of the fix - see its header for why that had to move into the shared path.
     one_line(sp.network, s_net);
-    // Two sources, two lines. draw_straight lays one line, so the newline is walked here
-    // rather than teaching the glyph code about paragraphs for the sake of one caller.
+    // Two sources, and DELIBERATELY still two calls now that draw_straight could lay them
+    // from one string. Orb Studio previews these as two independently placed lines - the
+    // second at `y + size + 4` (studio.tsx's SplashPreview) - so they are two lines in the
+    // designer's head and two anchors in the file. Handing them over as one block would
+    // centre the pair on the credits anchor and slide both up ~9 px away from the preview
+    // somebody positioned them against, which is a worse fault than the duplication.
+    //
+    // The two steps do not agree and this is worth fixing on the Studio side rather than
+    // here: Studio steps by size + 4 (16 px), this steps by the font's line height + 4
+    // (19 px). menu_text hit exactly this and settled it by having Studio send an explicit
+    // lineStep; these lines have no such field yet.
     const char *credits[] = { "Aircraft data: adsb.lol", "Map data: OpenStreetMap" };
     theme_style::SplashText second = sp.credits;
     second.y += (int)lv_font_get_line_height(splash_font(sp.credits.size)) + 4;
