@@ -81,6 +81,17 @@ accessors = {}
 for m in re.finditer(r"const\s+(\w+)\s*&\s*(\w+)\(\)", style_h):
     accessors[m.group(1)] = m.group(2)
 
+# Fields that exist to be DECLARED rather than drawn. The firmware reads nothing from them
+# because nothing needs reading: their job is to carry a fact into the theme file so Orb
+# Studio can hold it against THEME_CAPS and refuse, and the field's own comment in
+# theme_style.h says so. Listed with the reason beside each, because a checker that reports
+# the same known-fine thing on every run is a checker that gets ignored, which is the failure
+# this file exists to prevent. Add a field here only with its reason.
+DECLARATIONS = {
+    ("Radar", "ringsPlate"): "declares radar_rings.png so an Orb below caps 6 is refused "
+                             "rather than left drawing a background with no grid on it",
+}
+
 for sname, fields in sorted(structs.items()):
     names = aliases.get(sname, set())
     if not names and sname not in accessors:
@@ -88,6 +99,9 @@ for sname, fields in sorted(structs.items()):
     for f in fields:
         parsed = f'"{f}"' in style_cpp
         if not parsed:
+            continue
+        if (sname, f) in DECLARATIONS:
+            print(f"  declared  theme_style::{sname}.{f}: {DECLARATIONS[(sname, f)]}")
             continue
         acc = accessors.get(sname)
         used = any(re.search(r"\b%s\s*\.\s*%s\b" % (re.escape(a), re.escape(f)), consumers) for a in names)
@@ -99,6 +113,12 @@ for sname, fields in sorted(structs.items()):
             #    split still gets its glow. Being read only in there is the point, not a
             #    fault, so a read (rather than the parse that writes it) counts.
             used = bool(re.search(r"=\s*[\w.]*\.%s\s*;" % re.escape(f), style_cpp))
+        if not used:
+            # 4. handed out by an ACCESSOR FUNCTION of its own rather than through the struct.
+            #    Names.theme has always been read as themeLabel(), and Names.author as
+            #    themeAuthor(): the field is what the function returns, so a `return x.f;`
+            #    inside the theme module is a read every caller of that function makes.
+            used = bool(re.search(r"return\s+[\w.]*\.%s\s*;" % re.escape(f), style_cpp))
         if not used:
             report("DEAD", f"theme_style::{sname}.{f} is parsed from the theme and never read")
 
