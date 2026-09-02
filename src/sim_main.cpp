@@ -1263,7 +1263,8 @@ int main(int argc, char **argv) {
             // here: the real string is 24 characters longer and overflows the dial, the mock
             // very nearly fit. A mock shorter than the thing it stands in for hides exactly
             // the faults it exists to catch.
-            settingsview::setNetInfo("Configure at\n" ORB_MDNS_ADDR "\n192.168.1.42  |  28.53830, -81.37920");
+            settingsview::setNetInfo("Configure at " ORB_MDNS_ADDR "\n192.168.1.42");
+            settingsview::setHomeCoords(28.53830, -81.37920, true);   // the Location readout
         }
         // fulfil route lookups with a mock (the sim has no network)
         char wc[12];

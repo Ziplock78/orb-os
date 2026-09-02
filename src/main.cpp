@@ -3223,12 +3223,20 @@ void loop() {
                              g_locationSet);
         char net[112];
         if (WiFi.status() == WL_CONNECTED)
-            // IP + the active centre point (helps users verify what actually got saved)
-            snprintf(net, sizeof(net), "Configure at\n" ORB_MDNS_ADDR "\n%s  |  %.5f, %.5f",
-                     WiFi.localIP().toString().c_str(), g_settings.homeLat, g_settings.homeLon);
+            // Two lines, and NO coordinates. UX-028 says what the splash must carry - the
+            // firmware version, the theme's name, its author and the data credits - and the
+            // config address is not on that list at all; it arrived here from the old
+            // touch-only Stats screen and stayed. The centre point was diagnostic rather
+            // than an address, it was the longest string on the screen, and it now lives on
+            // Settings > Location where somebody checking their location will look for it.
+            snprintf(net, sizeof(net), "Configure at " ORB_MDNS_ADDR "\n%s",
+                     WiFi.localIP().toString().c_str());
         else
             snprintf(net, sizeof(net), "WiFi setup:\njoin \"The Orb Setup\"");
         settingsview::setNetInfo(net);   // shown on Settings > About (was the Stats screen)
+        // The centre point the scope is actually using, shown on Settings > Location. Same
+        // contract as setNetInfo: safe every loop, only redraws while that page is open.
+        settingsview::setHomeCoords(g_settings.homeLat, g_settings.homeLon, g_locationSet);
         const bool bpresent = battery_present();
         ui_set_battery(battery_percent(), battery_charging(), bpresent);
         g_onBattery = bpresent && !battery_charging();

@@ -329,6 +329,8 @@ namespace {
     // which the boot splash also uses, so the two places that show this picture cannot
     // drift apart again.
     char      s_netInfo[112] = "";     // last line handed to setNetInfo(), replayed on page open
+    char      s_homeCoords[48] = "";   // last value handed to setHomeCoords(), same contract
+    lv_obj_t *s_lmCoords = nullptr;    // the readout under the Location page's title
     lv_obj_t *s_aboutImg  = nullptr;   // decoded fresh each time (see refresh_about()) — cheap, avoids relying on splash_art's shared decode buffer staying valid
     // --- first-boot WiFi choice (UX-019 as amended 2026-08-30, UX-022) ---
     //
@@ -686,7 +688,14 @@ namespace {
         lv_label_set_text(s_volPct, buf);
     }
 
-    void refresh_locmenu() { wheel_layout(s_lmItems, LM_COUNT, s_lmSel, s_lmHl); }
+    void refresh_locmenu() {
+        // The centre point first, so somebody arriving to check their location can read the
+        // answer without selecting anything. This is the receipt for CUT-18 - the location
+        // you set is the location it uses - and it used to be legible only on the splash,
+        // for three seconds, at the bottom of a crowded dial.
+        if (s_lmCoords) lv_label_set_text(s_lmCoords, s_homeCoords[0] ? s_homeCoords : "location not set");
+        wheel_layout(s_lmItems, LM_COUNT, s_lmSel, s_lmHl);
+    }
 
     // NOT the wheel, and that is the point rather than an omission.
     //
@@ -1559,6 +1568,14 @@ void settingsview::init() {
     lv_obj_set_style_text_color(lmtitle, C_DIM, 0);
     lv_obj_set_style_text_font(lmtitle, &lv_font_montserrat_16, 0);
     lv_obj_align(lmtitle, LV_ALIGN_CENTER, 0, -122);
+    // Directly under the title and above the wheel, in the dim ink the other secondary
+    // readouts use. Text is set in refresh_locmenu(), which runs on every entry.
+    s_lmCoords = lv_label_create(s_lmPage);
+    lv_label_set_text(s_lmCoords, "");
+    lv_obj_set_style_text_color(s_lmCoords, C_GREY, 0);
+    lv_obj_set_style_text_font(s_lmCoords, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_align(s_lmCoords, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_align(s_lmCoords, LV_ALIGN_CENTER, 0, -100);
     s_lmHl = lv_obj_create(s_lmPage);
     style_highlight(s_lmHl);
     for (int i = 0; i < LM_COUNT; ++i) {
@@ -2208,6 +2225,12 @@ void settingsview::openAboutPage() {
 
 // Called from the host's status loop. Stored rather than drawn immediately: the About
 // page is usually hidden, and the loop runs far more often than anyone opens it.
+void settingsview::setHomeCoords(double lat, double lon, bool set) {
+    if (set) snprintf(s_homeCoords, sizeof(s_homeCoords), "%.5f, %.5f", lat, lon);
+    else     s_homeCoords[0] = '\0';
+    if (s_mode == MODE_LOCATION) refresh_locmenu();
+}
+
 void settingsview::setNetInfo(const char *line) {
     if (!line) return;
     snprintf(s_netInfo, sizeof(s_netInfo), "%s", line);

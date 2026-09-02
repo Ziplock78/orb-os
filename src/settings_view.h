@@ -26,4 +26,11 @@ namespace settingsview {
     // page alongside the firmware version. Both moved here from the old touch-only
     // Stats screen. Safe to call every loop: it only redraws while About is open.
     void      setNetInfo(const char *line);
+
+    // The centre point the scope is using, shown under the Location page's title. It moved
+    // off the splash, where it was the longest of three lines and was not an address at
+    // all: somebody checking whether their location took looks in Location, not at a boot
+    // screen that is gone in three seconds. `set` false draws "not set yet" rather than
+    // 0.00000, 0.00000, which is a real place in the Gulf of Guinea.
+    void      setHomeCoords(double lat, double lon, bool set);
 }
