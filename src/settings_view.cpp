@@ -391,6 +391,21 @@ namespace {
             || m == MODE_WIFI_LIST  || m == MODE_WIFI_PASSWORD  || m == MODE_WIFI_STATUS;
     }
 
+    // Pages that paint their OWN full-screen picture, so the Settings plate and glass must
+    // not sit over them.
+    //
+    // Deliberately a wider set than mode_is_system_chrome(), and asked as its own question
+    // rather than folded into that one. System chrome means "this is the setup path, so the
+    // wheel's VALUES go stock too", because a theme must never be able to render the screen
+    // somebody fixes their WiFi on illegible. About is not a setup screen - it is the boot
+    // splash, opened from Settings - and it wants none of those value swaps. It just owns
+    // every pixel while it is up. Conflating the two is what left the Settings glass
+    // composited over the splash: settings_overlay.png is move_foreground()'d, so Aviator's
+    // "SETTINGS" wordmark and winged badge sat on top of the ORB logo.
+    bool mode_paints_its_own_screen(Mode m) {
+        return m == MODE_ABOUT || mode_is_system_chrome(m);
+    }
+
     lv_obj_t *s_resetPage = nullptr;   // Reset: warning + confirm, push to wipe, turn to cancel
 
     // WiFi setup pages (encoder-driven, same look as the rest of Settings)
@@ -775,10 +790,13 @@ namespace {
         // under it. Both are PNGs on the SD card, which is the circularity this whole rule
         // is about — the no-card notice was being dressed by a file whose absence it exists
         // to report.
-        if (s_plateImg) { if (s_systemChrome) lv_obj_add_flag(s_plateImg, LV_OBJ_FLAG_HIDDEN);
-                          else                lv_obj_clear_flag(s_plateImg, LV_OBJ_FLAG_HIDDEN); }
-        if (s_ovImg)    { if (s_systemChrome) lv_obj_add_flag(s_ovImg, LV_OBJ_FLAG_HIDDEN);
-                          else                lv_obj_clear_flag(s_ovImg, LV_OBJ_FLAG_HIDDEN); }
+        // Gated on mode_paints_its_own_screen(), NOT on s_systemChrome. The two were the same
+        // test until About turned out to need the art hidden without needing stock values.
+        const bool ownsScreen = mode_paints_its_own_screen(m);
+        if (s_plateImg) { if (ownsScreen) lv_obj_add_flag(s_plateImg, LV_OBJ_FLAG_HIDDEN);
+                          else            lv_obj_clear_flag(s_plateImg, LV_OBJ_FLAG_HIDDEN); }
+        if (s_ovImg)    { if (ownsScreen) lv_obj_add_flag(s_ovImg, LV_OBJ_FLAG_HIDDEN);
+                          else            lv_obj_clear_flag(s_ovImg, LV_OBJ_FLAG_HIDDEN); }
         // The guard, and it is here rather than in a comment because this is the second pass
         // at the same rule and the first one was a comment. Rule six: a comment cannot fail,
         // a guard can.
