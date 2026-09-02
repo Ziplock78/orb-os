@@ -272,7 +272,13 @@ namespace theme_style {
 //
 //      An Orb below this level ignores deadZonePx and draws no dead zone unless one was
 //      welded into its firmware, which is exactly what every theme built before this got.
-constexpr int THEME_CAPS = 34;
+//  35  the theme's name and author as a fourth standing line on the splash (Splash.theme),
+//      read from theme.json's "name" and "author". UX-028 has always listed both as what
+//      that screen must carry, and CUT-07 says so by number; the splash carried the version
+//      and the credits and neither of these. An Orb below this draws nothing where the line
+//      sits, so Studio refuses every design to it, the way the glass clause at 16 does: the
+//      preview shows a line the device would not.
+constexpr int THEME_CAPS = 35;
 
 struct ClockText {
     bool     show   = false;
@@ -426,6 +432,10 @@ struct Ticker {
 // "/themes/the-office/" looked like unrelated things.
 struct Names {
     char theme[32]        = "";              // the theme's own label, e.g. "Modern"
+    // Who made it, from theme.json's "author". UX-047 says the name travels inside the
+    // theme, and UX-028 says the splash shows it; this is the one place the device keeps
+    // it. Empty when the file makes no claim, and the splash then prints the name alone.
+    char author[64]       = "";
     char clock[20]        = "Clock";
     char flight[20]       = "Flight Tracker";
     char weather[20]      = "Weather Radar";
@@ -923,6 +933,11 @@ struct Splash {
     SplashText version{ .x = 233, .y = 353, .size = 14, .color = 0xFFFFFF, .opa = 255 };
     SplashText network{ .x = 233, .y = 385, .size = 14, .color = 0x6A7078, .opa = 255 };
     SplashText credits{ .x = 233, .y = 419, .size = 12, .color = 0x6A7078, .opa = 255 };
+    // The theme's name and who made it, THEME_CAPS 35. UX-028 lists this beside the version
+    // and the credits as what the splash must carry, and until now it carried neither. One
+    // rung above the version in the same 32 px rhythm the other three keep, in the credits'
+    // ink. Where it lands on a given theme's art is the designer's to settle, like the rest.
+    SplashText theme{ .x = 233, .y = 321, .size = 12, .color = 0x6A7078, .opa = 255 };
 };
 
 // The Headlines screen. The background can be a colour or a picture, and the picture
@@ -1151,6 +1166,7 @@ const Names     &names();     // display labels; see the Names comment on why th
 // The theme's display name, falling back to its slug when it has none. Use this anywhere
 // a person reads it (Settings > Design, /health), never the raw slug.
 const char *themeLabel();
+const char *themeAuthor();    // theme.json "author", or "" when the file makes no claim
 
 // The display name for any installed theme, not just the active one — Settings > Design
 // lists them all. Falls back to the slug when a theme declares no name. Reads that

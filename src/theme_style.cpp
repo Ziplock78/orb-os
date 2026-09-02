@@ -785,6 +785,7 @@ void load() {
                 { "version", &s_splash.version },
                 { "network", &s_splash.network },
                 { "credits", &s_splash.credits },
+                { "theme",   &s_splash.theme   },   // THEME_CAPS 35
             };
             for (auto &it : items) {
                 JsonVariantConst v = doc[it.key];
@@ -996,6 +997,8 @@ void load() {
             // which app is which, so a theme can rename Flight Tracker freely.
             if (doc["name"].is<const char *>())
                 snprintf(s_names.theme, sizeof(s_names.theme), "%s", doc["name"].as<const char *>());
+            if (doc["author"].is<const char *>())
+                snprintf(s_names.author, sizeof(s_names.author), "%s", doc["author"].as<const char *>());
             JsonVariantConst nm = doc["names"];
             if (!nm.isNull()) {
                 struct { const char *key; char *dst; size_t cap; } map[] = {
@@ -1071,6 +1074,8 @@ const char *themeLabel() {
     const char *slug = theme_select::activeSlug();
     return (slug && slug[0]) ? slug : "Stock";
 }
+
+const char *themeAuthor() { return s_names.author; }
 
 uint32_t assetsFingerprint() {
     // Prefer Launch Kit's "assetsHash", which covers the asset CONTENTS. The name-only

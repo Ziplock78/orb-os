@@ -68,6 +68,16 @@ void repaint() {
     char ver[48];
     snprintf(ver, sizeof(ver), "The Orb OS v%s", FW_VERSION);
     one_line(sp.version, ver);
+    // The theme's name and who made it, THEME_CAPS 35. UX-028 puts these beside the version
+    // and the credits, and CUT-07 says so by number; the splash carried neither. Live like
+    // the other three because they come from theme.json on the card, which Studio writes
+    // at export rather than baking into the picture. ASCII only, "by" rather than an
+    // interpunct: the compiled Inter covers 0x20-0x7F and anything outside it draws nothing.
+    char who[112];
+    const char *author = theme_style::themeAuthor();
+    if (author && *author) snprintf(who, sizeof(who), "%s by %s", theme_style::themeLabel(), author);
+    else                   snprintf(who, sizeof(who), "%s", theme_style::themeLabel());
+    one_line(sp.theme, who);
     // Three lines: "Configure at", the mDNS name, and the IP with the active centre point.
     // They arrive as one string with newlines in it and draw_straight lays them, which is
     // the whole of the fix - see its header for why that had to move into the shared path.
