@@ -781,16 +781,20 @@ void load() {
         JsonDocument doc;
         if (read_style_json(slug, "splash_style.json", doc)) {
             s_splash.styled = true;
-            struct { const char *key; SplashText *dst; } items[] = {
-                { "version", &s_splash.version },
-                { "network", &s_splash.network },
-                { "credits", &s_splash.credits },
-                { "theme",   &s_splash.theme   },   // THEME_CAPS 35
+            // hideable: whether "show" is read at all. False for the version and the credits
+            // on purpose, so a file carrying show:false for them changes nothing (UX-028,
+            // UX-030); Studio never writes the key for those two either.
+            struct { const char *key; SplashText *dst; bool hideable; } items[] = {
+                { "version", &s_splash.version, false },
+                { "network", &s_splash.network, true  },   // THEME_CAPS 36
+                { "credits", &s_splash.credits, false },
+                { "theme",   &s_splash.theme,   true  },   // THEME_CAPS 35, hideable at 36
             };
             for (auto &it : items) {
                 JsonVariantConst v = doc[it.key];
                 if (v.isNull()) continue;
                 SplashText &t = *it.dst;
+                if (it.hideable && v["show"].is<bool>()) t.show = v["show"].as<bool>();
                 if (v["x"].is<int>())         t.x = v["x"].as<int>();
                 if (v["y"].is<int>())         t.y = v["y"].as<int>();
                 // Clamped to the ladder lv_conf.h actually compiles. Studio clamps to the

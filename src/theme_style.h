@@ -278,7 +278,13 @@ namespace theme_style {
 //      and the credits and neither of these. An Orb below this draws nothing where the line
 //      sits, so Studio refuses every design to it, the way the glass clause at 16 does: the
 //      preview shows a line the device would not.
-constexpr int THEME_CAPS = 35;
+//  36  the config address and the theme line can be switched off (SplashText.show, read for
+//      those two only). Zion asked for it: the address is the Orb's own web page, which is
+//      useful and not required, and on a splash designed as a picture it is clutter. The
+//      version and the credits deliberately never read the flag, so a design cannot remove
+//      what UX-028 and UX-030 say must be there. An Orb below this draws both lines whatever
+//      the design says, so Studio refuses a design that turned one off.
+constexpr int THEME_CAPS = 36;
 
 struct ClockText {
     bool     show   = false;
@@ -905,6 +911,10 @@ struct SplashText {
     bool     curved    = false;
     int      curveR    = 0;
     float    arcDeg    = 0.0f;
+    // THEME_CAPS 36. Read for the config address and the theme line only; the version and
+    // the credits never parse it (see the items table in theme_style.cpp), so a theme
+    // cannot switch those off, which UX-028 and UX-030 require. Defaults on.
+    bool     show      = true;
 };
 
 // The splash, which is also the About page.

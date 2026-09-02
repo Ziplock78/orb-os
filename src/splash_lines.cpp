@@ -77,11 +77,11 @@ void repaint() {
     const char *author = theme_style::themeAuthor();
     if (author && *author) snprintf(who, sizeof(who), "%s by %s", theme_style::themeLabel(), author);
     else                   snprintf(who, sizeof(who), "%s", theme_style::themeLabel());
-    one_line(sp.theme, who);
+    if (sp.theme.show) one_line(sp.theme, who);
     // Three lines: "Configure at", the mDNS name, and the IP with the active centre point.
     // They arrive as one string with newlines in it and draw_straight lays them, which is
     // the whole of the fix - see its header for why that had to move into the shared path.
-    one_line(sp.network, s_net);
+    if (sp.network.show) one_line(sp.network, s_net);   // THEME_CAPS 36: a design may switch it off
     // Two sources, and DELIBERATELY still two calls now that draw_straight could lay them
     // from one string. Orb Studio previews these as two independently placed lines - the
     // second at `y + size + 4` (studio.tsx's SplashPreview) - so they are two lines in the
