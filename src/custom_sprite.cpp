@@ -111,8 +111,13 @@ bool decode_sd_first(const char *assetName, const uint8_t *flashPng, uint32_t fl
         } else {
             Serial.printf("[custom_sprite] %s: no SD file at %s\n", tag, path);
         }
-    } else {
+    } else if (!slug[0]) {
         Serial.printf("[custom_sprite] %s: no active theme slug, skipping SD\n", tag);
+    } else {
+        // Two causes, two messages. This branch used to say "no active theme slug" for
+        // both, and the wrong one sent an hour down the wrong path on 2026-09-01: the slug
+        // was fine, the theme's asset list simply did not name the file.
+        Serial.printf("[custom_sprite] %s: theme does not declare %s, skipping SD\n", tag, assetName);
     }
     if (!flashPng) {
         Serial.printf("[custom_sprite] %s: no flash fallback either — nothing to draw\n", tag);
