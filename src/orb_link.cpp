@@ -2,6 +2,7 @@
 
 #include <Arduino.h>
 #include <WiFi.h>
+#include <esp_mac.h>         // esp_efuse_mac_get_default, for cmd_hello
 #include <stdarg.h>
 #include <stdio.h>
 #include <string.h>
@@ -119,6 +120,15 @@ void cmd_hello() {
     // time a new theme setting is readable. A tool needs the second one to know whether a
     // design will actually be honoured.
     out_fmt(",\"proto\":%d,\"caps\":%d,\"fw\":\"%s\"", PROTOCOL_VERSION, theme_style::THEME_CAPS, FW_VERSION);
+    // The chip's burned-in base MAC, the same six bytes esptool prints, so Studio can
+    // recognise THIS Orb again whatever firmware or theme is on it. Nothing else in this
+    // reply survives an erase: the slug is NVS, the theme is the card, fw is what was just
+    // written. It is what lets "have I set this Orb up before" be a fact rather than a guess
+    // from silence, and the guess from silence is what wiped a board and seeded three
+    // Aviators on 2026-09-01.
+    uint8_t mac[6] = {0};
+    esp_efuse_mac_get_default(mac);
+    out_fmt(",\"mac\":\"%02x:%02x:%02x:%02x:%02x:%02x\"", mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
     out_str(",\"slug\":");
     out_json_string(theme_select::activeSlug());
     out_str(",\"theme\":");
