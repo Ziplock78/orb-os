@@ -431,7 +431,10 @@ struct Ticker {
 // folder called `the-office` (its former name), so "push Modern to the Orb" and
 // "/themes/the-office/" looked like unrelated things.
 struct Names {
-    char theme[32]        = "";              // the theme's own label, e.g. "Modern"
+    // 48, because Orb Studio writes up to 40 characters into theme.json's "name" and this
+    // was 32: a name of 32 to 40 characters was cut silently on the splash and in ?orb
+    // hello, and nothing on either side said so. Found by cross-checking the two limits.
+    char theme[48]        = "";              // the theme's own label, e.g. "Modern"
     // Who made it, from theme.json's "author". UX-047 says the name travels inside the
     // theme, and UX-028 says the splash shows it; this is the one place the device keeps
     // it. Empty when the file makes no claim, and the splash then prints the name alone.
