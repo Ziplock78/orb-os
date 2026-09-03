@@ -38,7 +38,7 @@ void begin();
 
 // What the active theme asks for. Called whenever a theme is applied, so switching to a
 // design with no mainspring stops the clock ever being stopped.
-void applyTheme(bool on, int hours, bool sound, bool notice);
+void applyTheme(bool on, int seconds, bool sound, bool notice);
 
 bool enabled();          // this theme has a mainspring at all
 bool soundOn();          // click while winding

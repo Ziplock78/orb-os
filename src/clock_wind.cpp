@@ -10,7 +10,7 @@ namespace {
 
 // From the theme, replaced whole every time one is applied.
 bool s_on     = false;
-int  s_hours  = 48;
+int  s_secs   = 86400;
 bool s_sound  = true;
 bool s_notice = true;
 
@@ -63,11 +63,13 @@ void clock_wind::begin() {
 #endif
 }
 
-void clock_wind::applyTheme(bool on, int hours, bool sound, bool notice) {
+void clock_wind::applyTheme(bool on, int seconds, bool sound, bool notice) {
     s_on     = on;
     // Clamped rather than trusted. The value arrives from a file on a removable card, and a
-    // zero would make a clock that is wound down the instant it is wound.
-    s_hours  = hours < 1 ? 1 : (hours > 24 * 30 ? 24 * 30 : hours);
+    // zero would make a clock that is wound down the instant it is wound. Ten seconds is the
+    // floor because Studio offers it: it is the setting that makes this feature possible to
+    // try at all, rather than a two day wait per attempt.
+    s_secs   = seconds < 10 ? 10 : (seconds > 14 * 24 * 3600 ? 14 * 24 * 3600 : seconds);
     s_sound  = sound;
     s_notice = notice;
     // The winding gesture does not survive a theme change. Half a wind on the design you
@@ -88,7 +90,7 @@ bool clock_wind::stopped() {
 
 float clock_wind::charge() {
     if (!s_on || !time_known()) return 1.0f;
-    const int64_t full = (int64_t)s_hours * 3600LL;
+    const int64_t full = (int64_t)s_secs;
     const int64_t left = s_woundUntil - now_epoch();
     if (left <= 0)   return 0.0f;
     if (left >= full) return 1.0f;
@@ -115,10 +117,10 @@ bool clock_wind::turn(int delta) {
     s_justWound = true;
     // Wound from NOW, not from whenever it ran out. Anything else would quietly punish
     // somebody for not noticing it had stopped.
-    s_woundUntil = now_epoch() + (int64_t)s_hours * 3600LL;
+    s_woundUntil = now_epoch() + (int64_t)s_secs;
     save();
 #ifdef ARDUINO
-    Serial.printf("[wind] wound: runs %d h, to %lld\n", s_hours, (long long)s_woundUntil);
+    Serial.printf("[wind] wound: runs %d s, to %lld\n", s_secs, (long long)s_woundUntil);
 #endif
     return true;
 }

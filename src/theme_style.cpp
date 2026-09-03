@@ -465,7 +465,7 @@ void load() {
         JsonDocument doc;
         if (read_style_json(slug, "clock_style.json", doc)) {
             if (doc["windOn"].is<bool>())     s_clock.windOn     = doc["windOn"].as<bool>();
-            if (doc["windHours"].is<int>())   s_clock.windHours  = doc["windHours"].as<int>();
+            if (doc["windSecs"].is<int>())    s_clock.windSecs   = doc["windSecs"].as<int>();
             if (doc["windSound"].is<bool>())  s_clock.windSound  = doc["windSound"].as<bool>();
             if (doc["windNotice"].is<bool>()) s_clock.windNotice = doc["windNotice"].as<bool>();
             if (doc["bg"].is<uint32_t>()) s_clock.bg = doc["bg"].as<uint32_t>();

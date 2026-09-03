@@ -1450,7 +1450,7 @@ int main(int argc, char **argv) {
                 // a mainspring reports run down straight away, which is the state under
                 // test and also what a real Orb does the first time a design switches this
                 // on: it wants winding before it will run.
-                clock_wind::applyTheme(true, 48, false, true);
+                clock_wind::applyTheme(true, 86400, false, true);
                 app_shell::selectApp(app_shell::APP_CLOCK);
                 lv_timer_handler();
                 wind_notice::tick();

@@ -639,7 +639,7 @@ static void applyThemeSettings() {
     // applied. A theme without one can never leave the clock stopped.
     {
         const theme_style::Clock &cs = theme_style::clock();
-        clock_wind::applyTheme(cs.windOn, cs.windHours, cs.windSound, cs.windNotice);
+        clock_wind::applyTheme(cs.windOn, cs.windSecs, cs.windSound, cs.windNotice);
     }
     const theme_style::Radar &rs = theme_style::radar();
     // -1 (or 0 for range) means "no opinion", leaving the Orb's own stored setting alone.

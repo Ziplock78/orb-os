@@ -292,7 +292,14 @@ namespace theme_style {
 //      An Orb below this level ignores all four keys and simply never runs down, which is a
 //      theme quietly losing its character rather than drawing something wrong, so Studio
 //      warns instead of refusing.
-constexpr int THEME_CAPS = 37;
+//  38  the same mainspring, with its duration in SECONDS (windSecs) rather than hours.
+//      Level 37 shipped windHours and lived about an hour: Zion asked for a ten second and a
+//      one minute setting, which no whole number of hours can say, and those two are what
+//      make the feature testable at all rather than a two day wait per attempt. The level is
+//      spent rather than the key quietly reused because an Orb on 37 reports a mainspring it
+//      has and then cannot read the only field that says how long it runs, which is the tool
+//      lying about what the device agreed to.
+constexpr int THEME_CAPS = 38;
 
 struct ClockText {
     bool     show   = false;
@@ -359,12 +366,12 @@ struct Clock {
     // the device nothing at all and the runtime work is one ordinary rotate-and-blend.
     bool      shadowOn = false;
     int       shadowDX = 0, shadowDY = 0;     // px, screen space, applied to every hand
-    // THEME_CAPS 37. A virtual mainspring: the clock runs down and has to be wound with the
+    // THEME_CAPS 38. A virtual mainspring: the clock runs down and has to be wound with the
     // knob. See clock_wind.h for why it exists and what it refuses to do. Off unless a
     // design asks, because a stopped clock reads as a broken one to anybody who did not
     // switch it on themselves.
     bool      windOn     = false;
-    int       windHours  = 48;     // how long one full wind lasts
+    int       windSecs   = 86400;  // how long one full wind lasts, in seconds
     bool      windSound  = true;   // a click per detent while winding
     bool      windNotice = true;   // the full-screen "please wind" panel when it stops
 };
