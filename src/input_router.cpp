@@ -1,5 +1,6 @@
 #include "input_router.h"
 #include "knob_help.h"
+#include "wind_notice.h"
 #include "update_ui.h"
 #include <lvgl.h>       // lv_tick_get — a millisecond clock both targets have
 #if defined(ESP_PLATFORM)
@@ -127,6 +128,20 @@ void input_router::dispatch(int delta, bool pressed) {
 #if defined(ESP_PLATFORM)
     if (delta != 0 || pressed) display::markInput(lv_tick_get());
 #endif
+
+    // A wound-down clock asking to be wound. Turning winds it; a press does nothing,
+    // because five turns is the price and a press would be a way to skip it.
+    //
+    // The rock is checked FIRST and deliberately still works, so this screen can always be
+    // left. Winding counts detents in one direction only, which is what leaves a reversal
+    // free to keep meaning "open the app menu" here as everywhere else. Without that, a
+    // theme could strand somebody on a screen that will not take no for an answer, which is
+    // the thing CUT-05 exists to forbid.
+    if (wind_notice::showing()) {
+        if (!app_shell::captured() && rocked()) { app_shell::openSwitcher(); return; }
+        if (delta != 0) wind_notice::turn(delta);
+        return;
+    }
 
     // The switcher owns everything while it is up: turning cycles apps, pressing commits.
     // Leaving it is the 2 s settle or a press, never the gesture, so a rock performed while

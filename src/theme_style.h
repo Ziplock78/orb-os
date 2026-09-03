@@ -284,7 +284,15 @@ namespace theme_style {
 //      version and the credits deliberately never read the flag, so a design cannot remove
 //      what UX-028 and UX-030 say must be there. An Orb below this draws both lines whatever
 //      the design says, so Studio refuses a design that turned one off.
-constexpr int THEME_CAPS = 36;
+//  37  a virtual mainspring on the clock (Clock.windOn/windHours/windSound/windNotice). The
+//      clock runs down over a set number of hours, stops its hands, says so in words, and is
+//      wound again with five turns of the knob. Zion asked for it after his vintage radio,
+//      where the AM static between stations turned out to be the thing people talked about:
+//      a small sensory detail that asks something of you is what makes an object feel alive.
+//      An Orb below this level ignores all four keys and simply never runs down, which is a
+//      theme quietly losing its character rather than drawing something wrong, so Studio
+//      warns instead of refusing.
+constexpr int THEME_CAPS = 37;
 
 struct ClockText {
     bool     show   = false;
@@ -351,6 +359,14 @@ struct Clock {
     // the device nothing at all and the runtime work is one ordinary rotate-and-blend.
     bool      shadowOn = false;
     int       shadowDX = 0, shadowDY = 0;     // px, screen space, applied to every hand
+    // THEME_CAPS 37. A virtual mainspring: the clock runs down and has to be wound with the
+    // knob. See clock_wind.h for why it exists and what it refuses to do. Off unless a
+    // design asks, because a stopped clock reads as a broken one to anybody who did not
+    // switch it on themselves.
+    bool      windOn     = false;
+    int       windHours  = 48;     // how long one full wind lasts
+    bool      windSound  = true;   // a click per detent while winding
+    bool      windNotice = true;   // the full-screen "please wind" panel when it stops
 };
 
 // Which apps this theme puts in the knob menu. Was custom_apps.h, compiled in, so it was

@@ -33,6 +33,8 @@
 #include "orb_link.h"      // USB serial command channel: how a browser (Orb Studio) talks to this device
 #include "custom_weld.h"   // CUSTOM_WELD_HASH — lets a push tell whether new firmware is needed
 #include "theme_style.h"   // per-theme app roster (theme_style::apps())
+#include "clock_wind.h"    // the clock's virtual mainspring, THEME_CAPS 37
+#include "wind_notice.h"   // ...and the panel that asks for it
 #include "display.h"                  // M0: CO5300 + LVGL bring-up
 #include "imu_qmi8658.h"             // face-down sleep
 #include "battery.h"                 // AXP2101 battery gauge
@@ -633,6 +635,12 @@ static void adsb_task(void*) {
 //
 // Order is the whole fix. Nothing else about these rules changed.
 static void applyThemeSettings() {
+    // The mainspring belongs to the design, so it is replaced whole every time one is
+    // applied. A theme without one can never leave the clock stopped.
+    {
+        const theme_style::Clock &cs = theme_style::clock();
+        clock_wind::applyTheme(cs.windOn, cs.windHours, cs.windSound, cs.windNotice);
+    }
     const theme_style::Radar &rs = theme_style::radar();
     // -1 (or 0 for range) means "no opinion", leaving the Orb's own stored setting alone.
     if (rs.rangeKm     > 0.0f) g_settings.rangeKm = rs.rangeKm;
@@ -2613,6 +2621,7 @@ void setup() {
     setenv("TZ", g_tz.c_str(), 1); tzset();   // local time for display even before NTP (loadSettings ran above)
     rtc_begin();
     rtc_seed_clock();                   // offline clock/date from the PCF85063
+    clock_wind::begin();            // the stored wind, before any screen asks about it
     if (audio_begin()) {                // ES8311 alert pings (no-op if codec absent)
         audio_set_volume(g_volume);
         audio_set_muted(g_muted);
@@ -2979,6 +2988,10 @@ void loop() {
     // moved: two frames of latency on every turn, which is what made the knob feel
     // sluggish. Handling it first means a turn is acted on by the very next render.
     knob::poll();                   // drain detents/presses accumulated by the ISR
+    // Before the input is routed, so a clock that ran out one second ago is already asking
+    // by the time the next detent arrives rather than one frame later. Cheap: it compares
+    // two integers unless the answer has actually changed.
+    wind_notice::tick();
     update_hold_warning();          // countdown while the button is held (see build_hold_warning)
     if (knob::takeLongPress()) {    // held ~8 s -> manual recovery reboot
         Serial.println("[main] knob long-press -> reboot");

@@ -35,6 +35,8 @@
 #include "theme_select.h"
 #include "update_ui.h"   // --updateshot, below
 #include "knob_help.h"  // --knobshot, below
+#include "clock_wind.h"  // --windshot, below
+#include "wind_notice.h"
 #include "theme_style.h"   // per-theme app roster (apps()) + the scope's operational values (radar())
 #include "settings_view.h"
 #include "custom_boot_target.h"  // CUSTOM_BOOT_TARGET — set by whichever Launch Kit push (clock/splash/radar) ran last
@@ -764,6 +766,11 @@ int main(int argc, char **argv) {
     // the way out. Painting the panel by hand would photograph a layout while proving
     // nothing about the wiring, and the wiring is the whole feature.
     const char *knobShot   = (argc >= 3 && strcmp(argv[1], "--knobshot")   == 0) ? argv[2] : NULL;
+    // --windshot <prefix>: the wound-down clock and its wind gauge. On hardware this state
+    // is reached by waiting out a theme's whole mainspring, which is a day or two, so there
+    // is no other way to look at the screen at all. Three frames: the panel as it appears,
+    // the gauge part way round, and what is left after the fifth turn lands.
+    const char *windShot   = (argc >= 3 && strcmp(argv[1], "--windshot")   == 0) ? argv[2] : NULL;
     // --wifishot <prefix>: the first-boot WiFi choice and the phone screen behind it.
     //
     // Same reason as the three above — on hardware these exist only on a device with no
@@ -795,7 +802,7 @@ int main(int argc, char **argv) {
     // --newsshot is headless but drives the KNOB, so it needs the full app lineup that only
     // interactive mode registers. It is the one capture that walks the shell rather than
     // putting a single screen up directly.
-    const bool  interactive = !shotPath && !gifPath && !updateShot && !readyShot && !bakeShot && !wifiShot && !knobShot;
+    const bool  interactive = !shotPath && !gifPath && !updateShot && !readyShot && !bakeShot && !wifiShot && !knobShot && !windShot;
     (void)wxShot;   // live knob/app-shell only outside headless capture
     (void)setShot;
 
@@ -928,7 +935,7 @@ int main(int argc, char **argv) {
     // clock: the feature under test is what happens when the CURRENT APP ignores a
     // press, and with no apps registered there is no current app to ignore one. Left
     // off this line, the harness waited forever for a roster that never arrived.
-    if (interactive || wifiShot || knobShot) sim_register_apps(radarScreen);   // live app switcher driven by the virtual knob
+    if (interactive || wifiShot || knobShot || windShot) sim_register_apps(radarScreen);   // live app switcher driven by the virtual knob
 #if CUSTOM_BOOT_TARGET == 1
     // Set only by the splash push (the clock push clears it, even if a custom
     // splash is still baked in) — so this is genuinely "you just pushed the
@@ -1430,6 +1437,52 @@ int main(int argc, char **argv) {
             else               update_ui::firmware_incoming();   // paints and calls lv_refr_now itself
             sim_save_frame(readyShot ? readyShot : bakeShot ? bakeShot : updateShot);
             run = false;
+        }
+
+        // --windshot: wind it down, shoot; wind it part way, shoot; finish the wind, shoot.
+        static int windStep = 0;
+        static Uint32 windAt = 0;
+        if (windShot) {
+            char path[300];
+            auto detent = [&]() { input_router::dispatch(1, false); lv_timer_handler(); lv_refr_now(NULL); };
+            if (windStep == 0 && app_shell::count() > 0 && now - start > 3000) {
+                // No stored wind exists here (NVS is device-only), so a theme that asks for
+                // a mainspring reports run down straight away, which is the state under
+                // test and also what a real Orb does the first time a design switches this
+                // on: it wants winding before it will run.
+                clock_wind::applyTheme(true, 48, false, true);
+                app_shell::selectApp(app_shell::APP_CLOCK);
+                lv_timer_handler();
+                wind_notice::tick();
+                lv_timer_handler(); lv_refr_now(NULL);
+                snprintf(path, sizeof(path), "%s-asking.bmp", windShot);
+                sim_save_frame(path);
+                printf("[sim] --windshot: a run-down clock asks to be wound: %s\n",
+                       wind_notice::showing() ? "PASS" : "FAIL");
+                // The wrong way is a crown that slips, and it must not creep the gauge.
+                input_router::dispatch(-1, false); lv_timer_handler();
+                printf("[sim] --windshot: turning back winds nothing: %s (%d)\n",
+                       clock_wind::progress() == 0 ? "PASS" : "FAIL", clock_wind::progress());
+                windStep = 1; windAt = now;
+            } else if (windStep == 1 && now - windAt > 400) {
+                for (int k = 0; k < clock_wind::DETENTS_FOR_FULL_WIND / 2; ++k) detent();
+                snprintf(path, sizeof(path), "%s-half.bmp", windShot);
+                sim_save_frame(path);
+                printf("[sim] --windshot: half wound, gauge at %d of %d: %s\n",
+                       clock_wind::progress(), clock_wind::DETENTS_FOR_FULL_WIND,
+                       wind_notice::showing() ? "PASS" : "FAIL");
+                windStep = 2; windAt = now;
+            } else if (windStep == 2 && now - windAt > 400) {
+                for (int k = 0; k < clock_wind::DETENTS_FOR_FULL_WIND; ++k) detent();
+                wind_notice::tick();
+                lv_timer_handler(); lv_refr_now(NULL);
+                snprintf(path, sizeof(path), "%s-wound.bmp", windShot);
+                sim_save_frame(path);
+                printf("[sim] --windshot: the fifth turn puts the clock back: %s\n",
+                       (!wind_notice::showing() && !clock_wind::stopped()) ? "PASS" : "FAIL");
+                printf("[sim] --windshot: and it is running again, charge %.2f\n", clock_wind::charge());
+                run = false;
+            }
         }
 
         // --knobshot: press on the clock, shoot; press again, shoot.

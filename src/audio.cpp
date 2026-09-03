@@ -203,6 +203,13 @@ static void play_cue(int cue) {
     } else if (cue == 4) {                          // preview: a specific chime, for the picker UI
         const int idx = constrain(s_previewIdx, 0, CHIME_COUNT - 1);
         play_pcm(CHIMES[idx].pcm, CHIMES[idx].bytes);
+    } else if (cue == AUDIO_WIND) {
+        // A tick, not a beep: short, high and quiet, so a hundred of them in a row read as
+        // a ratchet rather than as an alarm. Half amplitude for the same reason — this one
+        // fires per detent while somebody is deliberately turning the knob, which is the
+        // opposite situation to an alert that has to interrupt.
+        size_t ns = gen_beep(buf, S_BUF_LEN, 2400.0f, 9, amp * 0.45f);
+        i2s_write(I2S_PORT, buf, ns * 2, &bw, portMAX_DELAY);
     } else {
         size_t ns = gen_beep(buf, S_BUF_LEN, 880.0f, 160, amp);
         i2s_write(I2S_PORT, buf, ns * 2, &bw, portMAX_DELAY);
