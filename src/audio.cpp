@@ -187,7 +187,7 @@ static void play_pcm(const uint8_t *data, size_t bytes) {
 static void play_cue(int cue) {
     // Preview (4) and self-test (2) both ignore mute — they're a deliberate "let me hear
     // it" action from the Settings menu, not an automatic notification.
-    if (!s_ok || !s_buf || (s_muted && cue != 2 && cue != 4) || s_vol <= 0) return;
+    if (!s_ok || !s_buf || (s_muted && cue != 2 && cue != 4 && cue != 7) || s_vol <= 0) return;
     int16_t *buf = s_buf;
     const float amp = (s_vol / 100.0f) * 17000.0f;
     digitalWrite(PIN_AUDIO_PA, HIGH);              // enable speaker amp
@@ -208,7 +208,7 @@ static void play_cue(int cue) {
     } else if (cue == 4) {                          // preview: a specific chime, for the picker UI
         const int idx = constrain(s_previewIdx, 0, CHIME_COUNT - 1);
         play_pcm(CHIMES[idx].pcm, CHIMES[idx].bytes);
-    } else if (cue == 6) {                          // a theme's own sound, from the SD card
+    } else if (cue == 6 || cue == 7) {              // a theme's own sound, from the SD card
         if (s_pcm && s_pcmLen >= 2) play_pcm(s_pcm, s_pcmLen);
     } else if (cue == AUDIO_WIND) {
         // A tick, not a beep: short, high and quiet, so a hundred of them in a row read as
@@ -288,10 +288,10 @@ void audio_play(AudioCue cue) {
 // Cue 5 is "play whatever is in s_pcm". The pointer is set before the semaphore is given, and
 // the buffer belongs to the caller for the life of the theme, so there is nothing to copy and
 // nothing to free here.
-void audio_play_pcm(const uint8_t *pcm, size_t bytes) {
-    if (!s_ok || s_muted || !pcm || bytes < 2) return;
+void audio_play_pcm(const uint8_t *pcm, size_t bytes, bool ignoreMute) {
+    if (!s_ok || (s_muted && !ignoreMute) || !pcm || bytes < 2) return;
     s_pcm = pcm; s_pcmLen = bytes;
-    s_cue = 6;
+    s_cue = ignoreMute ? 7 : 6;
     if (s_sem) xSemaphoreGive(s_sem);
 }
 

@@ -14,6 +14,7 @@
 #include "custom_weld.h"     // CUSTOM_WELD_HASH
 #include "sdcard.h"
 #include "theme_select.h"
+#include "chime_library.h"
 #include "theme_style.h"
 #include "update_ui.h"
 #include "input_router.h"  // cmd_turn drives the real input path
@@ -485,6 +486,10 @@ void cmd_delete(const char *slug) {
         return;
     }
     if (!theme_select::removeInstalled(slug)) { reply_error("no such theme"); return; }
+    // A deleted theme takes its chime out of the picker with it, and if that chime was the
+    // one selected, the library falls back rather than ringing a file that is gone. Installing
+    // needs no equivalent: it restarts the Orb.
+    chime_library::rescan();
     // The baked copy in flash is deliberately left alone. It is only ever consulted for the
     // ACTIVE slug, so an orphan is invisible; the art partition already reclaims space by
     // wiping and re-baking when it runs low. Rewriting its index here would be a flash

@@ -171,7 +171,11 @@ namespace {
     // --- chime picker (Sound > Chime sound) ---
     // Only "Westminster" exists today, but the list is sized for future named chimes
     // (see audio_chime_count() / chime_westminster.h) without any UI changes needed.
-    constexpr int CHIME_UI_MAX = 8;
+    // Room for every chime the device can offer: the flash library plus one per installed
+    // theme, which is theme_select::MAX_THEMES. It was 8, sized when the only source was
+    // flash and only Westminster existed; the moment themes started carrying chimes, a card
+    // with nine of them would have written "Back" past the end of s_chimeSelItems.
+    constexpr int CHIME_UI_MAX = theme_select::MAX_THEMES + 4;
 
     // --- location submenu ---
     enum { LM_CURRENT = 0, LM_SEARCH, LM_RECENT, LM_BACK, LM_COUNT };
@@ -597,11 +601,18 @@ namespace {
     // Chime picker: turning previews each chime live (host_chime_preview), pressing
     // confirms it (host_chime_set) and returns to Sound. Sized for CHIME_UI_MAX chimes
     // though only one ("Westminster") exists today.
-    int chime_item_count() { return host_chime_count() + 1; }   // chimes + Back
+    // Clamped HERE as well as sized above, because this count feeds the wheel's navigation
+    // and the array index that writes "Back". Two guards for one array, and the cheaper one
+    // is the one that cannot be defeated by a card holding more themes than anybody expected.
+    int chime_shown() {
+        const int n = host_chime_count();
+        return n > CHIME_UI_MAX ? CHIME_UI_MAX : n;
+    }
+    int chime_item_count() { return chime_shown() + 1; }   // chimes + Back
 
     void refresh_chimeSelect() {
-        const int n = host_chime_count();
-        for (int i = 0; i < n && i < CHIME_UI_MAX; ++i)
+        const int n = chime_shown();
+        for (int i = 0; i < n; ++i)
             lv_label_set_text(s_chimeSelItems[i], host_chime_name(i));
         lv_label_set_text(s_chimeSelItems[n], "Back");
         wheel_layout(s_chimeSelItems, chime_item_count(), s_chimeSel, s_chimeSelHl);
@@ -1157,7 +1168,7 @@ void settingsview::onTurn(int delta) {
         if (s_chimeSel < 0) s_chimeSel = 0;
         if (s_chimeSel >= total) s_chimeSel = total - 1;
         refresh_chimeSelect();
-        if (s_chimeSel < host_chime_count()) host_chime_preview(s_chimeSel);   // hear it as you browse
+        if (s_chimeSel < chime_shown()) host_chime_preview(s_chimeSel);   // hear it as you browse
     } else if (s_mode == MODE_UNITS) {
         s_unitsSel += step;
         if (s_unitsSel < 0) s_unitsSel = 0;

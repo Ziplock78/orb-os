@@ -25,7 +25,10 @@ void audio_play(AudioCue cue);      // non-blocking: signals the playback task
 // built-in chimes are in. Non-blocking. The buffer must outlive the playback, which is why
 // theme_audio holds its sounds for as long as the theme is active rather than handing over
 // something it is about to free.
-void audio_play_pcm(const uint8_t *pcm, size_t bytes);
+// `ignoreMute` is for a preview: picking a chime out of a menu is a deliberate "let me hear
+// it", the same reason cue 4 and the self-test ignore mute, and a picker that plays nothing
+// because the device is muted is a picker you cannot use.
+void audio_play_pcm(const uint8_t *pcm, size_t bytes, bool ignoreMute = false);
 void audio_selftest();              // ~2 s continuous tone for by-ear verification
 
 // Named chime library (real recorded audio, baked into flash — see chime_westminster.h).

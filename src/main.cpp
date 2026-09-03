@@ -36,6 +36,7 @@
 #include "clock_wind.h"    // the clock's virtual mainspring, THEME_CAPS 37
 #include "wind_notice.h"   // ...and the panel that asks for it
 #include "theme_audio.h"   // sounds a theme brings with it: wind.pcm, chime.pcm
+#include "chime_library.h" // every chime on the device, from flash and from every theme
 #include "display.h"                  // M0: CO5300 + LVGL bring-up
 #include "imu_qmi8658.h"             // face-down sleep
 #include "battery.h"                 // AXP2101 battery gauge
@@ -1182,16 +1183,22 @@ void host_sound_set_chime(bool on) {
 void host_sound_preview_chime() { if (audio_present()) audio_play(AUDIO_CHIME); }
 void host_sound_preview_beep()  { if (audio_present()) audio_play(AUDIO_NEW); }
 
-// Named chime library (Settings > Sound > Chime sound). Only one entry exists today
-// (Westminster) but the picker UI and NVS persistence are built for more.
-int  host_chime_count()          { return audio_chime_count(); }
-const char *host_chime_name(int i) { return audio_chime_name(i); }
-int  host_chime_index()          { return audio_chime_index(); }
-void host_chime_set(int i) {
-    audio_set_chime(i);
-    Preferences p; p.begin("capsuleradar", false); p.putInt("chimeIdx", i); p.end();
-}
-void host_chime_preview(int i) { if (audio_present()) audio_preview_chime(i); }
+// The chime picker (Settings > Sound > Chime sound), now spanning every theme on the card as
+// well as the ones baked into flash. Settings drives the picker entirely through these five
+// functions and needed no changes at all to gain them.
+//
+// The hour belongs to the DEVICE, not to the worn theme: somebody wearing Steam Punk can ring
+// Modern's chime without changing what their clock looks like. A sound you hear once an hour
+// and a dial you look at all day are not the same choice.
+//
+// chime_library persists WHICH chime rather than its position in the list, because installing
+// or deleting a theme moves everything after it and a stored index would quietly start meaning
+// something else.
+int  host_chime_count()            { return chime_library::count(); }
+const char *host_chime_name(int i) { return chime_library::name(i); }
+int  host_chime_index()            { return chime_library::selected(); }
+void host_chime_set(int i)         { chime_library::select(i); }
+void host_chime_preview(int i)     { if (audio_present()) chime_library::preview(i); }
 
 void host_recents_add(const char *name, double lat, double lon);   // defined below
 
@@ -2626,6 +2633,7 @@ void setup() {
     rtc_begin();
     rtc_seed_clock();                   // offline clock/date from the PCF85063
     clock_wind::begin();            // the stored wind, before any screen asks about it
+    chime_library::begin();         // every chime on the card, and which one was chosen
     if (audio_begin()) {                // ES8311 alert pings (no-op if codec absent)
         audio_set_volume(g_volume);
         audio_set_muted(g_muted);
@@ -3215,13 +3223,9 @@ void loop() {
             if (lastChimeHour < 0) lastChimeHour = ti.tm_hour;
             else if (ti.tm_hour != lastChimeHour) {
                 lastChimeHour = ti.tm_hour;
-                if (g_soundChime && audio_present()) {
-                    // The theme's hour, if it brought one. Falls back to the built-in
-                    // library, which is what every design written before this gets.
-                    size_t n = 0;
-                    if (const uint8_t *pcm = theme_audio::chime(n)) audio_play_pcm(pcm, n);
-                    else                                            audio_play(AUDIO_CHIME);
-                }
+                // Whatever is selected in Settings, from flash or from any theme on the
+                // card. Not the worn theme's own chime: see the note on host_chime_count().
+                if (g_soundChime && audio_present()) chime_library::playSelected();
             }
         }
         const bool wifiUp = (WiFi.status() == WL_CONNECTED);
