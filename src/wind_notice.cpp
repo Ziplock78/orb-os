@@ -33,9 +33,6 @@ lv_obj_t *s_ring  = nullptr;
 // playback path that holds the amplifier up for about a tenth of a second per tick, so a
 // brisk wind would still be clicking long after it finished. Every other detent is enough
 // to read as a ratchet and stays ahead of the turning.
-// 16 kHz, 16-bit, stereo: 64,000 bytes a second.
-constexpr uint32_t PCM_BYTES_PER_SEC = 16000 * 2 * 2;
-
 // A SWEEP, not a notch.
 //
 // Nobody winds one click at a time. A hand turns four or five clicks in one motion, pauses,
@@ -46,14 +43,12 @@ constexpr uint32_t PCM_BYTES_PER_SEC = 16000 * 2 * 2;
 // So the first detent after a pause starts a sweep and plays. Every detent inside that sweep
 // is silent, because the sound already running IS the sound of them. Deliberately not one to
 // one with the knob, which is the thing he had to say twice.
-constexpr uint32_t SWEEP_GAP_MS = 250;
+// 150 ms, down from 250. Inside one sweep the detents arrive every 30 to 80 ms; between two
+// sweeps the hand repositions, which is quick. 250 was slow enough to miss somebody rolling
+// again promptly and read it as one long sweep.
+constexpr uint32_t SWEEP_GAP_MS = 150;
 
 uint32_t s_lastDetentMs = 0;
-// When the sound in flight will have finished. A new sweep that arrives before then is left
-// alone rather than restarted: the ratchet is already going.
-uint32_t s_playingUntil = 0;
-
-uint32_t pcm_ms(size_t bytes) { return (uint32_t)((bytes * 1000ULL) / PCM_BYTES_PER_SEC); }
 
 // Instrumentation for the winding path only, and only on the device. Cleared each time it
 // reports.
@@ -218,15 +213,19 @@ void wind_notice::turn(int delta) {
         // The theme's own sound if it shipped one, otherwise the built-in tick. A Steam Punk
         // clock and an Aviator chronometer have no more business sounding alike than they do
         // sharing a typeface.
-        if (clock_wind::soundOn() && newSweep && t >= s_playingUntil) {
+        // RETRIGGERS, rather than waiting for the clip to finish.
+        //
+        // The first version left a sound in flight alone, on the reasoning that restarting a
+        // ratchet mid-phrase would sound doubled. That was written when playback could not be
+        // stopped, so a restart really would have layered. It can be stopped now: every new
+        // request abandons the one in flight and clears the buffer. Zion rolls two or three
+        // more sweeps inside one clip and wants each one to sound, which is what a real
+        // ratchet does. A sound that ignores you until it has finished its sentence is the
+        // thing that felt wrong.
+        if (clock_wind::soundOn() && newSweep) {
             size_t n = 0;
-            if (const uint8_t *pcm = theme_audio::wind(n)) {
-                audio_play_pcm(pcm, n);
-                s_playingUntil = t + pcm_ms(n);
-            } else {
-                audio_play(AUDIO_WIND);
-                s_playingUntil = t + 60;   // the built-in tick is 9 ms; this is just a floor
-            }
+            if (const uint8_t *pcm = theme_audio::wind(n)) audio_play_pcm(pcm, n);
+            else                                           audio_play(AUDIO_WIND);
         }
     }
 #ifdef ARDUINO
