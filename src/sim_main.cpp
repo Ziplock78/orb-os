@@ -1468,12 +1468,22 @@ int main(int argc, char **argv) {
                        knob_help::showing() ? "PASS" : "FAIL");
                 knobStep = 1; knobAt = now;
             } else if (knobStep == 1 && now - knobAt > 600) {
+                // BOTH inputs, because the panel claims both on its own bottom line. A turn
+                // that failed to clear it would strand somebody on a screen whose only
+                // instruction had just been ignored, and only a press was ever checked here.
                 knobPress();
+                printf("[sim] --knobshot: a press dismissed it: %s\n",
+                       !knob_help::showing() ? "PASS" : "FAIL");
+                knobPress();
+                printf("[sim] --knobshot: it came back for a second press: %s\n",
+                       knob_help::showing() ? "PASS" : "FAIL");
+                input_router::dispatch(1, false);   // one detent, no press
+                lv_timer_handler(); lv_refr_now(NULL);
+                printf("[sim] --knobshot: a turn dismissed it too: %s\n",
+                       !knob_help::showing() ? "PASS" : "FAIL");
                 snprintf(path, sizeof(path), "%s-gone.bmp", knobShot);
                 sim_save_frame(path);
-                printf("[sim] --knobshot: a second press dismissed it: %s (back on \"%s\")\n",
-                       !knob_help::showing() ? "PASS" : "FAIL",
-                       app_shell::name() ? app_shell::name() : "?");
+                printf("[sim] --knobshot: back on \"%s\"\n", app_shell::name() ? app_shell::name() : "?");
                 run = false;
             }
         }

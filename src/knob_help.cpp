@@ -52,9 +52,15 @@ void ensure() {
     lv_obj_align(body, LV_ALIGN_CENTER, 0, 8);
 
     // Kept, quietly. A screen that appeared uninvited must never be one you have to work
-    // out how to close, and any input clears this one, so naming the nearest is enough.
+    // out how to close.
+    //
+    // It says BOTH inputs because both have always worked: input_router clears this on a
+    // press or a turn either way, and swallows whichever one did it. Saying only "push"
+    // described a narrower device than the one underneath, which is the same fault as the
+    // Ready notice demanding a press and making a screen about the knob being yours again
+    // the one screen where most of the knob did nothing.
     lv_obj_t *hint = lv_label_create(s_panel);
-    lv_label_set_text(hint, "push to carry on");
+    lv_label_set_text(hint, "turn or push to carry on");
     lv_obj_set_style_text_color(hint, lv_color_hex(0x5a636e), 0);
     lv_obj_set_style_text_font(hint, &lv_font_montserrat_16, 0);
     lv_obj_align(hint, LV_ALIGN_CENTER, 0, 122);
