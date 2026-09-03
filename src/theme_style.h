@@ -319,7 +319,12 @@ namespace theme_style {
 //      screen: it appears during ordinary use on a themed clock, and a Steam Punk Orb asking
 //      to be wound in a factory-looking grey sans is the seam showing. An Orb below this
 //      level draws the fixed panel whatever the design says.
-constexpr int THEME_CAPS = 41;
+//  42  the wind screen's three lines get a TYPEFACE and margins: font_wind_{title,ask,turns}.bin
+//      and a left/right band each, the same pair every other text element on the device has.
+//      41 made the screen a design and left it in the built-in face, which is half a screen by
+//      the standard docs/adding-a-screen.md sets, and the half that shows. An Orb below this
+//      level draws the built-in face at the compiled sizes and wraps where it always did.
+constexpr int THEME_CAPS = 42;
 
 struct ClockText {
     bool     show   = false;
@@ -411,6 +416,14 @@ struct Clock {
     uint32_t  windRingFill  = 0xD8B56A;
     int       windRingWidth = 8;
     int       windRingR     = 212;   // px from the middle to the ring's centre line
+    // Left and right margins per line, the band it may use, exactly as the News screen sets
+    // its headlines. They decide where the words WRAP, so a line with no room breaks earlier
+    // rather than running off a round screen, and an uneven pair shifts the block sideways.
+    // THEME_CAPS 42 with the typefaces, because a face and the width it wraps at are the same
+    // decision made twice if they arrive separately.
+    int       windTitleML = 60, windTitleMR = 60;
+    int       windAskML   = 83, windAskMR   = 83;
+    int       windTurnsML = 60, windTurnsMR = 60;
     char      windTitle[64] = "The clock has\nwound down";
     int       windTitleSize = 28;
     uint32_t  windTitleCol  = 0xFFFFFF;

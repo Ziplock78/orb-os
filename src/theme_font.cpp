@@ -74,7 +74,8 @@ enum Slot { S_CLOCK1, S_CLOCK2, S_MENU_CUR, S_MENU_PREV, S_MENU_NEXT, S_SETTINGS
             S_RADAR1, S_RADAR2, S_RADAR3, S_RADAR4,
             S_INTEL_TITLE, S_INTEL_TEXT, S_INTEL_SOURCE, S_INTEL_AGE,
             S_TICK_NAME, S_TICK_PRICE, S_TICK_CHANGE, S_TICK_STRIP,
-            S_WX1, S_WX2, S_WX3, S_WX4, S_COUNT };
+            S_WX1, S_WX2, S_WX3, S_WX4,
+            S_WIND_TITLE, S_WIND_ASK, S_WIND_TURNS, S_COUNT };
 
 // Asset names Launch Kit ships. Kept here rather than derived, so the contract between
 // the two programs is one readable list instead of a naming convention nobody can see.
@@ -89,6 +90,11 @@ const char *SLOT_FILE[S_COUNT] = {
     // Tracker, because the screens now offer the same four text lines and a designer moving
     // between them should not have to learn a second layout.
     "font_weather1.bin", "font_weather2.bin", "font_weather3.bin", "font_weather4.bin",
+    // The wind screen's three, added with THEME_CAPS 42. It had no typeface at all until
+    // then: it was written beside the no-SD notice and inherited that screen's built-in face,
+    // which is right for a recovery screen and wrong for one that appears over a themed clock
+    // during ordinary use.
+    "font_wind_title.bin", "font_wind_ask.bin", "font_wind_turns.bin",
 };
 
 const lv_font_t *s_font[S_COUNT] = { nullptr };
@@ -183,6 +189,20 @@ const lv_font_t *menu_current()  { return get(S_MENU_CUR); }
 const lv_font_t *menu_prev()     { return get(S_MENU_PREV); }
 const lv_font_t *menu_next()     { return get(S_MENU_NEXT); }
 const lv_font_t *settings_item() { return get(S_SETTINGS); }
+
+// The wind screen's three. has_font is what lets the caller fall back to a compiled size when
+// the theme shipped no face, rather than drawing everything in whatever get() returns.
+const lv_font_t *wind_title() { return get(S_WIND_TITLE); }
+const lv_font_t *wind_ask()   { return get(S_WIND_ASK); }
+const lv_font_t *wind_turns() { return get(S_WIND_TURNS); }
+bool wind_has_font(int slot) {
+    switch (slot) {
+        case 0:  return s_font[S_WIND_TITLE] != nullptr;
+        case 1:  return s_font[S_WIND_ASK]   != nullptr;
+        case 2:  return s_font[S_WIND_TURNS] != nullptr;
+        default: return false;
+    }
+}
 // Falls back to the LIST's face, NOT through get() to the compiled one.
 //
 // get() answers "this slot's file, or what the firmware was built with", which is right for

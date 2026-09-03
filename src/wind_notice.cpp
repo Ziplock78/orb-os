@@ -2,6 +2,8 @@
 
 #include "clock_wind.h"
 #include "theme_style.h"
+#include "theme_font.h"
+#include "config.h"
 #include "theme_audio.h"
 #include "app_shell.h"
 #ifdef ARDUINO
@@ -78,14 +80,32 @@ const lv_font_t *font_for_px(int px) {
     }
 }
 
-lv_obj_t *line(lv_obj_t *parent, const char *text, int px, uint32_t color, int y, int wrapW) {
+// One line of the wind screen. ml/mr are the band it may use, so the words wrap inside it and
+// an uneven pair shifts the block sideways rather than only narrowing it. slot picks the
+// theme's face; where the theme shipped none, the compiled ladder stands in at the size the
+// design asked for, which is what every Orb below THEME_CAPS 42 draws.
+//
+// LVGL breaks on \n by itself, so a carriage return somebody typed in Studio is a line break
+// here with nothing to do about it. That is why the words are stored whole rather than split.
+lv_obj_t *line(lv_obj_t *parent, const char *text, int px, uint32_t color, int y,
+               int ml, int mr, int slot) {
     lv_obj_t *l = lv_label_create(parent);
-    if (wrapW > 0) { lv_label_set_long_mode(l, LV_LABEL_LONG_WRAP); lv_obj_set_width(l, wrapW); }
+    const int band = SCREEN_W - ml - mr;
+    if (band > 20) {
+        lv_label_set_long_mode(l, LV_LABEL_LONG_WRAP);
+        lv_obj_set_width(l, band);
+    }
     lv_label_set_text(l, text);
     lv_obj_set_style_text_color(l, lv_color_hex(color), 0);
-    lv_obj_set_style_text_font(l, font_for_px(px), 0);
+    const lv_font_t *f = theme_font::wind_has_font(slot)
+        ? (slot == 0 ? theme_font::wind_title()
+         : slot == 1 ? theme_font::wind_ask()
+                     : theme_font::wind_turns())
+        : font_for_px(px);
+    lv_obj_set_style_text_font(l, f, 0);
     lv_obj_set_style_text_align(l, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_align(l, LV_ALIGN_CENTER, 0, (lv_coord_t)y);
+    // Centred on the BAND, not on the screen, so the margins mean what they say.
+    lv_obj_align(l, LV_ALIGN_CENTER, (lv_coord_t)((ml - mr) / 2), (lv_coord_t)y);
     return l;
 }
 
@@ -123,8 +143,8 @@ void ensure() {
     lv_obj_set_style_arc_color(s_ring, lv_color_hex(c.windRingTrack), LV_PART_MAIN);
     lv_obj_set_style_arc_color(s_ring, lv_color_hex(c.windRingFill), LV_PART_INDICATOR);
 
-    line(s_panel, c.windTitle, c.windTitleSize, c.windTitleCol, c.windTitleY, 0);
-    line(s_panel, c.windAsk,   c.windAskSize,   c.windAskCol,   c.windAskY,   300);
+    line(s_panel, c.windTitle, c.windTitleSize, c.windTitleCol, c.windTitleY, c.windTitleML, c.windTitleMR, 0);
+    line(s_panel, c.windAsk,   c.windAskSize,   c.windAskCol,   c.windAskY,   c.windAskML,   c.windAskMR,   1);
 
     if (c.windTurnsShow) {
         // Built rather than written, because the number is the theme's. Writing "five turns"
@@ -135,7 +155,7 @@ void ensure() {
         char buf[64];
         if (n >= 1 && n <= 10) snprintf(buf, sizeof(buf), "%s turn%s to the right", WORDS[n - 1], n == 1 ? "" : "s");
         else                   snprintf(buf, sizeof(buf), "%d turns to the right", n);
-        line(s_panel, buf, c.windTurnsSize, c.windTurnsCol, c.windTurnsY, 0);
+        line(s_panel, buf, c.windTurnsSize, c.windTurnsCol, c.windTurnsY, c.windTurnsML, c.windTurnsMR, 2);
     }
 }
 

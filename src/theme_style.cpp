@@ -473,6 +473,12 @@ void load() {
             if (doc["windRingFill"].is<uint32_t>())  s_clock.windRingFill  = doc["windRingFill"].as<uint32_t>();
             if (doc["windRingWidth"].is<int>())      s_clock.windRingWidth = doc["windRingWidth"].as<int>();
             if (doc["windRingR"].is<int>())          s_clock.windRingR     = doc["windRingR"].as<int>();
+            if (doc["windTitleML"].is<int>())  s_clock.windTitleML = doc["windTitleML"].as<int>();
+            if (doc["windTitleMR"].is<int>())  s_clock.windTitleMR = doc["windTitleMR"].as<int>();
+            if (doc["windAskML"].is<int>())    s_clock.windAskML   = doc["windAskML"].as<int>();
+            if (doc["windAskMR"].is<int>())    s_clock.windAskMR   = doc["windAskMR"].as<int>();
+            if (doc["windTurnsML"].is<int>())  s_clock.windTurnsML = doc["windTurnsML"].as<int>();
+            if (doc["windTurnsMR"].is<int>())  s_clock.windTurnsMR = doc["windTurnsMR"].as<int>();
             if (doc["windTitle"].is<const char *>())  snprintf(s_clock.windTitle, sizeof(s_clock.windTitle), "%s", doc["windTitle"].as<const char *>());
             if (doc["windTitleSize"].is<int>())      s_clock.windTitleSize = doc["windTitleSize"].as<int>();
             if (doc["windTitleCol"].is<uint32_t>())  s_clock.windTitleCol  = doc["windTitleCol"].as<uint32_t>();

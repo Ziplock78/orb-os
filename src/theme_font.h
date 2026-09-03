@@ -73,6 +73,10 @@ bool ticker_has_font(int slot);  // 0 name, 1 price, 2 change, 3 strip
 // How many of this theme's fonts actually loaded from flash. 0 means everything is
 // running on compiled fallbacks, which is the honest "nothing changed yet" state rather
 // than a failure.
+const lv_font_t *wind_title();
+const lv_font_t *wind_ask();
+const lv_font_t *wind_turns();
+bool wind_has_font(int slot);   // 0 title, 1 ask, 2 turns
 int loaded_count();
 
 } // namespace theme_font
