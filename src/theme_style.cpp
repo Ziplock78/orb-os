@@ -467,6 +467,7 @@ void load() {
             if (doc["windOn"].is<bool>())     s_clock.windOn     = doc["windOn"].as<bool>();
             if (doc["windSecs"].is<int>())    s_clock.windSecs   = doc["windSecs"].as<int>();
             if (doc["windTurns"].is<int>())   s_clock.windTurns  = doc["windTurns"].as<int>();
+            if (doc["textOverHands"].is<bool>())     s_clock.textOverHands = doc["textOverHands"].as<bool>();
             if (doc["windBg"].is<uint32_t>())        s_clock.windBg        = doc["windBg"].as<uint32_t>();
             s_clock.windBgOpa = opa_of(doc["windBgOpa"], s_clock.windBgOpa);
             if (doc["windRingTrack"].is<uint32_t>()) s_clock.windRingTrack = doc["windRingTrack"].as<uint32_t>();

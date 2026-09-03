@@ -928,29 +928,34 @@ static void draw_custom(const struct tm *ti) {
     }
     else lv_canvas_fill_bg(s_canvas, lv_color_hex(theme_style::clock().bg), LV_OPA_COVER);
 
-    // Live text banners in the design's real baked font (+ firmware glow). A
-    // curved banner arcs along the rim instead of sitting on a straight baseline.
+    // Live text banners in the design's real baked font (+ firmware glow). A curved banner
+    // arcs along the rim instead of sitting on a straight baseline.
     //
     // Used to stay behind CUSTOM_HAS_TEXT{1,2}, a compile-time gate baked in by whichever
-    // Launch Kit push happened to run last — the same shape of bug as the menu's hint
-    // slots and the sweep's layer order, both fixed this week. A theme installed as files
-    // alone (Orb Studio) could ship text1/text2 and the Orb would never draw it unless
-    // some earlier firmware push happened to have compiled a theme that used one. `show`
-    // is the runtime gate now, same as every other layer here.
-    {
-        const theme_style::ClockText &t = theme_style::clock().text1;
-        if (t.show) {
-            if (t.curved) draw_baked_arc_text(theme_font::clock_text1(), t.fmt, (float)t.curveR, t.arcDeg, t.color, ti, "text1", (lv_opa_t)t.opa);
-            else draw_baked_text(theme_font::clock_text1(), t.fmt, t.x, t.y, t.color, t.glow, t.glowColor, t.align, ti, "text1", (lv_opa_t)t.opa, t.bg, t.bgOpa, t.radius);
+    // Launch Kit push happened to run last. `show` is the runtime gate now, same as every
+    // other layer here.
+    //
+    // A LAMBDA because the design chooses which side of the hands these fall on. Drawn before
+    // them the hands sweep over the words, which is what a watch does and what this firmware
+    // has always done; drawn after, the words sit on top, which a date window or a signature
+    // across the dial wants. THEME_CAPS 43.
+    auto draw_banners = [&]() {
+        {
+            const theme_style::ClockText &t = theme_style::clock().text1;
+            if (t.show) {
+                if (t.curved) draw_baked_arc_text(theme_font::clock_text1(), t.fmt, (float)t.curveR, t.arcDeg, t.color, ti, "text1", (lv_opa_t)t.opa);
+                else draw_baked_text(theme_font::clock_text1(), t.fmt, t.x, t.y, t.color, t.glow, t.glowColor, t.align, ti, "text1", (lv_opa_t)t.opa, t.bg, t.bgOpa, t.radius);
+            }
         }
-    }
-    {
-        const theme_style::ClockText &t = theme_style::clock().text2;
-        if (t.show) {
-            if (t.curved) draw_baked_arc_text(theme_font::clock_text2(), t.fmt, (float)t.curveR, t.arcDeg, t.color, ti, "text2", (lv_opa_t)t.opa);
-            else draw_baked_text(theme_font::clock_text2(), t.fmt, t.x, t.y, t.color, t.glow, t.glowColor, t.align, ti, "text2", (lv_opa_t)t.opa, t.bg, t.bgOpa, t.radius);
+        {
+            const theme_style::ClockText &t = theme_style::clock().text2;
+            if (t.show) {
+                if (t.curved) draw_baked_arc_text(theme_font::clock_text2(), t.fmt, (float)t.curveR, t.arcDeg, t.color, ti, "text2", (lv_opa_t)t.opa);
+                else draw_baked_text(theme_font::clock_text2(), t.fmt, t.x, t.y, t.color, t.glow, t.glowColor, t.align, ti, "text2", (lv_opa_t)t.opa, t.bg, t.bgOpa, t.radius);
+            }
         }
-    }
+    };
+    if (!theme_style::clock().textOverHands) draw_banners();
 
     // kind 3/4 = the two static image layers — same pivot/center/blend metadata as
     // a hand, just always angle 0 (they never rotate, see custom_sprite.cpp).
@@ -1018,6 +1023,7 @@ static void draw_custom(const struct tm *ti) {
         if (spr.data) blend_custom_hand(spr.data, spr.w, spr.h, hd.pivotX, hd.pivotY,
                                         (float)hd.centerX, (float)hd.centerY, ang[k], hd.blend);
     }
+    if (cs.textOverHands) draw_banners();
 
     if (overlay) {
         for (int i = 0; i < SCREEN_W * SCREEN_H; ++i) {

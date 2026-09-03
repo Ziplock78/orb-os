@@ -324,7 +324,13 @@ namespace theme_style {
 //      41 made the screen a design and left it in the built-in face, which is half a screen by
 //      the standard docs/adding-a-screen.md sets, and the half that shows. An Orb below this
 //      level draws the built-in face at the compiled sizes and wraps where it always did.
-constexpr int THEME_CAPS = 42;
+//  43  whether the clock's two text banners draw over the hands or under them
+//      (Clock.textOverHands). Always under, until now. Orb Studio's layer column and its
+//      preview both showed the opposite, so the one place a designer looks to answer "what is
+//      on top" disagreed with the glass; that is fixed on the Studio side and this is the
+//      control it was pretending to be. An Orb below this level draws the hands over the
+//      words whatever the design says.
+constexpr int THEME_CAPS = 43;
 
 struct ClockText {
     bool     show   = false;
@@ -373,6 +379,11 @@ struct Clock {
     // top. Without this the border sat at one fixed angle while the hand moved, lining up
     // once an hour by coincidence.
     int       plateFollow = 0;
+    // THEME_CAPS 43. Which side of the hands the two text banners fall on. False, the way it
+    // has always drawn, puts the hands over the words: a watch sweeps its hands across
+    // whatever is printed on the dial. True lifts the words on top, which is what a date
+    // window or a signature laid across the face wants.
+    bool      textOverHands = false;
     ClockText text1;
     ClockText text2;
     Hand      hand[5];                        // 0=hour 1=minute 2=second 3=static1 4=static2
