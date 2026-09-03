@@ -1,5 +1,6 @@
 #include "theme_audio.h"
 
+#include "audio.h"
 #include "theme_sd.h"
 #include "theme_select.h"
 #include "theme_style.h"
@@ -55,8 +56,11 @@ uint8_t *load_one(const char *name, size_t maxBytes, size_t &outLen) {
 }  // namespace
 
 void theme_audio::load() {
-    if (s_wind)  { theme_sd::free(s_wind);  s_wind  = nullptr; s_windLen  = 0; }
-    if (s_chime) { theme_sd::free(s_chime); s_chime = nullptr; s_chimeLen = 0; }
+    // Released before freeing, not just dropped: a theme can be applied while its own winding
+    // tick is still sounding, and the playback task would then be reading memory this is
+    // about to hand back.
+    if (s_wind)  { audio_release_pcm(s_wind);  theme_sd::free(s_wind);  s_wind  = nullptr; s_windLen  = 0; }
+    if (s_chime) { audio_release_pcm(s_chime); theme_sd::free(s_chime); s_chime = nullptr; s_chimeLen = 0; }
     s_wind  = load_one("wind.pcm",  WIND_MAX_BYTES,  s_windLen);
     s_chime = load_one("chime.pcm", CHIME_MAX_BYTES, s_chimeLen);
 }

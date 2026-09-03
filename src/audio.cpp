@@ -40,6 +40,19 @@ static const int CHIME_COUNT = (int)(sizeof(CHIMES) / sizeof(CHIMES[0]));
 static const uint8_t *s_pcm    = nullptr;
 static size_t         s_pcmLen = 0;
 static volatile int s_chimeIdx = 0;     // AUDIO_CHIME plays this one
+
+// Bumped by every new request. Playback checks it between chunks and gives up the moment it
+// changes, so a sound already in flight is INTERRUPTED rather than finished politely.
+//
+// The picker is what needs this. Turning the knob previews each chime as you pass it, and
+// with playback run to completion a fast scroll queued them: you heard the one you left three
+// entries ago while looking at a name you had not heard yet. A preview that arrives after you
+// have moved on is not a preview of anything.
+static volatile uint32_t s_gen = 0;
+
+// Which caller-owned buffer the task is reading right now, or null. The owner watches this
+// before freeing; see audio_release_pcm().
+static const uint8_t *volatile s_playingPcm = nullptr;
 static volatile int s_previewIdx = 0;   // cue 4 (preview) plays this one instead
 
 static void es_write(uint8_t reg, uint8_t val) {
@@ -170,11 +183,15 @@ static size_t gen_beep(int16_t *buf, size_t cap, float freq, int ms, float amp) 
 // chime_westminster.h's comment for how it was prepared.
 static void play_pcm(const uint8_t *data, size_t bytes) {
     if (!s_buf || !data || bytes < 2) return;
+    const uint32_t myGen = s_gen;
     const float g = s_vol / 100.0f;
     const int16_t *src = (const int16_t *)data;
     const size_t totalSamples = bytes / 2;
     size_t i = 0;
     while (i < totalSamples) {
+        // Something else asked to be played. Drop the rest of this one and clear what the DMA
+        // is still holding, or the tail keeps sounding after the decision to stop it.
+        if (s_gen != myGen) { i2s_zero_dma_buffer(I2S_PORT); return; }
         size_t chunk = totalSamples - i;
         if (chunk > S_BUF_LEN) chunk = S_BUF_LEN;
         for (size_t k = 0; k < chunk; ++k) s_buf[k] = (int16_t)(src[i + k] * g);
@@ -184,7 +201,16 @@ static void play_pcm(const uint8_t *data, size_t bytes) {
     }
 }
 
+// Abandon whatever is playing if a newer request has arrived. Called between the pieces of
+// the multi-part cues, which are the only ones long enough for it to matter.
+static bool superseded(uint32_t myGen) {
+    if (s_gen == myGen) return false;
+    i2s_zero_dma_buffer(I2S_PORT);
+    return true;
+}
+
 static void play_cue(int cue) {
+    const uint32_t myGen = s_gen;
     // Preview (4) and self-test (2) both ignore mute — they're a deliberate "let me hear
     // it" action from the Settings menu, not an automatic notification.
     if (!s_ok || !s_buf || (s_muted && cue != 2 && cue != 4 && cue != 7) || s_vol <= 0) return;
@@ -195,9 +221,10 @@ static void play_cue(int cue) {
     size_t bw;
     if (cue == 2) {                                // self-test: ~2 s continuous tone, PA held
         size_t ns = gen_beep(buf, S_BUF_LEN, 1000.0f, 480, amp);
-        for (int k = 0; k < 4; ++k) i2s_write(I2S_PORT, buf, ns * 2, &bw, portMAX_DELAY);
+        for (int k = 0; k < 4; ++k) { if (superseded(myGen)) break; i2s_write(I2S_PORT, buf, ns * 2, &bw, portMAX_DELAY); }
     } else if (cue == AUDIO_ALERT) {
         for (int k = 0; k < 2; ++k) {
+            if (superseded(myGen)) break;
             size_t ns = gen_beep(buf, S_BUF_LEN, 1320.0f, 80, amp);
             i2s_write(I2S_PORT, buf, ns * 2, &bw, portMAX_DELAY);
             delay(40);
@@ -209,7 +236,11 @@ static void play_cue(int cue) {
         const int idx = constrain(s_previewIdx, 0, CHIME_COUNT - 1);
         play_pcm(CHIMES[idx].pcm, CHIMES[idx].bytes);
     } else if (cue == 6 || cue == 7) {              // a theme's own sound, from the SD card
-        if (s_pcm && s_pcmLen >= 2) play_pcm(s_pcm, s_pcmLen);
+        if (s_pcm && s_pcmLen >= 2) {
+            s_playingPcm = s_pcm;
+            play_pcm(s_pcm, s_pcmLen);
+            s_playingPcm = nullptr;
+        }
     } else if (cue == AUDIO_WIND) {
         // A tick, not a beep: short, high and quiet, so a hundred of them in a row read as
         // a ratchet rather than as an alarm. Half amplitude for the same reason — this one
@@ -282,6 +313,7 @@ void audio_set_muted(bool m) { s_muted = m; }
 void audio_play(AudioCue cue) {
     if (!s_ok || s_muted) return;
     s_cue = (int)cue;
+    ++s_gen;
     if (s_sem) xSemaphoreGive(s_sem);
 }
 
@@ -292,12 +324,14 @@ void audio_play_pcm(const uint8_t *pcm, size_t bytes, bool ignoreMute) {
     if (!s_ok || (s_muted && !ignoreMute) || !pcm || bytes < 2) return;
     s_pcm = pcm; s_pcmLen = bytes;
     s_cue = ignoreMute ? 7 : 6;
+    ++s_gen;
     if (s_sem) xSemaphoreGive(s_sem);
 }
 
 void audio_selftest() {   // ~2 s continuous tone, ignores mute, PA held on
     if (!s_ok) return;
     s_cue = 2;
+    ++s_gen;
     if (s_sem) xSemaphoreGive(s_sem);
 }
 
@@ -306,6 +340,14 @@ const char *audio_chime_name(int idx) {
     if (idx < 0 || idx >= CHIME_COUNT) return "";
     return CHIMES[idx].name;
 }
+// Bounded at about a fifth of a second. Long enough for a chunk to finish on any healthy
+// task, short enough that a wedged one cannot hold up the menu somebody is scrolling.
+void audio_release_pcm(const uint8_t *pcm) {
+    if (!pcm) return;
+    ++s_gen;
+    for (int i = 0; i < 100 && s_playingPcm == pcm; ++i) delay(2);
+}
+
 int  audio_chime_index() { return s_chimeIdx; }
 void audio_set_chime(int idx) { s_chimeIdx = constrain(idx, 0, CHIME_COUNT - 1); }
 
@@ -313,5 +355,6 @@ void audio_preview_chime(int idx) {   // ignores mute, like audio_selftest() —
     if (!s_ok) return;
     s_previewIdx = constrain(idx, 0, CHIME_COUNT - 1);
     s_cue = 4;
+    ++s_gen;
     if (s_sem) xSemaphoreGive(s_sem);
 }

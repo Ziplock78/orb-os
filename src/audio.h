@@ -29,6 +29,12 @@ void audio_play(AudioCue cue);      // non-blocking: signals the playback task
 // it", the same reason cue 4 and the self-test ignore mute, and a picker that plays nothing
 // because the device is muted is a picker you cannot use.
 void audio_play_pcm(const uint8_t *pcm, size_t bytes, bool ignoreMute = false);
+// Stop `pcm` if it is playing and WAIT until the playback task has let go of it, so the
+// caller can free it. Interrupting alone is not enough: the task can be halfway through a
+// chunk when the request to stop arrives, and freeing under it is a use-after-free that would
+// surface as noise or a crash rather than as anything obviously about audio. Bounded, so a
+// wedged task cannot hang the caller.
+void audio_release_pcm(const uint8_t *pcm);
 void audio_selftest();              // ~2 s continuous tone for by-ear verification
 
 // Named chime library (real recorded audio, baked into flash — see chime_westminster.h).

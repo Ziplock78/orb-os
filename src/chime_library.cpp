@@ -48,7 +48,12 @@ constexpr const char *NVS_KEY = "chimeSel";
 #endif
 
 void free_pcm() {
-    if (s_pcm) { theme_sd::free(s_pcm); s_pcm = nullptr; s_pcmLen = 0; }
+    if (!s_pcm) return;
+    // Stop it and wait for the task to let go before handing the memory back. Selecting a
+    // different chime while the old one is still sounding is an ordinary thing to do in this
+    // menu, and it is exactly when this would otherwise free a buffer being read.
+    audio_release_pcm(s_pcm);
+    theme_sd::free(s_pcm); s_pcm = nullptr; s_pcmLen = 0;
 }
 
 // A theme's display name, out of its own theme.json. Falls back to the slug, which is ugly but
@@ -209,7 +214,7 @@ void chime_library::preview(int idx) {
 #ifdef ARDUINO
     // Read it, hold it, play it. Only ONE preview buffer: scrolling the picker replaces it
     // rather than accumulating, so the cost is one chime whatever anybody listens to.
-    if (s_preview) { theme_sd::free(s_preview); s_preview = nullptr; s_previewLen = 0; }
+    if (s_preview) { audio_release_pcm(s_preview); theme_sd::free(s_preview); s_preview = nullptr; s_previewLen = 0; }
     char path[64];
     snprintf(path, sizeof(path), "/themes/%s/chime.pcm", e.slug);
     size_t len = 0;
