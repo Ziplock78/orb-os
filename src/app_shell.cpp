@@ -296,8 +296,10 @@ void app_shell::add_active(const char *name,
     add(lv_scr_act(), name, onPress, onTurn, capture, onEnter, onExit, hidden);
 }
 
-void app_shell::pressCurrent() {
-    if (s_count && s_apps[s_cur].onPress) s_apps[s_cur].onPress();
+bool app_shell::pressCurrent() {
+    if (!s_count || !s_apps[s_cur].onPress) return false;
+    s_apps[s_cur].onPress();
+    return true;
 }
 
 bool app_shell::captured() { return s_captured; }

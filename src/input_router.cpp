@@ -1,4 +1,5 @@
 #include "input_router.h"
+#include "knob_help.h"
 #include "update_ui.h"
 #include <lvgl.h>       // lv_tick_get — a millisecond clock both targets have
 #if defined(ESP_PLATFORM)
@@ -106,6 +107,14 @@ void input_router::dispatch(int delta, bool pressed) {
         if (pressed || delta != 0) update_ui::ackReady();
         return;
     }
+    // What the knob does, put up because a press had nowhere to go. Same contract as the
+    // notice above and for the same reason: any input clears it, and that input is
+    // SWALLOWED. Letting the dismissing press through would hand it straight back to the
+    // screen that ignored it, which is the silence this panel exists to break.
+    if (knob_help::showing()) {
+        if (pressed || delta != 0) knob_help::dismiss();
+        return;
+    }
     // Stamped here rather than in the menu, because "how long until I see it" is a question
     // worth being able to ask of any screen. The first attempt timed only the switcher, on
     // the assumption that the switcher was the problem, which is the assumption being
@@ -145,5 +154,21 @@ void input_router::dispatch(int delta, bool pressed) {
     }
 
     if (delta != 0) app_shell::turnCurrent(delta);
-    if (pressed)    app_shell::pressCurrent();
+    // A press the current screen had no use for is not nothing happening, it is somebody
+    // asking what this control does. The clock is the case that matters: it registers no
+    // press handler, so on the first screen a new Orb ever shows, the most obvious thing to
+    // try has always done nothing at all.
+    //
+    // Asked of the shared path rather than of the clock, so it cannot drift. Any screen that
+    // ignores a press gets the same answer, and a screen that grows a handler stops giving
+    // it without anybody having to remember this line exists.
+    //
+    // `count() > 0` is not belt and braces, it is the difference between the two ways a
+    // press can go unanswered. Before the roster registers there is no screen that could
+    // have ignored anything: the boot splash is still on the glass and the device has not
+    // yet asked to be driven, so a press then is EARLY rather than lost, and covering the
+    // splash with instructions would be answering a question nobody asked. Caught by the
+    // --knobshot harness, which pressed at 2500 ms, got the panel, and passed while proving
+    // nothing at all about the clock.
+    if (pressed && !app_shell::pressCurrent() && app_shell::count() > 0) knob_help::show();
 }

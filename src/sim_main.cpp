@@ -34,6 +34,7 @@
 #include "app_theme.h"
 #include "theme_select.h"
 #include "update_ui.h"   // --updateshot, below
+#include "knob_help.h"  // --knobshot, below
 #include "theme_style.h"   // per-theme app roster (apps()) + the scope's operational values (radar())
 #include "settings_view.h"
 #include "custom_boot_target.h"  // CUSTOM_BOOT_TARGET — set by whichever Launch Kit push (clock/splash/radar) ran last
@@ -756,6 +757,13 @@ int main(int argc, char **argv) {
     // The "Ready" notice, for the same reason: it exists for a few seconds on real
     // hardware after an update and there is no other way to look at it.
     const char *readyShot  = (argc >= 3 && strcmp(argv[1], "--readyshot")  == 0) ? argv[2] : NULL;
+    // --knobshot <prefix>: the "one knob, three moves" panel, driven the way a person
+    // reaches it rather than painted directly. Two frames, because the thing under test is
+    // not the layout on its own: <prefix>-shown.bmp after a press on the clock, which is
+    // the dead input that raises it, and <prefix>-gone.bmp after a second press, which is
+    // the way out. Painting the panel by hand would photograph a layout while proving
+    // nothing about the wiring, and the wiring is the whole feature.
+    const char *knobShot   = (argc >= 3 && strcmp(argv[1], "--knobshot")   == 0) ? argv[2] : NULL;
     // --wifishot <prefix>: the first-boot WiFi choice and the phone screen behind it.
     //
     // Same reason as the three above — on hardware these exist only on a device with no
@@ -787,7 +795,7 @@ int main(int argc, char **argv) {
     // --newsshot is headless but drives the KNOB, so it needs the full app lineup that only
     // interactive mode registers. It is the one capture that walks the shell rather than
     // putting a single screen up directly.
-    const bool  interactive = !shotPath && !gifPath && !updateShot && !readyShot && !bakeShot && !wifiShot;
+    const bool  interactive = !shotPath && !gifPath && !updateShot && !readyShot && !bakeShot && !wifiShot && !knobShot;
     (void)wxShot;   // live knob/app-shell only outside headless capture
     (void)setShot;
 
@@ -916,7 +924,11 @@ int main(int argc, char **argv) {
     ui_on_data_updated();
     // --wifishot needs the real roster too: it drives Settings through app_shell exactly as
     // the device does, so a capture cannot be reached with no apps registered.
-    if (interactive || wifiShot) sim_register_apps(radarScreen);   // live app switcher driven by the virtual knob
+    // --knobshot needs the roster too, and needs it for the same reason it needs the
+    // clock: the feature under test is what happens when the CURRENT APP ignores a
+    // press, and with no apps registered there is no current app to ignore one. Left
+    // off this line, the harness waited forever for a roster that never arrived.
+    if (interactive || wifiShot || knobShot) sim_register_apps(radarScreen);   // live app switcher driven by the virtual knob
 #if CUSTOM_BOOT_TARGET == 1
     // Set only by the splash push (the clock push clears it, even if a custom
     // splash is still baked in) — so this is genuinely "you just pushed the
@@ -1418,6 +1430,52 @@ int main(int argc, char **argv) {
             else               update_ui::firmware_incoming();   // paints and calls lv_refr_now itself
             sim_save_frame(readyShot ? readyShot : bakeShot ? bakeShot : updateShot);
             run = false;
+        }
+
+        // --knobshot: press on the clock, shoot; press again, shoot.
+        static int knobStep = 0;
+        static Uint32 knobAt = 0;
+        if (knobShot) {
+            // Straight at the router, the way the other harnesses in this file drive it.
+            // Going through simknob would queue the edge for a poll that runs elsewhere in
+            // this loop, and the knob driver is not what is under test here: the rock
+            // detector already has its own selftest above. What this checks is the routing,
+            // from "a press nothing handled" to the panel and back.
+            auto knobPress = [&]() {
+                input_router::dispatch(0, true);
+                lv_timer_handler(); lv_refr_now(NULL);
+            };
+            char path[300];
+            // Waits for the ROSTER, not for a stopwatch. The first version fired at 2500 ms,
+            // before any app had registered, so pressCurrent() found an empty shell rather
+            // than a clock that ignores presses. It passed, and it was testing nothing.
+            if (knobStep == 0 && app_shell::count() > 0 && now - start > 3000) {
+                // Whatever the boot left up has to be gone first, or this photographs the
+                // splash with a panel over it and proves nothing about the clock.
+                printf("[sim] --knobshot: before the press, app=\"%s\" (%d of %d) browsing=%d awaitingAck=%d\n",
+                       app_shell::name() ? app_shell::name() : "?", app_shell::index(),
+                       app_shell::count(), (int)app_shell::browsing(), (int)update_ui::awaitingAck());
+                if (app_shell::browsing()) knobPress();
+                // Explicitly, rather than trusting whatever the boot happened to leave up.
+                // The clock is the screen this feature is about: it is the first thing a new
+                // Orb shows and the only launch-one app with no press handler.
+                app_shell::selectApp(app_shell::APP_CLOCK);
+                lv_timer_handler(); lv_refr_now(NULL);
+                knobPress();
+                snprintf(path, sizeof(path), "%s-shown.bmp", knobShot);
+                sim_save_frame(path);
+                printf("[sim] --knobshot: press on the clock raised the panel: %s\n",
+                       knob_help::showing() ? "PASS" : "FAIL");
+                knobStep = 1; knobAt = now;
+            } else if (knobStep == 1 && now - knobAt > 600) {
+                knobPress();
+                snprintf(path, sizeof(path), "%s-gone.bmp", knobShot);
+                sim_save_frame(path);
+                printf("[sim] --knobshot: a second press dismissed it: %s (back on \"%s\")\n",
+                       !knob_help::showing() ? "PASS" : "FAIL",
+                       app_shell::name() ? app_shell::name() : "?");
+                run = false;
+            }
         }
 
         // --newsshot: turn, turn, shoot; press, wait for the gateway, shoot.

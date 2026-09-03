@@ -86,7 +86,10 @@ namespace app_shell {
 
     void next();          // advance to the next app (knob right), slides left
     void prev();          // go to the previous app (knob left), slides right
-    void pressCurrent();  // knob pushed: run the current app's press handler, if any
+    // Knob pushed: run the current app's press handler. Returns whether there WAS one,
+    // so the caller can tell a press that did something from a press that vanished. The
+    // clock registers none, which is the dead end knob_help exists to answer.
+    bool pressCurrent();
     void selectApp(int idx);  // jump straight to an app by index, no slide (e.g. forced setup at boot)
 
     // App-switcher overlay: turning shows a big app-name label over a live preview;
