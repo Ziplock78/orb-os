@@ -11,6 +11,7 @@ namespace {
 // From the theme, replaced whole every time one is applied.
 bool s_on     = false;
 int  s_secs   = 86400;
+int  s_turns  = 5;
 bool s_sound  = true;
 bool s_notice = true;
 
@@ -63,8 +64,15 @@ void clock_wind::begin() {
 #endif
 }
 
-void clock_wind::applyTheme(bool on, int seconds, bool sound, bool notice) {
+int clock_wind::turnsForFullWind()   { return s_turns; }
+int clock_wind::detentsForFullWind() { return s_turns * DETENTS_PER_TURN; }
+
+void clock_wind::applyTheme(bool on, int seconds, int turns, bool sound, bool notice) {
     s_on     = on;
+    // One turn is the fewest that is still a winding gesture rather than a nudge; twenty is
+    // past the point anybody would choose and exists only so a bad file cannot ask for a
+    // thousand.
+    s_turns  = turns < 1 ? 1 : (turns > 20 ? 20 : turns);
     // Clamped rather than trusted. The value arrives from a file on a removable card, and a
     // zero would make a clock that is wound down the instant it is wound. Ten seconds is the
     // floor because Studio offers it: it is the setting that makes this feature possible to
@@ -111,7 +119,7 @@ bool clock_wind::turn(int delta) {
     if (delta <= 0) return false;
     if (!s_on) return false;
     s_progress += delta;
-    if (s_progress < DETENTS_FOR_FULL_WIND) return true;
+    if (s_progress < detentsForFullWind()) return true;
 
     s_progress  = 0;
     s_justWound = true;

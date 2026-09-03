@@ -640,7 +640,7 @@ static void applyThemeSettings() {
     // applied. A theme without one can never leave the clock stopped.
     {
         const theme_style::Clock &cs = theme_style::clock();
-        clock_wind::applyTheme(cs.windOn, cs.windSecs, cs.windSound, cs.windNotice);
+        clock_wind::applyTheme(cs.windOn, cs.windSecs, cs.windTurns, cs.windSound, cs.windNotice);
         // Its sounds come with it, on the same path, so a theme can never be half applied:
         // wearing one design's clock while clicking in another's voice.
         theme_audio::load();

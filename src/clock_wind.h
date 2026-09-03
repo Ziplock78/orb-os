@@ -26,19 +26,21 @@
 
 namespace clock_wind {
 
-// How much winding a full wind is. Five turns of the crown, at the encoder's twenty detents
-// per revolution. Named rather than buried because it is a FEEL, and the only way to judge
-// it is to wind one: too few and the gesture is a flick, too many and it is a chore.
-constexpr int TURNS_FOR_FULL_WIND   = 5;
-constexpr int DETENTS_PER_TURN      = 20;
-constexpr int DETENTS_FOR_FULL_WIND = TURNS_FOR_FULL_WIND * DETENTS_PER_TURN;
+// The encoder's own resolution. Fixed by the hardware, unlike the number of turns.
+constexpr int DETENTS_PER_TURN = 20;
+
+// How many turns of the crown a full wind takes. The theme's, because it is a FEEL and the
+// only way to judge it is to wind one: too few and the gesture is a flick, too many and it is
+// a chore, and the right answer probably differs between a pocket watch and a chronometer.
+int turnsForFullWind();
+int detentsForFullWind();
 
 // Read the stored wind off NVS. Call once at boot, after Preferences is usable.
 void begin();
 
 // What the active theme asks for. Called whenever a theme is applied, so switching to a
 // design with no mainspring stops the clock ever being stopped.
-void applyTheme(bool on, int seconds, bool sound, bool notice);
+void applyTheme(bool on, int seconds, int turns, bool sound, bool notice);
 
 bool enabled();          // this theme has a mainspring at all
 bool soundOn();          // click while winding
@@ -63,7 +65,7 @@ int64_t handsTime();
 // caller knows whether to click.
 bool turn(int delta);
 
-int  progress();         // detents into the current wind, 0..DETENTS_FOR_FULL_WIND
+int  progress();         // detents into the current wind, 0..detentsForFullWind()
 bool justWound();        // and clears: true once, on the detent that completed a wind
 
 }  // namespace clock_wind

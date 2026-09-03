@@ -307,7 +307,12 @@ namespace theme_style {
 //      a settings menu. A Steam Punk clock and an Aviator chronometer have no more business
 //      clicking alike than sharing a typeface. An Orb below this level uses its built-in tick
 //      and its built-in chime, so Studio refuses a design that shipped either.
-constexpr int THEME_CAPS = 39;
+//  40  how many turns of the knob a full wind takes (Clock.windTurns). Five was a constant in
+//      the firmware, and it is a FEEL rather than a fact: a pocket watch and a chronometer
+//      should not ask for the same effort. The Orb builds the sentence on its own screen from
+//      this number, so the words and the gesture cannot drift apart. An Orb below this level
+//      always asks for five, whatever the design says.
+constexpr int THEME_CAPS = 40;
 
 struct ClockText {
     bool     show   = false;
@@ -380,6 +385,7 @@ struct Clock {
     // switch it on themselves.
     bool      windOn     = false;
     int       windSecs   = 86400;  // how long one full wind lasts, in seconds
+    int       windTurns  = 5;      // how many turns of the knob a full wind takes
     bool      windSound  = true;   // a click per detent while winding
     bool      windNotice = true;   // the full-screen "please wind" panel when it stops
 };

@@ -15,6 +15,7 @@
 #define AUDIO_CHIME   0
 #endif
 
+#include <stdio.h>
 #include <lvgl.h>
 #ifdef ARDUINO
 #include <Arduino.h>
@@ -62,7 +63,7 @@ void ensure() {
     lv_obj_center(s_ring);
     lv_arc_set_rotation(s_ring, 270);
     lv_arc_set_bg_angles(s_ring, 0, 360);
-    lv_arc_set_range(s_ring, 0, clock_wind::DETENTS_FOR_FULL_WIND);
+    lv_arc_set_range(s_ring, 0, clock_wind::detentsForFullWind());
     lv_arc_set_value(s_ring, 0);
     // Not a control. It reports the wind; the knob is what moves it, and a stray touch on
     // the glass must not be able to claim four turns nobody made.
@@ -90,7 +91,16 @@ void ensure() {
     lv_obj_align(ask, LV_ALIGN_CENTER, 0, 14);
 
     lv_obj_t *how = lv_label_create(s_panel);
-    lv_label_set_text(how, "five turns to the right");
+    {
+        // The number is the theme's now, so the sentence has to be built rather than written.
+        const int n = clock_wind::turnsForFullWind();
+        static const char *WORDS[] = { "one", "two", "three", "four", "five", "six", "seven",
+                                       "eight", "nine", "ten" };
+        char line[64];
+        if (n >= 1 && n <= 10) snprintf(line, sizeof(line), "%s turn%s to the right", WORDS[n - 1], n == 1 ? "" : "s");
+        else                   snprintf(line, sizeof(line), "%d turns to the right", n);
+        lv_label_set_text(how, line);
+    }
     lv_obj_set_style_text_color(how, lv_color_hex(0x5a636e), 0);
     lv_obj_set_style_text_font(how, &lv_font_montserrat_16, 0);
     lv_obj_align(how, LV_ALIGN_CENTER, 0, 84);
@@ -168,7 +178,7 @@ void wind_notice::turn(int delta) {
         const uint32_t now = now_ms();
         Serial.printf("[wind] %d detents in %lu ms (%lu ms redrawing), at %d of %d\n",
                       s_sinceLog, (unsigned long)(now - s_logAt), (unsigned long)s_refrMs,
-                      clock_wind::progress(), clock_wind::DETENTS_FOR_FULL_WIND);
+                      clock_wind::progress(), clock_wind::detentsForFullWind());
         s_sinceLog = 0; s_logAt = now; s_refrMs = 0;
     }
 #endif

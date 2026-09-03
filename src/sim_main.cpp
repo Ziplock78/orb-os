@@ -1450,7 +1450,7 @@ int main(int argc, char **argv) {
                 // a mainspring reports run down straight away, which is the state under
                 // test and also what a real Orb does the first time a design switches this
                 // on: it wants winding before it will run.
-                clock_wind::applyTheme(true, 86400, false, true);
+                clock_wind::applyTheme(true, 86400, 5, false, true);
                 app_shell::selectApp(app_shell::APP_CLOCK);
                 lv_timer_handler();
                 wind_notice::tick();
@@ -1465,15 +1465,15 @@ int main(int argc, char **argv) {
                        clock_wind::progress() == 0 ? "PASS" : "FAIL", clock_wind::progress());
                 windStep = 1; windAt = now;
             } else if (windStep == 1 && now - windAt > 400) {
-                for (int k = 0; k < clock_wind::DETENTS_FOR_FULL_WIND / 2; ++k) detent();
+                for (int k = 0; k < clock_wind::detentsForFullWind() / 2; ++k) detent();
                 snprintf(path, sizeof(path), "%s-half.bmp", windShot);
                 sim_save_frame(path);
                 printf("[sim] --windshot: half wound, gauge at %d of %d: %s\n",
-                       clock_wind::progress(), clock_wind::DETENTS_FOR_FULL_WIND,
+                       clock_wind::progress(), clock_wind::detentsForFullWind(),
                        wind_notice::showing() ? "PASS" : "FAIL");
                 windStep = 2; windAt = now;
             } else if (windStep == 2 && now - windAt > 400) {
-                for (int k = 0; k < clock_wind::DETENTS_FOR_FULL_WIND; ++k) detent();
+                for (int k = 0; k < clock_wind::detentsForFullWind(); ++k) detent();
                 wind_notice::tick();
                 lv_timer_handler(); lv_refr_now(NULL);
                 snprintf(path, sizeof(path), "%s-wound.bmp", windShot);
