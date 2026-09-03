@@ -312,7 +312,14 @@ namespace theme_style {
 //      should not ask for the same effort. The Orb builds the sentence on its own screen from
 //      this number, so the words and the gesture cannot drift apart. An Orb below this level
 //      always asks for five, whatever the design says.
-constexpr int THEME_CAPS = 40;
+//  41  the wind screen as a design rather than a fixed panel: its background, the colour and
+//      weight of the gauge round the rim, and the words, size, colour and position of its
+//      three lines. It shipped white on black in the built-in face because it was written
+//      alongside the no-SD notice and inherited that screen's rules. It is not that kind of
+//      screen: it appears during ordinary use on a themed clock, and a Steam Punk Orb asking
+//      to be wound in a factory-looking grey sans is the seam showing. An Orb below this
+//      level draws the fixed panel whatever the design says.
+constexpr int THEME_CAPS = 41;
 
 struct ClockText {
     bool     show   = false;
@@ -388,6 +395,34 @@ struct Clock {
     int       windTurns  = 5;      // how many turns of the knob a full wind takes
     bool      windSound  = true;   // a click per detent while winding
     bool      windNotice = true;   // the full-screen "please wind" panel when it stops
+    // THEME_CAPS 41. The wind screen is a DESIGN, not a fixed panel. It was white on black in
+    // the built-in face because it started life as a system notice like the no-SD screen; it
+    // is not one. It appears during ordinary use, on a themed clock, and a Steam Punk Orb
+    // asking to be wound in the same grey sans as a factory error message is the seam showing.
+    //
+    // Sizes come from the compiled ladder and nothing between its rungs: see font_for_px().
+    // Colour and OPACITY, and no picture. Zion's: this is a scrim over the running clock
+    // rather than a screen that replaces it, so at anything under full you can still see the
+    // dial it is asking you to wind. A background image would defeat that and would also be
+    // a second 466x466 plate on the card for a screen you see for ten seconds a day.
+    uint32_t  windBg        = 0x000000;
+    int       windBgOpa     = 255;   // 0..255
+    uint32_t  windRingTrack = 0x22282F;
+    uint32_t  windRingFill  = 0xD8B56A;
+    int       windRingWidth = 8;
+    int       windRingR     = 212;   // px from the middle to the ring's centre line
+    char      windTitle[64] = "The clock has\nwound down";
+    int       windTitleSize = 28;
+    uint32_t  windTitleCol  = 0xFFFFFF;
+    int       windTitleY    = -84;   // px from the middle, negative is up
+    char      windAsk[96]   = "Please wind the clock using the knob";
+    int       windAskSize   = 20;
+    uint32_t  windAskCol    = 0x9AA4B0;
+    int       windAskY      = 8;
+    bool      windTurnsShow = true;
+    int       windTurnsSize = 16;
+    uint32_t  windTurnsCol  = 0x5A636E;
+    int       windTurnsY    = 122;
 };
 
 // Which apps this theme puts in the knob menu. Was custom_apps.h, compiled in, so it was

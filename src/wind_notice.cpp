@@ -1,6 +1,7 @@
 #include "wind_notice.h"
 
 #include "clock_wind.h"
+#include "theme_style.h"
 #include "theme_audio.h"
 #include "app_shell.h"
 #ifdef ARDUINO
@@ -60,69 +61,82 @@ int      s_sinceLog = 0;
 
 uint32_t now_ms() { return lv_tick_get(); }
 
+// The compiled ladder, and nothing between its rungs. LVGL fonts are glyph bitmaps rather
+// than outlines, so a size this binary was not built with cannot be drawn at any quality;
+// asking for one and getting the nearest is how a theme silently redesigns itself. Same
+// switch ticker_view.cpp uses, and unknown values land on a default rather than the closest.
+const lv_font_t *font_for_px(int px) {
+    switch (px) {
+        case 14: return &lv_font_montserrat_14;
+        case 16: return &lv_font_montserrat_16;
+        case 18: return &lv_font_montserrat_18;
+        case 20: return &lv_font_montserrat_20;
+        case 22: return &lv_font_montserrat_22;
+        case 26: return &lv_font_montserrat_26;
+        case 28: return &lv_font_montserrat_28;
+        default: return &lv_font_montserrat_20;
+    }
+}
+
+lv_obj_t *line(lv_obj_t *parent, const char *text, int px, uint32_t color, int y, int wrapW) {
+    lv_obj_t *l = lv_label_create(parent);
+    if (wrapW > 0) { lv_label_set_long_mode(l, LV_LABEL_LONG_WRAP); lv_obj_set_width(l, wrapW); }
+    lv_label_set_text(l, text);
+    lv_obj_set_style_text_color(l, lv_color_hex(color), 0);
+    lv_obj_set_style_text_font(l, font_for_px(px), 0);
+    lv_obj_set_style_text_align(l, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_align(l, LV_ALIGN_CENTER, 0, (lv_coord_t)y);
+    return l;
+}
+
 void ensure() {
     if (s_panel) return;
+    const theme_style::Clock &c = theme_style::clock();
 
     s_panel = lv_obj_create(lv_layer_top());
     lv_obj_set_size(s_panel, LV_PCT(100), LV_PCT(100));
-    lv_obj_set_style_bg_color(s_panel, lv_color_black(), 0);
-    lv_obj_set_style_bg_opa(s_panel, LV_OPA_COVER, 0);
+    lv_obj_set_style_bg_color(s_panel, lv_color_hex(c.windBg), 0);
+    // The design's own opacity. Under full, the clock it is asking you to wind shows through,
+    // which is the point: this is a scrim rather than a screen that replaces the dial.
+    lv_obj_set_style_bg_opa(s_panel, (lv_opa_t)c.windBgOpa, 0);
     lv_obj_set_style_border_width(s_panel, 0, 0);
     lv_obj_set_style_radius(s_panel, 0, 0);
     lv_obj_clear_flag(s_panel, LV_OBJ_FLAG_SCROLLABLE);
 
-    // The wind gauge, right out at the bezel where a circular screen has room to spare and
-    // where it reads as the rim of the mechanism rather than as a progress bar. Starts at
-    // twelve and fills clockwise, which is the direction that winds it.
+    // The wind gauge, out at the bezel where a circular screen has room to spare and where it
+    // reads as the rim of the mechanism rather than as a progress bar. Starts at twelve and
+    // fills clockwise, which is the direction that winds it.
     s_ring = lv_arc_create(s_panel);
-    // 424, not 440. The panel is square and the glass is a circle inscribed in it, so a
-    // ring at radius 220 sits thirteen pixels from the edge of a 466 px dial and any bezel
-    // overlap eats it. Pulled in to leave twenty.
-    lv_obj_set_size(s_ring, 424, 424);
+    const int d = c.windRingR * 2;
+    lv_obj_set_size(s_ring, d, d);
     lv_obj_center(s_ring);
     lv_arc_set_rotation(s_ring, 270);
     lv_arc_set_bg_angles(s_ring, 0, 360);
     lv_arc_set_range(s_ring, 0, clock_wind::detentsForFullWind());
-    lv_arc_set_value(s_ring, 0);
-    // Not a control. It reports the wind; the knob is what moves it, and a stray touch on
-    // the glass must not be able to claim four turns nobody made.
+    lv_arc_set_value(s_ring, clock_wind::progress());
+    // Not a control. It reports the wind; the knob is what moves it, and a stray touch on the
+    // glass must not be able to claim four turns nobody made.
     lv_obj_remove_style(s_ring, nullptr, LV_PART_KNOB);
     lv_obj_clear_flag(s_ring, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_set_style_arc_width(s_ring, 8, LV_PART_MAIN);
-    lv_obj_set_style_arc_width(s_ring, 8, LV_PART_INDICATOR);
-    lv_obj_set_style_arc_color(s_ring, lv_color_hex(0x22282f), LV_PART_MAIN);
-    lv_obj_set_style_arc_color(s_ring, lv_color_hex(0xd8b56a), LV_PART_INDICATOR);
+    lv_obj_set_style_arc_width(s_ring, c.windRingWidth, LV_PART_MAIN);
+    lv_obj_set_style_arc_width(s_ring, c.windRingWidth, LV_PART_INDICATOR);
+    lv_obj_set_style_arc_color(s_ring, lv_color_hex(c.windRingTrack), LV_PART_MAIN);
+    lv_obj_set_style_arc_color(s_ring, lv_color_hex(c.windRingFill), LV_PART_INDICATOR);
 
-    lv_obj_t *title = lv_label_create(s_panel);
-    lv_label_set_text(title, "The clock has\nwound down");
-    lv_obj_set_style_text_color(title, lv_color_white(), 0);
-    lv_obj_set_style_text_font(title, &lv_font_montserrat_26, 0);
-    lv_obj_set_style_text_align(title, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_align(title, LV_ALIGN_CENTER, 0, -66);
+    line(s_panel, c.windTitle, c.windTitleSize, c.windTitleCol, c.windTitleY, 0);
+    line(s_panel, c.windAsk,   c.windAskSize,   c.windAskCol,   c.windAskY,   300);
 
-    lv_obj_t *ask = lv_label_create(s_panel);
-    lv_label_set_long_mode(ask, LV_LABEL_LONG_WRAP);
-    lv_obj_set_width(ask, 300);
-    lv_label_set_text(ask, "Please wind the clock using the knob");
-    lv_obj_set_style_text_color(ask, lv_color_hex(0x9aa4b0), 0);
-    lv_obj_set_style_text_font(ask, &lv_font_montserrat_20, 0);
-    lv_obj_set_style_text_align(ask, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_align(ask, LV_ALIGN_CENTER, 0, 14);
-
-    lv_obj_t *how = lv_label_create(s_panel);
-    {
-        // The number is the theme's now, so the sentence has to be built rather than written.
+    if (c.windTurnsShow) {
+        // Built rather than written, because the number is the theme's. Writing "five turns"
+        // as a string would have it keep saying five while the knob wanted three.
         const int n = clock_wind::turnsForFullWind();
         static const char *WORDS[] = { "one", "two", "three", "four", "five", "six", "seven",
                                        "eight", "nine", "ten" };
-        char line[64];
-        if (n >= 1 && n <= 10) snprintf(line, sizeof(line), "%s turn%s to the right", WORDS[n - 1], n == 1 ? "" : "s");
-        else                   snprintf(line, sizeof(line), "%d turns to the right", n);
-        lv_label_set_text(how, line);
+        char buf[64];
+        if (n >= 1 && n <= 10) snprintf(buf, sizeof(buf), "%s turn%s to the right", WORDS[n - 1], n == 1 ? "" : "s");
+        else                   snprintf(buf, sizeof(buf), "%d turns to the right", n);
+        line(s_panel, buf, c.windTurnsSize, c.windTurnsCol, c.windTurnsY, 0);
     }
-    lv_obj_set_style_text_color(how, lv_color_hex(0x5a636e), 0);
-    lv_obj_set_style_text_font(how, &lv_font_montserrat_16, 0);
-    lv_obj_align(how, LV_ALIGN_CENTER, 0, 84);
 }
 
 }  // namespace
