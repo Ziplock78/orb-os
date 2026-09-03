@@ -23,50 +23,41 @@ void ensure() {
     lv_obj_set_style_radius(s_panel, 0, 0);
     lv_obj_clear_flag(s_panel, LV_OBJ_FLAG_SCROLLABLE);
 
-    // "Three moves" rather than "the knob": naming the count up front is what turns a wall
-    // of instructions into a list somebody expects to end. The Orb page says the same three
-    // in the same order, so a person who read it meets the words twice rather than two
-    // descriptions of the same object.
-    lv_obj_t *title = lv_label_create(s_panel);
-    lv_label_set_text(title, "One knob,\nthree moves");
-    lv_obj_set_style_text_color(title, lv_color_white(), 0);
-    lv_obj_set_style_text_font(title, &lv_font_montserrat_26, 0);
-    lv_obj_set_style_text_align(title, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_align(title, LV_ALIGN_CENTER, 0, -128);
+    // Zion's words, 2026-09-03, after reading the first version on the glass. One hint,
+    // one sentence, rather than a titled list of three gestures: the only one worth
+    // teaching is the rock, and the other two were being explained to somebody who had
+    // just demonstrated they could work a knob.
+    //
+    // "activate to the main menu" in his note is a dictation slip for "activate the main
+    // menu"; the stray preposition is dropped and nothing else about the sentence is mine.
+    lv_obj_t *label = lv_label_create(s_panel);
+    lv_label_set_text(label, "Hint:");
+    lv_obj_set_style_text_color(label, lv_color_hex(0x9aa4b0), 0);
+    lv_obj_set_style_text_font(label, &lv_font_montserrat_20, 0);
+    lv_obj_align(label, LV_ALIGN_CENTER, 0, -84);
 
-    // The rock is the line this screen exists for, so it is the one in white with the other
-    // two dimmed around it. Turning and pushing are here for context, not because anybody
-    // needed telling.
-    lv_obj_t *turn = lv_label_create(s_panel);
-    lv_label_set_text(turn, "Turn to move");
-    lv_obj_set_style_text_color(turn, lv_color_hex(0x9aa4b0), 0);
-    lv_obj_set_style_text_font(turn, &lv_font_montserrat_20, 0);
-    lv_obj_set_style_text_align(turn, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_align(turn, LV_ALIGN_CENTER, 0, -46);
+    // Wrapped by LVGL at a width that clears the bezel. It comes out four lines at this
+    // size, and 340 px is the widest that block can be and still sit inside a 466 px circle
+    // with the curve biting at the ends of the top and bottom lines.
+    lv_obj_t *body = lv_label_create(s_panel);
+    lv_label_set_long_mode(body, LV_LABEL_LONG_WRAP);
+    lv_obj_set_width(body, 340);
+    lv_label_set_text(body,
+                      "To activate the main menu from any app, "
+                      "\"rock\" the knob by quickly turning the "
+                      "knob left and then right");
+    lv_obj_set_style_text_color(body, lv_color_white(), 0);
+    lv_obj_set_style_text_font(body, &lv_font_montserrat_20, 0);
+    lv_obj_set_style_text_align(body, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_align(body, LV_ALIGN_CENTER, 0, 8);
 
-    // The same words the Orb page uses. If one of these two ever changes, the other is
-    // wrong, and a person meeting both is being told the device works two ways.
-    lv_obj_t *rock = lv_label_create(s_panel);
-    lv_label_set_text(rock, "Rock it back and forth\nfor the menu");
-    lv_obj_set_style_text_color(rock, lv_color_white(), 0);
-    lv_obj_set_style_text_font(rock, &lv_font_montserrat_22, 0);
-    lv_obj_set_style_text_align(rock, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_align(rock, LV_ALIGN_CENTER, 0, 8);
-
-    lv_obj_t *push = lv_label_create(s_panel);
-    lv_label_set_text(push, "Push to choose");
-    lv_obj_set_style_text_color(push, lv_color_hex(0x9aa4b0), 0);
-    lv_obj_set_style_text_font(push, &lv_font_montserrat_20, 0);
-    lv_obj_set_style_text_align(push, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_align(push, LV_ALIGN_CENTER, 0, 74);
-
-    // Says how to leave, because a screen that appeared uninvited must never be one you have
-    // to work out how to close. Any input clears it, so naming the nearest one is enough.
+    // Kept, quietly. A screen that appeared uninvited must never be one you have to work
+    // out how to close, and any input clears this one, so naming the nearest is enough.
     lv_obj_t *hint = lv_label_create(s_panel);
     lv_label_set_text(hint, "push to carry on");
     lv_obj_set_style_text_color(hint, lv_color_hex(0x5a636e), 0);
     lv_obj_set_style_text_font(hint, &lv_font_montserrat_16, 0);
-    lv_obj_align(hint, LV_ALIGN_CENTER, 0, 138);
+    lv_obj_align(hint, LV_ALIGN_CENTER, 0, 122);
 }
 
 }  // namespace
