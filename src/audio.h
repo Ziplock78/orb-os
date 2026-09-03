@@ -15,11 +15,17 @@ enum AudioCue {
 
 bool audio_begin();                 // init ES8311 + I2S + PA + playback task (call on core 1)
 #include <stdint.h>
+#include <stddef.h>
 uint32_t audio_stack_free_bytes();  // bytes of its stack never touched, for /taskmem
 bool audio_present();
 void audio_set_volume(int pct);     // 0..100 (software amplitude)
 void audio_set_muted(bool muted);
 void audio_play(AudioCue cue);      // non-blocking: signals the playback task
+// Play a caller-owned PCM buffer: 16 kHz, 16-bit, stereo interleaved, the same format the
+// built-in chimes are in. Non-blocking. The buffer must outlive the playback, which is why
+// theme_audio holds its sounds for as long as the theme is active rather than handing over
+// something it is about to free.
+void audio_play_pcm(const uint8_t *pcm, size_t bytes);
 void audio_selftest();              // ~2 s continuous tone for by-ear verification
 
 // Named chime library (real recorded audio, baked into flash — see chime_westminster.h).

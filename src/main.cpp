@@ -35,6 +35,7 @@
 #include "theme_style.h"   // per-theme app roster (theme_style::apps())
 #include "clock_wind.h"    // the clock's virtual mainspring, THEME_CAPS 37
 #include "wind_notice.h"   // ...and the panel that asks for it
+#include "theme_audio.h"   // sounds a theme brings with it: wind.pcm, chime.pcm
 #include "display.h"                  // M0: CO5300 + LVGL bring-up
 #include "imu_qmi8658.h"             // face-down sleep
 #include "battery.h"                 // AXP2101 battery gauge
@@ -640,6 +641,9 @@ static void applyThemeSettings() {
     {
         const theme_style::Clock &cs = theme_style::clock();
         clock_wind::applyTheme(cs.windOn, cs.windSecs, cs.windSound, cs.windNotice);
+        // Its sounds come with it, on the same path, so a theme can never be half applied:
+        // wearing one design's clock while clicking in another's voice.
+        theme_audio::load();
     }
     const theme_style::Radar &rs = theme_style::radar();
     // -1 (or 0 for range) means "no opinion", leaving the Orb's own stored setting alone.
@@ -3211,7 +3215,13 @@ void loop() {
             if (lastChimeHour < 0) lastChimeHour = ti.tm_hour;
             else if (ti.tm_hour != lastChimeHour) {
                 lastChimeHour = ti.tm_hour;
-                if (g_soundChime && audio_present()) audio_play(AUDIO_CHIME);
+                if (g_soundChime && audio_present()) {
+                    // The theme's hour, if it brought one. Falls back to the built-in
+                    // library, which is what every design written before this gets.
+                    size_t n = 0;
+                    if (const uint8_t *pcm = theme_audio::chime(n)) audio_play_pcm(pcm, n);
+                    else                                            audio_play(AUDIO_CHIME);
+                }
             }
         }
         const bool wifiUp = (WiFi.status() == WL_CONNECTED);

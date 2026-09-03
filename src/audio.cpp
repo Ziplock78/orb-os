@@ -34,6 +34,11 @@ static const ChimeInfo CHIMES[] = {
     { "Westminster", CHIME_WESTMINSTER_PCM, CHIME_WESTMINSTER_BYTES },
 };
 static const int CHIME_COUNT = (int)(sizeof(CHIMES) / sizeof(CHIMES[0]));
+
+// A theme's own sound, waiting to be played. Owned by theme_audio, which holds it for as long
+// as its theme is active, so this is a borrow rather than a handover.
+static const uint8_t *s_pcm    = nullptr;
+static size_t         s_pcmLen = 0;
 static volatile int s_chimeIdx = 0;     // AUDIO_CHIME plays this one
 static volatile int s_previewIdx = 0;   // cue 4 (preview) plays this one instead
 
@@ -203,6 +208,8 @@ static void play_cue(int cue) {
     } else if (cue == 4) {                          // preview: a specific chime, for the picker UI
         const int idx = constrain(s_previewIdx, 0, CHIME_COUNT - 1);
         play_pcm(CHIMES[idx].pcm, CHIMES[idx].bytes);
+    } else if (cue == 6) {                          // a theme's own sound, from the SD card
+        if (s_pcm && s_pcmLen >= 2) play_pcm(s_pcm, s_pcmLen);
     } else if (cue == AUDIO_WIND) {
         // A tick, not a beep: short, high and quiet, so a hundred of them in a row read as
         // a ratchet rather than as an alarm. Half amplitude for the same reason — this one
@@ -275,6 +282,16 @@ void audio_set_muted(bool m) { s_muted = m; }
 void audio_play(AudioCue cue) {
     if (!s_ok || s_muted) return;
     s_cue = (int)cue;
+    if (s_sem) xSemaphoreGive(s_sem);
+}
+
+// Cue 5 is "play whatever is in s_pcm". The pointer is set before the semaphore is given, and
+// the buffer belongs to the caller for the life of the theme, so there is nothing to copy and
+// nothing to free here.
+void audio_play_pcm(const uint8_t *pcm, size_t bytes) {
+    if (!s_ok || s_muted || !pcm || bytes < 2) return;
+    s_pcm = pcm; s_pcmLen = bytes;
+    s_cue = 6;
     if (s_sem) xSemaphoreGive(s_sem);
 }
 

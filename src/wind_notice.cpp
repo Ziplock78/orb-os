@@ -1,6 +1,7 @@
 #include "wind_notice.h"
 
 #include "clock_wind.h"
+#include "theme_audio.h"
 #include "app_shell.h"
 #ifdef ARDUINO
 #include "audio.h"
@@ -9,6 +10,7 @@
 // window cannot answer "does the ratchet sound right" anyway, so the calls compile out
 // rather than being faked.
 #define audio_play(x) ((void)0)
+#define audio_play_pcm(p, n) ((void)0)
 #define AUDIO_WIND    0
 #define AUDIO_CHIME   0
 #endif
@@ -125,7 +127,10 @@ void wind_notice::turn(int delta) {
     if (clock_wind::justWound()) {
         // Straight back to the clock, running, at the true time. Nothing to set: the RTC
         // never stopped and the network still agrees with it.
-        audio_play(AUDIO_CHIME);
+        //
+        // No sound here. There was a chime on completion and Zion cut it: the reward for
+        // winding a watch is that it starts, not a noise congratulating you. The ticks while
+        // you turn are the sound this gesture has.
         dismiss();
         return;
     }
@@ -145,7 +150,15 @@ void wind_notice::turn(int delta) {
     }
     if (clock_wind::soundOn()) {
         const uint32_t t = now_ms();
-        if (t - s_lastClickMs >= CLICK_GAP_MS) { s_lastClickMs = t; audio_play(AUDIO_WIND); }
+        if (t - s_lastClickMs >= CLICK_GAP_MS) {
+            s_lastClickMs = t;
+            // The theme's own tick if it shipped one, otherwise the built-in. A Steam Punk
+            // clock and an Aviator chronometer have no more business clicking alike than
+            // they do sharing a typeface.
+            size_t n = 0;
+            if (const uint8_t *pcm = theme_audio::wind(n)) audio_play_pcm(pcm, n);
+            else                                           audio_play(AUDIO_WIND);
+        }
     }
 #ifdef ARDUINO
     // Every twenty detents, so the log is a handful of lines per wind rather than a hundred.

@@ -299,7 +299,15 @@ namespace theme_style {
 //      spent rather than the key quietly reused because an Orb on 37 reports a mainspring it
 //      has and then cannot read the only field that says how long it runs, which is the tool
 //      lying about what the device agreed to.
-constexpr int THEME_CAPS = 38;
+//  39  sounds a theme brings with it: wind.pcm for the winding click and chime.pcm for the
+//      hour, raw PCM at the format audio.cpp already streams, converted in the browser where
+//      there is a real audio stack rather than on a chip that has no business parsing an MP3.
+//      Zion's, and from the same place the mainspring came from: the detail people talked
+//      about on his vintage radio was a SOUND, and it belonged to that object rather than to
+//      a settings menu. A Steam Punk clock and an Aviator chronometer have no more business
+//      clicking alike than sharing a typeface. An Orb below this level uses its built-in tick
+//      and its built-in chime, so Studio refuses a design that shipped either.
+constexpr int THEME_CAPS = 39;
 
 struct ClockText {
     bool     show   = false;
