@@ -1,6 +1,12 @@
 #include "theme_audio.h"
 
+#ifdef ARDUINO
 #include "audio.h"
+#else
+// The simulator builds no audio module, so nothing can be playing and nothing needs releasing
+// before it is freed. Compiled out rather than faked, the same way wind_notice does it.
+#define audio_release_pcm(p) ((void)0)
+#endif
 #include "theme_sd.h"
 #include "theme_select.h"
 #include "theme_style.h"
