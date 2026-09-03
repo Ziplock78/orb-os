@@ -30,6 +30,12 @@ lv_obj_t *s_ring  = nullptr;
 uint32_t s_lastClickMs = 0;
 constexpr uint32_t CLICK_GAP_MS = 55;
 
+// Instrumentation for the winding path only, and only on the device. Cleared each time it
+// reports.
+uint32_t s_refrMs   = 0;
+uint32_t s_logAt    = 0;
+int      s_sinceLog = 0;
+
 uint32_t now_ms() { return lv_tick_get(); }
 
 void ensure() {
@@ -123,11 +129,36 @@ void wind_notice::turn(int delta) {
         dismiss();
         return;
     }
-    if (s_ring) lv_arc_set_value(s_ring, clock_wind::progress());
+    if (s_ring) {
+        lv_arc_set_value(s_ring, clock_wind::progress());
+        // Drawn HERE, not at the bottom of the loop.
+        //
+        // main.cpp handles the knob first and calls lv_timer_handler() last, on purpose, so
+        // a detent is acted on by the very next render rather than the one after. That is
+        // right for a press, which happens once. It is wrong for winding, which is the only
+        // thing on this device that answers a CONTINUOUS turn: the gauge then moved a whole
+        // loop period after the knob did, and Zion reported it as massive lag. The arc's own
+        // invalidation is the changed sector only, so this is a small repaint, not a frame.
+        const uint32_t t0 = now_ms();
+        lv_refr_now(NULL);
+        s_refrMs += now_ms() - t0;
+    }
     if (clock_wind::soundOn()) {
         const uint32_t t = now_ms();
         if (t - s_lastClickMs >= CLICK_GAP_MS) { s_lastClickMs = t; audio_play(AUDIO_WIND); }
     }
+#ifdef ARDUINO
+    // Every twenty detents, so the log is a handful of lines per wind rather than a hundred.
+    // Prints what it actually costs, because "it feels laggy" and "the redraw is slow" are
+    // different claims and only one of them is fixable here.
+    if (++s_sinceLog >= 20) {
+        const uint32_t now = now_ms();
+        Serial.printf("[wind] %d detents in %lu ms (%lu ms redrawing), at %d of %d\n",
+                      s_sinceLog, (unsigned long)(now - s_logAt), (unsigned long)s_refrMs,
+                      clock_wind::progress(), clock_wind::DETENTS_FOR_FULL_WIND);
+        s_sinceLog = 0; s_logAt = now; s_refrMs = 0;
+    }
+#endif
 }
 
 void wind_notice::dismiss() {
