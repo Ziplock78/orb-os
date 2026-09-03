@@ -30,19 +30,27 @@ lv_obj_t *s_ring  = nullptr;
 // playback path that holds the amplifier up for about a tenth of a second per tick, so a
 // brisk wind would still be clicking long after it finished. Every other detent is enough
 // to read as a ratchet and stays ahead of the turning.
-uint32_t s_lastClickMs = 0;
-constexpr uint32_t CLICK_GAP_MS = 55;
-
 // 16 kHz, 16-bit, stereo: 64,000 bytes a second.
 constexpr uint32_t PCM_BYTES_PER_SEC = 16000 * 2 * 2;
 
-// Never retrigger a sound that is still playing. A theme's click can be longer than the gap
-// between two notches, and asking for it again mid-phrase queues a second copy behind the
-// first, so the ticks fall further and further behind the hand that is causing them.
-uint32_t click_gap_for(size_t bytes) {
-    const uint32_t len = (uint32_t)((bytes * 1000ULL) / PCM_BYTES_PER_SEC);
-    return len > CLICK_GAP_MS ? len : CLICK_GAP_MS;
-}
+// A SWEEP, not a notch.
+//
+// Nobody winds one click at a time. A hand turns four or five clicks in one motion, pauses,
+// and goes again, and the sound of winding is the sound of that whole motion. Zion recorded
+// exactly that: a few clicks of ratchet, one file. Firing it per detent stacked five copies
+// of a five-click sound on top of each other, which is the digital mush he heard.
+//
+// So the first detent after a pause starts a sweep and plays. Every detent inside that sweep
+// is silent, because the sound already running IS the sound of them. Deliberately not one to
+// one with the knob, which is the thing he had to say twice.
+constexpr uint32_t SWEEP_GAP_MS = 250;
+
+uint32_t s_lastDetentMs = 0;
+// When the sound in flight will have finished. A new sweep that arrives before then is left
+// alone rather than restarted: the ratchet is already going.
+uint32_t s_playingUntil = 0;
+
+uint32_t pcm_ms(size_t bytes) { return (uint32_t)((bytes * 1000ULL) / PCM_BYTES_PER_SEC); }
 
 // Instrumentation for the winding path only, and only on the device. Cleared each time it
 // reports.
@@ -169,17 +177,22 @@ void wind_notice::turn(int delta) {
         lv_refr_now(NULL);
         s_refrMs += now_ms() - t0;
     }
-    if (clock_wind::soundOn()) {
+    {
         const uint32_t t = now_ms();
-        // The theme's own tick if it shipped one, otherwise the built-in. A Steam Punk clock
-        // and an Aviator chronometer have no more business clicking alike than they do
+        const bool newSweep = (t - s_lastDetentMs) > SWEEP_GAP_MS;
+        s_lastDetentMs = t;
+        // The theme's own sound if it shipped one, otherwise the built-in tick. A Steam Punk
+        // clock and an Aviator chronometer have no more business sounding alike than they do
         // sharing a typeface.
-        size_t n = 0;
-        const uint8_t *pcm = theme_audio::wind(n);
-        if (t - s_lastClickMs >= click_gap_for(pcm ? n : 0)) {
-            s_lastClickMs = t;
-            if (pcm) audio_play_pcm(pcm, n);
-            else     audio_play(AUDIO_WIND);
+        if (clock_wind::soundOn() && newSweep && t >= s_playingUntil) {
+            size_t n = 0;
+            if (const uint8_t *pcm = theme_audio::wind(n)) {
+                audio_play_pcm(pcm, n);
+                s_playingUntil = t + pcm_ms(n);
+            } else {
+                audio_play(AUDIO_WIND);
+                s_playingUntil = t + 60;   // the built-in tick is 9 ms; this is just a floor
+            }
         }
     }
 #ifdef ARDUINO
