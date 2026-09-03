@@ -29,8 +29,11 @@ namespace theme_audio {
 // becomes active, on the same path that applies the rest of its settings.
 void load();
 
-// Null when this theme ships no sound of that kind, which is the normal case.
+// Null when this theme ships no winding sound, which is the normal case.
+//
+// The chime is deliberately NOT here. It belongs to the device rather than to the worn theme
+// (see chime_library) and it is streamed off the card as it rings rather than held, so a two
+// minute chime costs this nothing.
 const uint8_t *wind(size_t &bytes);
-const uint8_t *chime(size_t &bytes);
 
 }  // namespace theme_audio

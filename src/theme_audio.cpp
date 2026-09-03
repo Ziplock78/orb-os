@@ -20,7 +20,6 @@
 namespace {
 
 uint8_t *s_wind  = nullptr; size_t s_windLen  = 0;
-uint8_t *s_chime = nullptr; size_t s_chimeLen = 0;
 
 // A ceiling with real headroom over what Studio can produce, which is the only number that
 // matters here. It was 64 KB on the arithmetic that this format runs at 32 KB per second. It
@@ -32,10 +31,6 @@ uint8_t *s_chime = nullptr; size_t s_chimeLen = 0;
 // can produce rather than a hair above it, because these two numbers have already drifted
 // apart once and the cost was an evening of hearing the wrong sound.
 constexpr size_t WIND_MAX_BYTES  = 256 * 1024;
-// The hour, so it can be a real phrase. Ten seconds is 640,000 bytes at this format and
-// Studio caps there, so 640 KB (655,360) clears it by design rather than by luck.
-constexpr size_t CHIME_MAX_BYTES = 640 * 1024;
-
 uint8_t *load_one(const char *name, size_t maxBytes, size_t &outLen) {
     outLen = 0;
     const char *slug = theme_select::activeSlug();
@@ -66,10 +61,10 @@ void theme_audio::load() {
     // tick is still sounding, and the playback task would then be reading memory this is
     // about to hand back.
     if (s_wind)  { audio_release_pcm(s_wind);  theme_sd::free(s_wind);  s_wind  = nullptr; s_windLen  = 0; }
-    if (s_chime) { audio_release_pcm(s_chime); theme_sd::free(s_chime); s_chime = nullptr; s_chimeLen = 0; }
-    s_wind  = load_one("wind.pcm",  WIND_MAX_BYTES,  s_windLen);
-    s_chime = load_one("chime.pcm", CHIME_MAX_BYTES, s_chimeLen);
+    s_wind = load_one("wind.pcm", WIND_MAX_BYTES, s_windLen);
+    // The chime is NOT loaded here any more. It belongs to the device rather than to the worn
+    // theme (chime_library), and it is streamed off the card when it rings rather than held,
+    // so a theme with a two minute chime costs this nothing at all.
 }
 
 const uint8_t *theme_audio::wind(size_t &bytes)  { bytes = s_windLen;  return s_wind; }
-const uint8_t *theme_audio::chime(size_t &bytes) { bytes = s_chimeLen; return s_chime; }

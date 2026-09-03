@@ -35,6 +35,18 @@ void audio_play_pcm(const uint8_t *pcm, size_t bytes, bool ignoreMute = false);
 // surface as noise or a crash rather than as anything obviously about audio. Bounded, so a
 // wedged task cannot hang the caller.
 void audio_release_pcm(const uint8_t *pcm);
+
+// Play raw PCM straight off the SD card, in pieces, without loading it first.
+//
+// This is what lets a chime be as long as somebody wants. Holding one in memory is what
+// created a length limit at all, and on a chip where the clock alone takes two and a half
+// megabytes there is no length that would be both generous and safe. A chime rings once an
+// hour; the card has an easy time of it.
+//
+// `preview` means somebody is browsing the picker: it ignores mute, and it is the one thing
+// allowed to cut a chime short. Otherwise a chime plays to the end, because an aircraft beep
+// arriving at ten past the hour has no business truncating it.
+void audio_play_file(const char *path, bool preview = false);
 void audio_selftest();              // ~2 s continuous tone for by-ear verification
 
 // Named chime library (real recorded audio, baked into flash — see chime_westminster.h).

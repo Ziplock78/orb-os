@@ -13,6 +13,7 @@
 #include "esp_heap_caps.h"
 #include <math.h>
 #include "chime_westminster.h"
+#include <SD.h>
 
 #define ES8311_ADDR   0x18
 #define SR            16000          // playback sample rate (a beep; pitch-tolerant)
@@ -63,6 +64,12 @@ static volatile uint32_t s_gen = 0;
 // Which caller-owned buffer the task is reading right now, or null. The owner watches this
 // before freeing; see audio_release_pcm().
 static const uint8_t *volatile s_playingPcm = nullptr;
+
+// A file to stream, and whether what is playing right now must be allowed to finish. A chime
+// is SUSTAINED: it is the one sound on this device long enough that being cut off is a fault
+// rather than a mercy, and the alerts that would cut it fire on their own schedule.
+static char s_filePath[96] = { 0 };
+static volatile bool s_sustained = false;
 static volatile int s_previewIdx = 0;   // cue 4 (preview) plays this one instead
 
 static void es_write(uint8_t reg, uint8_t val) {
@@ -219,11 +226,33 @@ static bool superseded(uint32_t myGen) {
     return true;
 }
 
+// Stream a file to I2S in the same short pieces play_pcm uses, so an abort is noticed just as
+// quickly and a two minute chime costs no more memory than a two second one.
+static void play_file(const char *path, bool sustained) {
+    if (!s_buf || !path || !*path) return;
+    File f = SD.open(path, FILE_READ);
+    if (!f) { Serial.printf("[audio] cannot open %s\n", path); return; }
+    const uint32_t myGen = s_gen;
+    const float g = s_vol / 100.0f;
+    s_sustained = sustained;
+    for (;;) {
+        if (s_gen != myGen) { i2s_zero_dma_buffer(I2S_PORT); break; }
+        const int got = f.read((uint8_t *)s_buf, WRITE_CHUNK * sizeof(int16_t));
+        if (got < 2) break;
+        const size_t n = (size_t)got / sizeof(int16_t);
+        for (size_t k = 0; k < n; ++k) s_buf[k] = (int16_t)(s_buf[k] * g);
+        size_t bw;
+        i2s_write(I2S_PORT, s_buf, n * sizeof(int16_t), &bw, portMAX_DELAY);
+    }
+    s_sustained = false;
+    f.close();
+}
+
 static void play_cue(int cue) {
     const uint32_t myGen = s_gen;
     // Preview (4) and self-test (2) both ignore mute — they're a deliberate "let me hear
     // it" action from the Settings menu, not an automatic notification.
-    if (!s_ok || !s_buf || (s_muted && cue != 2 && cue != 4 && cue != 7) || s_vol <= 0) return;
+    if (!s_ok || !s_buf || (s_muted && cue != 2 && cue != 4 && cue != 7 && cue != 9) || s_vol <= 0) return;
     int16_t *buf = s_buf;
     const float amp = (s_vol / 100.0f) * 17000.0f;
     digitalWrite(PIN_AUDIO_PA, HIGH);              // enable speaker amp
@@ -245,6 +274,8 @@ static void play_cue(int cue) {
     } else if (cue == 4) {                          // preview: a specific chime, for the picker UI
         const int idx = constrain(s_previewIdx, 0, CHIME_COUNT - 1);
         play_pcm(CHIMES[idx].pcm, CHIMES[idx].bytes);
+    } else if (cue == 8 || cue == 9) {              // streamed from the card, never preloaded
+        play_file(s_filePath, cue == 8);
     } else if (cue == 6 || cue == 7) {              // a theme's own sound, from the SD card
         if (s_pcm && s_pcmLen >= 2) {
             s_playingPcm = s_pcm;
@@ -328,6 +359,10 @@ void audio_set_muted(bool m) { s_muted = m; }
 
 void audio_play(AudioCue cue) {
     if (!s_ok || s_muted) return;
+    // Never truncate the hour. An alert or a new-contact beep landing mid-chime is dropped
+    // rather than queued: it is a notification about a moment that has passed by the time the
+    // chime ends, and cutting a chime off to deliver it is the worse of the two.
+    if (s_sustained) return;
     s_cue = (int)cue;
     ++s_gen;
     if (s_sem) xSemaphoreGive(s_sem);
@@ -338,6 +373,7 @@ void audio_play(AudioCue cue) {
 // nothing to free here.
 void audio_play_pcm(const uint8_t *pcm, size_t bytes, bool ignoreMute) {
     if (!s_ok || (s_muted && !ignoreMute) || !pcm || bytes < 2) return;
+    if (s_sustained && !ignoreMute) return;   // see audio_play()
     s_pcm = pcm; s_pcmLen = bytes;
     s_cue = ignoreMute ? 7 : 6;
     ++s_gen;
@@ -362,6 +398,17 @@ void audio_release_pcm(const uint8_t *pcm) {
     if (!pcm) return;
     ++s_gen;
     for (int i = 0; i < 100 && s_playingPcm == pcm; ++i) delay(2);
+}
+
+void audio_play_file(const char *path, bool preview) {
+    if (!s_ok || (s_muted && !preview) || !path || !*path) return;
+    // A preview is somebody in the picker asking to hear this one, so it is the single thing
+    // allowed to interrupt a chime already ringing.
+    if (s_sustained && !preview) return;
+    snprintf(s_filePath, sizeof(s_filePath), "%s", path);
+    s_cue = preview ? 9 : 8;
+    ++s_gen;
+    if (s_sem) xSemaphoreGive(s_sem);
 }
 
 int  audio_chime_index() { return s_chimeIdx; }
