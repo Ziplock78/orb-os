@@ -22,6 +22,16 @@ static TaskHandle_t s_taskHandle = nullptr;
 static bool s_ok = false;
 static int16_t *s_buf = nullptr;     // tone scratch in PSRAM (keeps internal RAM free for TLS)
 static const size_t S_BUF_LEN = SR / 2 * 2;   // up to 500 ms, stereo interleaved
+
+// How much is handed to I2S at a time while streaming a clip. NOT the buffer size.
+//
+// play_pcm checks between writes whether something newer has been asked for, and i2s_write
+// blocks until the DMA has taken what it was given, so the write size IS the abort latency.
+// Writing the whole 500 ms buffer meant a new request waited up to half a second to be
+// noticed: the restart was real but late, and late enough that rolling the knob three times
+// quickly sounded like the clip repeating rather than restarting. About 30 ms is a fast
+// enough answer to feel immediate and still far longer than the DMA needs to stay fed.
+static const size_t WRITE_CHUNK = SR / 32 * 2;
 static volatile int  s_vol = 60;     // 0..100
 static volatile bool s_muted = false;
 static volatile int  s_cue = -1;
@@ -193,7 +203,7 @@ static void play_pcm(const uint8_t *data, size_t bytes) {
         // is still holding, or the tail keeps sounding after the decision to stop it.
         if (s_gen != myGen) { i2s_zero_dma_buffer(I2S_PORT); return; }
         size_t chunk = totalSamples - i;
-        if (chunk > S_BUF_LEN) chunk = S_BUF_LEN;
+        if (chunk > WRITE_CHUNK) chunk = WRITE_CHUNK;
         for (size_t k = 0; k < chunk; ++k) s_buf[k] = (int16_t)(src[i + k] * g);
         size_t bw;
         i2s_write(I2S_PORT, s_buf, chunk * sizeof(int16_t), &bw, portMAX_DELAY);
@@ -258,7 +268,13 @@ static void play_cue(int cue) {
 
 static void audio_task(void *) {
     for (;;) {
-        if (xSemaphoreTake(s_sem, portMAX_DELAY) == pdTRUE) play_cue(s_cue);
+        if (xSemaphoreTake(s_sem, portMAX_DELAY) != pdTRUE) continue;
+        // Drain anything that arrived while the last one was playing. The semaphore is binary
+        // so at most one is ever pending, and s_cue already holds the newest request, so
+        // honouring that token would replay a sound whose turn has passed. One playback per
+        // burst, and it is always the latest.
+        while (xSemaphoreTake(s_sem, 0) == pdTRUE) { }
+        play_cue(s_cue);
     }
 }
 
