@@ -33,6 +33,17 @@ lv_obj_t *s_ring  = nullptr;
 uint32_t s_lastClickMs = 0;
 constexpr uint32_t CLICK_GAP_MS = 55;
 
+// 16 kHz, 16-bit, stereo: 64,000 bytes a second.
+constexpr uint32_t PCM_BYTES_PER_SEC = 16000 * 2 * 2;
+
+// Never retrigger a sound that is still playing. A theme's click can be longer than the gap
+// between two notches, and asking for it again mid-phrase queues a second copy behind the
+// first, so the ticks fall further and further behind the hand that is causing them.
+uint32_t click_gap_for(size_t bytes) {
+    const uint32_t len = (uint32_t)((bytes * 1000ULL) / PCM_BYTES_PER_SEC);
+    return len > CLICK_GAP_MS ? len : CLICK_GAP_MS;
+}
+
 // Instrumentation for the winding path only, and only on the device. Cleared each time it
 // reports.
 uint32_t s_refrMs   = 0;
@@ -160,14 +171,15 @@ void wind_notice::turn(int delta) {
     }
     if (clock_wind::soundOn()) {
         const uint32_t t = now_ms();
-        if (t - s_lastClickMs >= CLICK_GAP_MS) {
+        // The theme's own tick if it shipped one, otherwise the built-in. A Steam Punk clock
+        // and an Aviator chronometer have no more business clicking alike than they do
+        // sharing a typeface.
+        size_t n = 0;
+        const uint8_t *pcm = theme_audio::wind(n);
+        if (t - s_lastClickMs >= click_gap_for(pcm ? n : 0)) {
             s_lastClickMs = t;
-            // The theme's own tick if it shipped one, otherwise the built-in. A Steam Punk
-            // clock and an Aviator chronometer have no more business clicking alike than
-            // they do sharing a typeface.
-            size_t n = 0;
-            if (const uint8_t *pcm = theme_audio::wind(n)) audio_play_pcm(pcm, n);
-            else                                           audio_play(AUDIO_WIND);
+            if (pcm) audio_play_pcm(pcm, n);
+            else     audio_play(AUDIO_WIND);
         }
     }
 #ifdef ARDUINO

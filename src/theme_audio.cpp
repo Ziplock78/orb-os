@@ -15,12 +15,18 @@ namespace {
 uint8_t *s_wind  = nullptr; size_t s_windLen  = 0;
 uint8_t *s_chime = nullptr; size_t s_chimeLen = 0;
 
-// A tick is milliseconds. Anything approaching a second is not a tick, it is a sound effect
-// that will still be playing when the next detent arrives, and a hundred of those overlapping
-// is a mess rather than a ratchet. 64 KB is two seconds at this format, which is far more
-// headroom than a click needs and still refuses a file somebody uploaded by mistake.
-constexpr size_t WIND_MAX_BYTES  = 64 * 1024;
-// The hour, so it can be a real phrase. 640 KB is about ten seconds.
+// A ceiling with real headroom over what Studio can produce, which is the only number that
+// matters here. It was 64 KB on the arithmetic that this format runs at 32 KB per second, so
+// 64 KB was "two seconds, plenty". The format is 16 kHz SIXTEEN BIT STEREO: 64,000 bytes per
+// second, so 64 KB was barely one second, and Studio's own ceiling of 1.5 s produces up to
+// 96,000 bytes. Zion uploaded a click, it baked to 68,544 bytes, this refused to read it, and
+// the Orb fell back to its built-in chirp with nothing on screen to say why.
+//
+// 128 KB now, comfortably above anything Studio will emit. The real fix is at the other end:
+// a per-notch click has no business being a second long, and Studio caps it far shorter now.
+constexpr size_t WIND_MAX_BYTES  = 128 * 1024;
+// The hour, so it can be a real phrase. Ten seconds is 640,000 bytes at this format and
+// Studio caps there, so 640 KB (655,360) clears it by design rather than by luck.
 constexpr size_t CHIME_MAX_BYTES = 640 * 1024;
 
 uint8_t *load_one(const char *name, size_t maxBytes, size_t &outLen) {
