@@ -138,9 +138,11 @@ void ensure() {
     s_panel = lv_obj_create(lv_layer_top());
     lv_obj_set_size(s_panel, LV_PCT(100), LV_PCT(100));
     lv_obj_set_style_bg_color(s_panel, lv_color_hex(c.windBg), 0);
-    // The design's own opacity. Under full, the clock it is asking you to wind shows through,
-    // which is the point: this is a scrim rather than a screen that replaces the dial.
-    lv_obj_set_style_bg_opa(s_panel, (lv_opa_t)c.windBgOpa, 0);
+    // Always opaque. It was the design's own opacity, and a scrim over the running clock was
+    // a nice idea that cost more than it was worth: at anything under full, every repaint had
+    // to rebuild the clock beneath and composite through it. Zion asked for a full screen
+    // instead. windBgOpa is left in the struct so an older theme carrying one still parses.
+    lv_obj_set_style_bg_opa(s_panel, LV_OPA_COVER, 0);
     lv_obj_set_style_border_width(s_panel, 0, 0);
     lv_obj_set_style_radius(s_panel, 0, 0);
     // ZERO PADDING, and it is not cosmetic. lv_obj_create carries a default style with
@@ -152,13 +154,22 @@ void ensure() {
     lv_obj_set_style_pad_all(s_panel, 0, 0);
     lv_obj_clear_flag(s_panel, LV_OBJ_FLAG_SCROLLABLE);
 
-    // The picture, over the colour and under everything else. A design can have a flat wash,
-    // a photograph, or a photograph with a wash over it, which is why the colour did not move
-    // out of the way when this arrived.
+    // The picture, opaque, filling the screen.
+    //
+    // This screen COVERS the clock rather than veiling it, which is Zion's call and the one
+    // that made it fast. A translucent panel meant every notch of the crank forced the clock
+    // underneath to redraw and then be composited through the colour and through a
+    // per-pixel-alpha picture, five layers deep across most of the glass. Opaque, the picture
+    // is a straight blit and nothing below it is touched at all.
     if (c.windImageOn) {
-        const CustomSprite bg = wind_background();
-        if (bg.data) {
-            describe(s_bgDsc, bg);
+        int bw = 0, bh = 0;
+        if (const uint16_t *bg = wind_background(bw, bh)) {
+            s_bgDsc.header.always_zero = 0;
+            s_bgDsc.header.w = bw;
+            s_bgDsc.header.h = bh;
+            s_bgDsc.header.cf = LV_IMG_CF_TRUE_COLOR;
+            s_bgDsc.data_size = (uint32_t)bw * bh * 2;
+            s_bgDsc.data = (const uint8_t *)bg;
             lv_obj_t *img = lv_img_create(s_panel);
             lv_img_set_src(img, &s_bgDsc);
             lv_obj_center(img);

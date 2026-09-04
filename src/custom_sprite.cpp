@@ -216,7 +216,7 @@ const uint8_t *splash_overlay() {
 // where the bake put one, then the card, then nothing at all. Nothing is a plainer screen,
 // which is always the right way to be missing a layer.
 namespace {
-uint8_t *s_windBg = nullptr;    int s_windBgW = 0,    s_windBgH = 0;    bool s_windBgTried = false;
+uint16_t *s_windBg = nullptr;   int s_windBgW = 0,    s_windBgH = 0;    bool s_windBgTried = false;
 uint8_t *s_windCrank = nullptr; int s_windCrankW = 0, s_windCrankH = 0; bool s_windCrankTried = false;
 
 CustomSprite load_wind(const char *name, uint8_t *&buf, int &w, int &h, bool &tried, const char *tag) {
@@ -234,8 +234,24 @@ CustomSprite load_wind(const char *name, uint8_t *&buf, int &w, int &h, bool &tr
 }
 }  // namespace
 
-CustomSprite wind_background() {
-    return load_wind("wind_bg.png", s_windBg, s_windBgW, s_windBgH, s_windBgTried, "wind background");
+// OPAQUE, not alpha. The wind screen covers the clock completely, so this is a straight blit
+// rather than a per-pixel blend, and it is the difference between redrawing a region and
+// compositing one. Decoded without alpha for the same reason the clock's plate is.
+const uint16_t *wind_background(int &w, int &h) {
+    if (!s_windBg && !s_windBgTried) {
+        s_windBgTried = true;
+        int fw = 0, fh = 0;
+        if (const uint8_t *p = theme_art::find_active("wind_bg.png", theme_art::FMT_RGB565, fw, fh)) {
+            s_windBg = (uint16_t *)p; s_windBgW = fw; s_windBgH = fh;
+        } else {
+            uint8_t *o = nullptr;
+            if (decode_sd_first("wind_bg.png", nullptr, 0, false, o, fw, fh, "wind background")) {
+                s_windBg = (uint16_t *)o; s_windBgW = fw; s_windBgH = fh;
+            }
+        }
+    }
+    w = s_windBgW; h = s_windBgH;
+    return s_windBg;
 }
 
 CustomSprite wind_crank() {
@@ -297,9 +313,10 @@ CustomSprite custom_shadow(int hand) {
 // Called when the custom clock face is no longer the app on screen, so a design's
 // ~1 MB of decoded pixels isn't held resident while some other app is in front.
 void custom_sprite_release() {
-    if (s_windBg    && !theme_art::owns(s_windBg))    heap_caps_free(s_windBg);
+    if (s_windBg    && !theme_art::owns((uint8_t *)s_windBg)) heap_caps_free(s_windBg);
     if (s_windCrank && !theme_art::owns(s_windCrank)) heap_caps_free(s_windCrank);
-    s_windBg = s_windCrank = nullptr;
+    s_windBg = nullptr;
+    s_windCrank = nullptr;
     s_windBgTried = s_windCrankTried = false;
     const uint32_t t0 = millis();
     size_t freed = 0;
