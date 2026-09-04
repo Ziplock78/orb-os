@@ -1445,6 +1445,18 @@ int main(int argc, char **argv) {
         if (windShot) {
             char path[300];
             auto detent = [&]() { input_router::dispatch(1, false); lv_timer_handler(); lv_refr_now(NULL); };
+            // The crank and the gauge CHASE the knob now rather than snapping to it, so a
+            // screenshot taken the instant the detents land photographs the chase part way
+            // rather than the state under test. Let the animation settle first: half a second
+            // of real time, which is well past the point it arrives.
+            auto settle = [&]() {
+                // lv_tick_inc EXPLICITLY, not just SDL_Delay. The simulator advances LVGL's
+                // clock once per pass of its main loop, and this runs inside one pass, so
+                // without it the animation timer never fires and the shot is of a gauge that
+                // has not moved. Same trap the --wifishot block documents a few lines up.
+                for (int i = 0; i < 16; ++i) { SDL_Delay(35); lv_tick_inc(35); lv_timer_handler(); }
+                lv_refr_now(NULL);
+            };
             if (windStep == 0 && app_shell::count() > 0 && now - start > 3000) {
                 // No stored wind exists here (NVS is device-only), so a theme that asks for
                 // a mainspring reports run down straight away, which is the state under
@@ -1466,6 +1478,7 @@ int main(int argc, char **argv) {
                 windStep = 1; windAt = now;
             } else if (windStep == 1 && now - windAt > 400) {
                 for (int k = 0; k < clock_wind::detentsForFullWind() / 2; ++k) detent();
+                settle();
                 snprintf(path, sizeof(path), "%s-half.bmp", windShot);
                 sim_save_frame(path);
                 printf("[sim] --windshot: half wound, gauge at %d of %d: %s\n",
