@@ -3225,7 +3225,20 @@ void loop() {
                 lastChimeHour = ti.tm_hour;
                 // Whatever is selected in Settings, from flash or from any theme on the
                 // card. Not the worn theme's own chime: see the note on host_chime_count().
-                if (g_soundChime && audio_present()) chime_library::playSelected();
+                //
+                // ONLY ON THE CLOCK, which is Zion's call and a better rule than the one it
+                // replaces. A chime is a clock's feature. Ringing it over the flight tracker
+                // talks across the aircraft alerts that screen exists to give you, and over
+                // the camera or the news it is an interruption from an app you are not in.
+                //
+                // It also shrinks the thing I was uneasy about. Chimes stream off the SD card,
+                // and the card is only safe for one reader at a time; requiring the clock to
+                // be on screen means the camera cannot be open and the map is not fetching
+                // roads while a chime plays, which is most of the overlap that worried me.
+                // A limitation, deliberately taken, rather than a lock hoping to be enough.
+                const bool onClock = !app_shell::browsing()
+                                  && app_shell::index() == app_shell::APP_CLOCK;
+                if (g_soundChime && onClock && audio_present()) chime_library::playSelected();
             }
         }
         const bool wifiUp = (WiFi.status() == WL_CONNECTED);
