@@ -7,6 +7,7 @@
 #include "custom_sprite.h"
 #include "config.h"
 #include "theme_audio.h"
+#include "display.h"      // orb_log_set_quiet(): see ensure()
 #include "app_shell.h"
 #ifdef ARDUINO
 #include "audio.h"
@@ -73,8 +74,6 @@ uint32_t s_lastDetentMs = 0;
 // two of them. The knob moves clock_wind::progress(); this chases it.
 float      s_shown = 0.0f;
 uint32_t   s_animAt = 0;
-int        s_frames = 0;
-uint32_t   s_steps  = 0;
 
 // The screen this is covering, hidden for as long as it is covered. See ensure().
 lv_obj_t  *s_hidden = nullptr;
@@ -95,11 +94,6 @@ constexpr float TAU_MS = 60.0f;
 // is about a degree of crank: below anything an eye can see, and far enough from zero that
 // the chase does not spend frames converging on a difference nobody could point at.
 constexpr float SNAP_DETENTS = 0.35f;
-
-// Instrumentation for the winding path only, and only on the device. Cleared each time it
-// reports.
-uint32_t s_logAt    = 0;
-int      s_sinceLog = 0;
 
 uint32_t now_ms() { return lv_tick_get(); }
 
@@ -131,8 +125,6 @@ void wind_notice::animate() {
     const uint32_t now = now_ms();
     const uint32_t dt  = now - s_animAt;
     s_animAt = now;
-    ++s_frames;
-    ++s_steps;
 
     const float target = (float)clock_wind::progress();
     const float gap    = target - s_shown;
@@ -199,14 +191,13 @@ void ensure() {
     // itself up to the stored position while somebody watches.
     s_shown = (float)clock_wind::progress();
     s_animAt = now_ms();
-    s_frames = 0;
-    // And the log's window, which was the one thing not reset here. It measured from the end
-    // of the LAST wind, so the first report of a new one covered the minutes in between and
-    // divided a screen's worth of frames by them: 213 frames, correctly counted, over 81
-    // seconds that were mostly the clock just running. It reported two frames a second for a
-    // screen doing twelve.
-    s_logAt = now_ms();
-    s_sinceLog = 0;
+
+#ifdef ARDUINO
+    // Console off for the duration, and this is a fix rather than a diagnostic. Serial
+    // writes block for up to a tenth of a second when anything is listening, and the Orb
+    // prints a line per knob notch, so winding with Studio connected was paying for it.
+    orb_log_set_quiet(true);
+#endif
 
     // HIDE THE CLOCK, do not merely cover it. This is the whole cost of the screen.
     //
@@ -333,8 +324,6 @@ void ensure() {
 
 bool wind_notice::showing() { return s_panel != nullptr; }
 
-uint32_t wind_notice::steps() { const uint32_t n = s_steps; s_steps = 0; return n; }
-
 void wind_notice::tick() {
     // Only over the clock. The mainspring belongs to that screen, and covering the flight
     // tracker with a demand about a different app would be the device interrupting itself.
@@ -404,23 +393,6 @@ void wind_notice::turn(int delta) {
             else                                           audio_play(AUDIO_WIND);
         }
     }
-#ifdef ARDUINO
-    // Every twenty detents, so the log is a handful of lines per wind rather than a hundred.
-    // Prints what it actually costs, because "it feels laggy" and "the redraw is slow" are
-    // different claims and only one of them is fixable here.
-    if (++s_sinceLog >= 20) {
-        const uint32_t now = now_ms();
-        // How far the drawn crank is behind the knob, which is the only number that matters
-        // now that nothing forces a repaint: the chase is meant to be behind, and this says
-        // by how much.
-        const uint32_t span = now - s_logAt;
-        Serial.printf("[wind] %d detents in %lu ms, %d frames (%lu fps), drawn at %.1f of %d (%.1f behind)\n",
-                      s_sinceLog, (unsigned long)span, s_frames,
-                      (unsigned long)(span ? (s_frames * 1000UL) / span : 0), (double)s_shown,
-                      clock_wind::progress(), (double)(clock_wind::progress() - s_shown));
-        s_sinceLog = 0; s_logAt = now; s_frames = 0;
-    }
-#endif
 }
 
 void wind_notice::dismiss() {
@@ -433,6 +405,7 @@ void wind_notice::dismiss() {
     // below would be marking a hidden object dirty and the screen would come back blank.
     if (s_hidden) { lv_obj_clear_flag(s_hidden, LV_OBJ_FLAG_HIDDEN); s_hidden = nullptr; }
 #ifdef ARDUINO
+    orb_log_set_quiet(false);
     // The clock stopped redrawing while it was covered, so its canvas still holds the face
     // as it stood when this screen went up. Un-hiding shows that stale face until the next
     // one-second tick, which is up to a second of the wrong time right at the moment

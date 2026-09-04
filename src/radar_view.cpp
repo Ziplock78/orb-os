@@ -830,34 +830,7 @@ static void interp_step(void) {
 #endif
 }
 
-// Timed from the outside, because this timer is the prime suspect for a cost that shows up
-// on screens it has nothing to do with. It runs unpaused on every screen by design (the
-// weather sweep hangs off it as well as the scope's), so on the clock, or on the wind
-// screen, it is doing work whose every invalidation is dropped for being on a hidden
-// object. Whether that work is 1 ms or 70 is the difference between "leave it alone" and
-// "this is the stutter", and nobody has measured it.
-static uint32_t s_swCalls = 0, s_swTotalUs = 0, s_swMaxUs = 0;
-
-void radar::sweepStats(uint32_t &calls, uint32_t &totalUs, uint32_t &maxUs) {
-    calls = s_swCalls; totalUs = s_swTotalUs; maxUs = s_swMaxUs;
-    s_swCalls = s_swTotalUs = s_swMaxUs = 0;
-}
-
-static void sweep_timer_body(lv_timer_t *t);
-
 static void sweep_timer_cb(lv_timer_t *t) {
-#ifdef ARDUINO
-    const uint32_t t0 = micros();
-    sweep_timer_body(t);
-    const uint32_t us = micros() - t0;
-    ++s_swCalls; s_swTotalUs += us;
-    if (us > s_swMaxUs) s_swMaxUs = us;
-#else
-    sweep_timer_body(t);
-#endif
-}
-
-static void sweep_timer_body(lv_timer_t *t) {
     (void)t;
     // Selection mode auto-times-out: 5s with no knob input drops back to the
     // populated default view (deselect + release the knob) so the scope doesn't

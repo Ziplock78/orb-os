@@ -2992,113 +2992,7 @@ void setup() {
                   freshFirmware ? "first boot after an update" : "already seen this build");
 }
 
-// WHICH timer is the hog.
-//
-// The profiler found it by reporting the worst pass instead of the mean: one pass in every
-// two-second window spends about 660 ms inside lv_timer_handler and flushes nothing, and the
-// other hundred-odd passes are a tidy 6 ms. An average of 11.6 ms described neither of them
-// and sent three rounds of reasoning after the wrong thing.
-//
-// lv_timer_handler dispatches every due timer without saying what it ran, so this brackets
-// the call: snapshot each timer's last_run before, walk the list again after, and name the
-// ones that moved. Only on a pass slow enough to be the hitch, so it prints at most once
-// every couple of seconds.
-//
-// The list is re-walked rather than the snapshot re-read, deliberately: a timer can delete
-// itself during the call, and reading last_run off the pointer we saved would be a
-// use-after-free on exactly the timer most worth knowing about.
-struct TimerSnap { const lv_timer_t *t; uint32_t last_run; };
-static TimerSnap s_tsnap[24];
-static int       s_tsnapN = 0;
-
-static void timers_before() {
-    s_tsnapN = 0;
-    for (lv_timer_t *t = lv_timer_get_next(NULL); t && s_tsnapN < 24; t = lv_timer_get_next(t)) {
-        s_tsnap[s_tsnapN].t = t;
-        s_tsnap[s_tsnapN].last_run = t->last_run;
-        ++s_tsnapN;
-    }
-}
-
-static void timers_after(uint32_t drawUs) {
-    if (drawUs < 100000UL) return;
-    Serial.printf("[hog] %lu us in lv_timer_handler, timers that ran:\n", (unsigned long)drawUs);
-    for (lv_timer_t *t = lv_timer_get_next(NULL); t; t = lv_timer_get_next(t)) {
-        bool known = false, moved = true;
-        for (int i = 0; i < s_tsnapN; ++i) {
-            if (s_tsnap[i].t != t) continue;
-            known = true;
-            moved = (s_tsnap[i].last_run != t->last_run);
-            break;
-        }
-        if (known && !moved) continue;
-        Serial.printf("[hog]   cb=%p period=%lu%s\n", (void *)t->timer_cb,
-                      (unsigned long)t->period, known ? "" : "  (created during the call)");
-    }
-}
-
-// Where a frame actually goes, while the wind screen is up and only then.
-//
-// Written because two rounds of reasoning about the winding lag were both wrong. The first
-// blamed the rotation and the second blamed the clock underneath; the clock WAS costing
-// something and hiding it helped, but only from about 102 ms a pass to about 85, and the
-// crank still could not keep up. Meanwhile the display's own instrument says a detent
-// reaches the glass in 13 to 36 ms, which cannot both be true of the same frame. One of
-// those numbers is measuring a part and being read as the whole, and there is no way to
-// tell which by reading the source, so this measures the four parts separately.
-//
-// Costs four micros() calls a pass, about a microsecond, and prints nothing at all unless
-// somebody is winding.
-void wind_profile(uint32_t lp0, uint32_t lp1, uint32_t lp2, uint32_t lp3) {
-    static uint32_t at = 0, passes = 0, in = 0, draw = 0, net = 0, rest = 0, drawMax = 0;
-    static uint32_t lvgl0 = 0, px0 = 0;
-    if (!wind_notice::showing()) {
-        if (at) { at = 0; orb_log_set_quiet(false); }
-        return;
-    }
-    const uint32_t end = micros();
-    if (at == 0) {   // first pass of this screen: start the window here, not at the last one
-        // Two lines a detent, six detents a second, and a write that can block for a tenth
-        // of a second when the buffer is full. On this one screen the console is a cost, and
-        // an aggregate every two seconds says more than a line per notch ever did.
-        orb_log_set_quiet(true);
-        { uint32_t a, b, c; radar::sweepStats(a, b, c); }   // discard what accrued before this screen
-        at = millis(); passes = in = draw = net = rest = drawMax = 0;
-        lvgl0 = display_lvgl_us(); px0 = display_flushed_px();
-        return;
-    }
-    ++passes;
-    const uint32_t thisDraw = lp2 - lp1;
-    if (thisDraw > drawMax) drawMax = thisDraw;
-    in   += lp1 - lp0;
-    draw += thisDraw;
-    net  += lp3 - lp2;
-    rest += end - lp3;
-
-    const uint32_t span = millis() - at;
-    if (span < 2000) return;
-    uint32_t swCalls = 0, swTotal = 0, swMax = 0;
-    radar::sweepStats(swCalls, swTotal, swMax);
-    // Per pass, in microseconds, because the whole question is which of these is the big
-    // one. The 5 ms delay() at the bottom of loop() is deliberately NOT in any of them.
-    Serial.printf("[loop] %lu passes in %lu ms (%lu fps): input %lu us, draw %lu us, "
-                  "net %lu us, rest %lu us (worst draw %lu us) | %lu px/pass, %lu steps, "
-                  "sweep %lu calls %lu us avg %lu us worst\n",
-                  (unsigned long)passes, (unsigned long)span,
-                  (unsigned long)(passes * 1000UL / span),
-                  (unsigned long)(in / passes), (unsigned long)(draw / passes),
-                  (unsigned long)(net / passes), (unsigned long)(rest / passes),
-                  (unsigned long)drawMax,
-                  (unsigned long)((display_flushed_px() - px0) / passes),
-                  (unsigned long)wind_notice::steps(),
-                  (unsigned long)swCalls, (unsigned long)(swCalls ? swTotal / swCalls : 0),
-                  (unsigned long)swMax);
-    at = millis(); passes = in = draw = net = rest = drawMax = 0;
-    lvgl0 = display_lvgl_us(); px0 = display_flushed_px();
-}
-
 void loop() {
-    const uint32_t lp0 = micros();
     // INPUT FIRST. The encoder is interrupt-driven, so no detent is ever lost — but this
     // used to run at the BOTTOM of the loop, after a full LVGL render and after the web
     // server. A detent arriving while the screen was drawing therefore waited for that
@@ -3129,11 +3023,7 @@ void loop() {
         input_router::dispatch((int)kd, pressed);           // same 3-mode routing the sim uses
     }
 
-    const uint32_t lp1 = micros();
-    if (wind_notice::showing()) timers_before();
     display::loop();                // drive LVGL (render dirty areas + run timers)
-    const uint32_t lp2 = micros();
-    if (wind_notice::showing()) timers_after(lp2 - lp1);
 
     // Network and sensors last: they are throughput work, not interactive. handleClient()
     // in particular can spend real time on an /sdput chunk, and nothing about it should
@@ -3151,7 +3041,6 @@ void loop() {
         const uint32_t until = millis() + 40;
         while (orb_link::transferActive() && (int32_t)(millis() - until) < 0) orb_link::poll();
     }
-    const uint32_t lp3 = micros();
 
     // scheduled reboot after a fresh WiFi config (see setSaveConfigCallback)
     if (g_rebootAtMs && (int32_t)(millis() - g_rebootAtMs) >= 0) { delay(50); ESP.restart(); }
@@ -3430,6 +3319,5 @@ void loop() {
         }
     }
 
-    wind_profile(lp0, lp1, lp2, lp3);
     delay(5);
 }

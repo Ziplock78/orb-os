@@ -36,10 +36,6 @@ namespace wind_notice {
     // movement broke into three visible jumps.
     void animate();
 
-    // Steps taken since this was last called, and zeroed by the call. Only the profiler in
-    // main.cpp reads it: the whole question this screen kept losing to was how many times a
-    // second the crank actually moves, against how many times a second the device draws.
-    uint32_t steps();
     // One detent while the panel is up. Winds, clicks, and takes the panel down when the
     // fifth turn lands.
     void turn(int delta);
