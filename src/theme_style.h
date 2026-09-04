@@ -335,7 +335,7 @@ namespace theme_style {
 //      made it a design and 42 gave it type; this is the rest of what a screen has. An Orb
 //      below this level draws no picture and no crank, and shows the gauge and all three
 //      lines whatever the design says.
-constexpr int THEME_CAPS = 44;
+constexpr int THEME_CAPS = 45;
 
 struct ClockText {
     bool     show   = false;
@@ -446,6 +446,16 @@ struct Clock {
     int       windCrankY    = 233;
     int       windCrankPX   = 0;     // in the artwork's own pixels
     int       windCrankPY   = 0;
+    // Where the crank sits at rest, in degrees clockwise from the artwork's own orientation.
+    //
+    // A crank's picture points wherever it was drawn pointing, and that is rarely where it
+    // should sit when the screen opens. Zion's brass key reads best coming in from the top
+    // left, which is not how the photograph was cropped. Rotating the file is the wrong
+    // answer: the pivot is marked in the artwork's pixels, so turning the image moves the
+    // point it turns about.
+    //
+    // 0 keeps every theme written before this exactly as it was.
+    int       windCrankRest = 0;
     uint32_t  windBg        = 0x000000;
     uint32_t  windRingTrack = 0x22282F;
     uint32_t  windRingFill  = 0xD8B56A;

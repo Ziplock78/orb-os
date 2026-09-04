@@ -477,6 +477,7 @@ void load() {
             if (doc["windCrankY"].is<int>())         s_clock.windCrankY    = doc["windCrankY"].as<int>();
             if (doc["windCrankPX"].is<int>())        s_clock.windCrankPX   = doc["windCrankPX"].as<int>();
             if (doc["windCrankPY"].is<int>())        s_clock.windCrankPY   = doc["windCrankPY"].as<int>();
+            if (doc["windCrankRest"].is<int>())      s_clock.windCrankRest = doc["windCrankRest"].as<int>();
             if (doc["windBg"].is<uint32_t>())        s_clock.windBg        = doc["windBg"].as<uint32_t>();
             if (doc["windRingTrack"].is<uint32_t>()) s_clock.windRingTrack = doc["windRingTrack"].as<uint32_t>();
             if (doc["windRingFill"].is<uint32_t>())  s_clock.windRingFill  = doc["windRingFill"].as<uint32_t>();

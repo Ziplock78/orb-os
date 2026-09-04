@@ -101,9 +101,13 @@ uint32_t now_ms() { return lv_tick_get(); }
 // one. One crank turn per knob turn: anything else is a gear ratio nobody asked for.
 int16_t crank_angle() {
     const int per = clock_wind::DETENTS_PER_TURN;
-    if (per <= 0) return 0;
+    // The resting angle still applies with no winding at all, so it is read before the
+    // early return rather than after it.
+    const int rest = theme_style::clock().windCrankRest;
+    if (per <= 0) return (int16_t)(((rest % 360) + 360) % 360 * 10);
     const float turns = s_shown / (float)per;
-    int a = (int)(turns * 3600.0f) % 3600;
+    int a = (int)(turns * 3600.0f) + rest * 10;
+    a %= 3600;
     if (a < 0) a += 3600;
     return (int16_t)a;
 }
