@@ -66,6 +66,7 @@ void describe(lv_img_dsc_t &d, const CustomSprite &sp) {
 constexpr uint32_t SWEEP_GAP_MS = 150;
 
 uint32_t s_lastDetentMs = 0;
+uint32_t s_lastRefrMs  = 0;
 
 // Instrumentation for the winding path only, and only on the device. Cleared each time it
 // reports.
@@ -142,6 +143,13 @@ void ensure() {
     lv_obj_set_style_bg_opa(s_panel, (lv_opa_t)c.windBgOpa, 0);
     lv_obj_set_style_border_width(s_panel, 0, 0);
     lv_obj_set_style_radius(s_panel, 0, 0);
+    // ZERO PADDING, and it is not cosmetic. lv_obj_create carries a default style with
+    // padding, and a child placed by lv_obj_set_pos is positioned inside the content box, so
+    // every absolute coordinate on this panel was silently offset by it. The labels and the
+    // gauge are centred, which is symmetric and hid it; the crank is the only thing placed by
+    // an exact point, so the crank was the only thing visibly in the wrong place. Zion: the
+    // fulcrum is not quite in the centre on the Orb but is in the preview.
+    lv_obj_set_style_pad_all(s_panel, 0, 0);
     lv_obj_clear_flag(s_panel, LV_OBJ_FLAG_SCROLLABLE);
 
     // The picture, over the colour and under everything else. A design can have a flat wash,
@@ -189,6 +197,12 @@ void ensure() {
             describe(s_crankDsc, cr);
             s_crank = lv_img_create(s_panel);
             lv_img_set_src(s_crank, &s_crankDsc);
+            // Rotation without antialiasing. LVGL resamples every pixel of a turned image,
+            // and with a smooth filter that is the most expensive thing on this screen by a
+            // long way: the crank redraws on every detent, over a full-screen background that
+            // has to be recomposited under it. Zion had a visible lag between his hand and the
+            // crank. Off, the edges are a shade harder and the turn keeps up.
+            lv_img_set_antialias(s_crank, false);
             lv_img_set_pivot(s_crank, c.windCrankPX, c.windCrankPY);
             lv_obj_set_pos(s_crank, (lv_coord_t)(c.windCrankX - c.windCrankPX),
                                     (lv_coord_t)(c.windCrankY - c.windCrankPY));
@@ -261,9 +275,19 @@ void wind_notice::turn(int delta) {
         // thing on this device that answers a CONTINUOUS turn: the gauge then moved a whole
         // loop period after the knob did, and Zion reported it as massive lag. The arc's own
         // invalidation is the changed sector only, so this is a small repaint, not a frame.
+        // Redrawn here rather than at the bottom of the loop, but no more than every 40 ms.
+        //
+        // The immediate repaint is what made the gauge track the knob instead of trailing a
+        // whole loop behind it. With a background picture and a rotating crank on the same
+        // screen, one repaint costs real time, and forcing one per detent means a brisk wind
+        // asks for more redrawing than the chip can do and every one of them lands late.
+        // Twenty five a second is faster than the panel refreshes anyway.
         const uint32_t t0 = now_ms();
-        lv_refr_now(NULL);
-        s_refrMs += now_ms() - t0;
+        if (t0 - s_lastRefrMs >= 40) {
+            s_lastRefrMs = t0;
+            lv_refr_now(NULL);
+            s_refrMs += now_ms() - t0;
+        }
     }
     {
         const uint32_t t = now_ms();
