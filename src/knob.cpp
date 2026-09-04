@@ -1,6 +1,7 @@
 #include <Arduino.h>
 #include "knob.h"
 #include <esp_timer.h>   // esp_timer_get_time() — IRAM-safe, unlike millis() from an ISR
+#include "display.h"     // orb_log_quiet(): see the note there on what printing costs
 
 // --- Wiring -----------------------------------------------------------------
 // See knob.h for the full header pinout. These three GPIOs are unused by the
@@ -236,8 +237,9 @@ void knob::poll() {
         }
         s_lastDir   = dir;
         s_lastDirMs = now;
-        Serial.printf("[knob] turned %s  (pos=%ld)\n",
-                      delta > 0 ? "RIGHT (CW)" : "LEFT (CCW)", (long)detent);
+        if (!orb_log_quiet())
+            Serial.printf("[knob] turned %s  (pos=%ld)\n",
+                          delta > 0 ? "RIGHT (CW)" : "LEFT (CCW)", (long)detent);
     }
 
     // --- Button: press is detected in the ISR (see knob_sw_isr); here we only

@@ -41,6 +41,9 @@ static volatile uint32_t s_inputAtMs = 0;  // see display::markInput
 static volatile uint32_t s_inputPx0  = 0;  // pixels flushed when that input arrived
 static volatile uint32_t s_flushedPx = 0; // cumulative pixels pushed (dirty-area size)
 uint32_t display_flushed_px() { return s_flushedPx; }
+static bool s_logQuiet = false;
+void orb_log_set_quiet(bool quiet) { s_logQuiet = quiet; }
+bool orb_log_quiet() { return s_logQuiet; }
 // Defined at file scope, matching display_frames() above: display.h declares these
 // globally, not inside namespace display.
 uint32_t display_lvgl_us()  { return s_lvglUs; }
@@ -209,7 +212,7 @@ static void flush_cb(lv_disp_drv_t *drv, const lv_area_t *area, lv_color_t *px) 
         s_frameCount++;
         // The end of the frame IS the moment the pixels are on the panel: draw_block writes
         // over QSPI and blocks, so nothing is queued behind this.
-        if (s_inputAtMs) {
+        if (s_inputAtMs && !s_logQuiet) {
             // The AREA repainted, as well as the time. 146 ms for a text swap only makes
             // sense if the whole 466x466 is being pushed, and this says whether it is:
             // 100% means one full screen, 200% means two. If it is a full screen then the
@@ -222,6 +225,7 @@ static void flush_cb(lv_disp_drv_t *drv, const lv_area_t *area, lv_color_t *px) 
                           (unsigned long)(px * 100UL / ((uint32_t)SCREEN_W * SCREEN_H)));
             s_inputAtMs = 0;
         }
+        else if (s_inputAtMs) s_inputAtMs = 0;   // quiet, but not stale next time round
     }
     s_flushUs += micros() - t_flush0;
     lv_disp_flush_ready(drv);

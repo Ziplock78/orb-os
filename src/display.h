@@ -44,3 +44,19 @@ uint32_t display_frames();   // total rendered frames (for FPS measurement)
 uint32_t display_lvgl_us();  // cumulative microseconds inside lv_timer_handler()
 uint32_t display_flush_us(); // cumulative microseconds pushing pixels to the panel
 uint32_t display_flushed_px(); // cumulative pixels flushed (how much screen is repainted)
+
+// Silence the per-event console chatter, for a screen where the chatter is a cost rather
+// than a diagnostic.
+//
+// Serial is not free on this chip. HWCDC::write pushes into a ring buffer with a 100 ms
+// timeout, and a FULL buffer blocks the caller for up to that long — so with a monitor
+// attached, printing is a real part of the frame. The Orb writes two lines per detent, one
+// from the knob and one from the flush, and a brisk wind is five or six detents a second.
+// The winding investigation was therefore measuring itself: attach a recorder to find out
+// why winding is slow, and the recorder is part of the answer.
+//
+// Lives here rather than in knob.h or wind_notice.h because it has two readers in different
+// layers and one writer, and a flag with two copies is a flag that will disagree with
+// itself. Set it in ONE place (loop(), on the wind screen appearing) and both honour it.
+void orb_log_set_quiet(bool quiet);
+bool orb_log_quiet();

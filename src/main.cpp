@@ -3007,9 +3007,16 @@ void setup() {
 void wind_profile(uint32_t lp0, uint32_t lp1, uint32_t lp2, uint32_t lp3) {
     static uint32_t at = 0, passes = 0, in = 0, draw = 0, net = 0, rest = 0;
     static uint32_t lvgl0 = 0, px0 = 0;
-    if (!wind_notice::showing()) { at = 0; return; }
+    if (!wind_notice::showing()) {
+        if (at) { at = 0; orb_log_set_quiet(false); }
+        return;
+    }
     const uint32_t end = micros();
     if (at == 0) {   // first pass of this screen: start the window here, not at the last one
+        // Two lines a detent, six detents a second, and a write that can block for a tenth
+        // of a second when the buffer is full. On this one screen the console is a cost, and
+        // an aggregate every two seconds says more than a line per notch ever did.
+        orb_log_set_quiet(true);
         at = millis(); passes = in = draw = net = rest = 0;
         lvgl0 = display_lvgl_us(); px0 = display_flushed_px();
         return;
