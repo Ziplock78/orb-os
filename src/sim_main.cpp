@@ -1494,6 +1494,14 @@ int main(int argc, char **argv) {
                 printf("[sim] --windshot: the fifth turn puts the clock back: %s\n",
                        (!wind_notice::showing() && !clock_wind::stopped()) ? "PASS" : "FAIL");
                 printf("[sim] --windshot: and it is running again, charge %.2f\n", clock_wind::charge());
+                // The wind screen HIDES the clock rather than covering it, which is what made
+                // it fast, and a dismiss that forgot to unhide would leave the Orb showing
+                // nothing at all. Not a cosmetic failure: a black round object with no way
+                // back. Checked here because it is not visible in a screenshot of a screen
+                // that is meant to be full of clock either way.
+                printf("[sim] --windshot: the clock is visible again afterwards: %s\n",
+                       (lv_scr_act() && !lv_obj_has_flag(lv_scr_act(), LV_OBJ_FLAG_HIDDEN))
+                           ? "PASS" : "FAIL");
                 run = false;
             }
         }

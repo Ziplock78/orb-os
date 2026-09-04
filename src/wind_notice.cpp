@@ -19,6 +19,7 @@
 #define AUDIO_CHIME   0
 #endif
 
+#include <math.h>
 #include <stdio.h>
 #include <lvgl.h>
 #ifdef ARDUINO
@@ -71,6 +72,28 @@ uint32_t s_lastDetentMs = 0;
 // two of them. The knob moves clock_wind::progress(); this chases it.
 float      s_shown = 0.0f;
 lv_timer_t *s_anim = nullptr;
+uint32_t   s_animAt = 0;
+int        s_frames = 0;
+
+// The screen this is covering, hidden for as long as it is covered. See ensure().
+lv_obj_t  *s_hidden = nullptr;
+
+// How long the crank takes to close the distance to the knob, as a TIME rather than as a
+// fraction per frame. e^-1 of the gap remains after this many milliseconds, so about 95% of
+// the movement happens in three of them whatever the frame rate is.
+//
+// It was a flat 34% per tick, and that was wrong in a way that only showed on the device: a
+// tick is a frame, and a frame here is not 30 ms. At ten frames a second, 34% each leaves a
+// tenth of the distance still to travel most of a second after the hand stopped, which is
+// exactly what Zion saw — the crank arriving, and then thinking better of it and creeping on.
+// Expressed as a time constant, a slow frame simply moves further, and the gesture takes the
+// same fifth of a second on any frame rate.
+constexpr float TAU_MS = 60.0f;
+
+// Near enough, and stop. A full wind is a hundred detents around the ring, so a third of one
+// is about a degree of crank: below anything an eye can see, and far enough from zero that
+// the chase does not spend frames converging on a difference nobody could point at.
+constexpr float SNAP_DETENTS = 0.35f;
 
 // Instrumentation for the winding path only, and only on the device. Cleared each time it
 // reports.
@@ -90,25 +113,31 @@ int16_t crank_angle() {
     return (int16_t)a;
 }
 
-// One step of the chase. A THIRD of the remaining distance each tick, which settles in about
-// five ticks however far behind it is, so a long sweep catches up quickly and a single detent
-// still reads as a movement rather than a jump. Snapped when it is within a tenth of a detent,
-// or it would creep toward the target forever and repaint every tick doing it.
-void anim_cb(lv_timer_t *) {
-    if (!s_panel) return;
-    const float target = (float)clock_wind::progress();
-    const float gap = target - s_shown;
-    if (gap > -0.1f && gap < 0.1f) {
-        if (s_shown != target) {
-            s_shown = target;
-            if (s_crank) lv_img_set_angle(s_crank, crank_angle());
-            if (s_ring)  lv_arc_set_value(s_ring, (int)(s_shown + 0.5f));
-        }
-        return;
-    }
-    s_shown += gap * 0.34f;
+// Put the crank and the gauge where s_shown says they are.
+void paint_shown() {
     if (s_crank) lv_img_set_angle(s_crank, crank_angle());
     if (s_ring)  lv_arc_set_value(s_ring, (int)(s_shown + 0.5f));
+}
+
+// One step of the chase, sized by the TIME since the last one rather than by the fact that
+// there was one. Closes the gap on an exponential with TAU_MS as its constant, so the
+// movement lasts the same fifth of a second whether the device managed thirty frames in it
+// or five, and stops when it is close enough to stop.
+void anim_cb(lv_timer_t *) {
+    if (!s_panel) return;
+    const uint32_t now = now_ms();
+    const uint32_t dt  = now - s_animAt;
+    s_animAt = now;
+    ++s_frames;
+
+    const float target = (float)clock_wind::progress();
+    const float gap    = target - s_shown;
+    if (gap > -SNAP_DETENTS && gap < SNAP_DETENTS) {
+        if (s_shown != target) { s_shown = target; paint_shown(); }
+        return;
+    }
+    s_shown += gap * (1.0f - expf(-(float)dt / TAU_MS));
+    paint_shown();
 }
 
 // The compiled ladder, and nothing between its rungs. LVGL fonts are glyph bitmaps rather
@@ -163,6 +192,26 @@ void ensure() {
     // Starts where the wind actually is, so the screen opens settled rather than winding
     // itself up to the stored position while somebody watches.
     s_shown = (float)clock_wind::progress();
+    s_animAt = now_ms();
+    s_frames = 0;
+
+    // HIDE THE CLOCK, do not merely cover it. This is the whole cost of the screen.
+    //
+    // A panel on lv_layer_top() is drawn AFTER the active screen, unconditionally: lv_refr.c
+    // finds the topmost opaque object WITHIN the screen's own tree, draws that tree, and then
+    // draws the top layer over the result. There is no occlusion test between the two. So an
+    // opaque full-screen panel up here did not save the clock's work at all — every rotation
+    // of the crank still redrew the dial, its picture, its glass, its CRT, its hands and its
+    // text, and then painted over the lot. Zion asked for "a full new screen and doesn't need
+    // to show the clock underneath it at all", and this is the half of that sentence the
+    // first attempt missed.
+    //
+    // Hidden, refr_obj returns at its first line and the entire subtree is skipped. What is
+    // left to draw is a rectangle of colour and the crank.
+    if (lv_obj_t *scr = lv_scr_act()) {
+        s_hidden = scr;
+        lv_obj_add_flag(s_hidden, LV_OBJ_FLAG_HIDDEN);
+    }
 
     s_panel = lv_obj_create(lv_layer_top());
     lv_obj_set_size(s_panel, LV_PCT(100), LV_PCT(100));
@@ -353,10 +402,12 @@ void wind_notice::turn(int delta) {
         // How far the drawn crank is behind the knob, which is the only number that matters
         // now that nothing forces a repaint: the chase is meant to be behind, and this says
         // by how much.
-        Serial.printf("[wind] %d detents in %lu ms, drawn at %.1f of %d (%.1f behind)\n",
-                      s_sinceLog, (unsigned long)(now - s_logAt), (double)s_shown,
+        const uint32_t span = now - s_logAt;
+        Serial.printf("[wind] %d detents in %lu ms, %d frames (%lu fps), drawn at %.1f of %d (%.1f behind)\n",
+                      s_sinceLog, (unsigned long)span, s_frames,
+                      (unsigned long)(span ? (s_frames * 1000UL) / span : 0), (double)s_shown,
                       clock_wind::progress(), (double)(clock_wind::progress() - s_shown));
-        s_sinceLog = 0; s_logAt = now;
+        s_sinceLog = 0; s_logAt = now; s_frames = 0;
     }
 #endif
 }
@@ -368,6 +419,9 @@ void wind_notice::dismiss() {
     s_panel = nullptr;
     s_ring  = nullptr;
     s_crank = nullptr;
+    // Back into the drawing tree before anything asks it to repaint, or the invalidations
+    // below would be marking a hidden object dirty and the screen would come back blank.
+    if (s_hidden) { lv_obj_clear_flag(s_hidden, LV_OBJ_FLAG_HIDDEN); s_hidden = nullptr; }
     // Repaint what was underneath, by hand, twice. Same lesson as update_ui::destroy() and
     // knob_help::dismiss(): a panel on lv_layer_top() does not always leave the screen
     // beneath it fully reclaimed, and what is left is a strip that survives until something
