@@ -3032,13 +3032,14 @@ void wind_profile(uint32_t lp0, uint32_t lp1, uint32_t lp2, uint32_t lp3) {
     // Per pass, in microseconds, because the whole question is which of these is the big
     // one. The 5 ms delay() at the bottom of loop() is deliberately NOT in any of them.
     Serial.printf("[loop] %lu passes in %lu ms (%lu fps): input %lu us, draw %lu us, "
-                  "net %lu us, rest %lu us | lvgl %lu us/pass, %lu px/pass\n",
+                  "net %lu us, rest %lu us | lvgl %lu us/pass, %lu px/pass, %lu steps\n",
                   (unsigned long)passes, (unsigned long)span,
                   (unsigned long)(passes * 1000UL / span),
                   (unsigned long)(in / passes), (unsigned long)(draw / passes),
                   (unsigned long)(net / passes), (unsigned long)(rest / passes),
                   (unsigned long)((display_lvgl_us() - lvgl0) / passes),
-                  (unsigned long)((display_flushed_px() - px0) / passes));
+                  (unsigned long)((display_flushed_px() - px0) / passes),
+                  (unsigned long)wind_notice::steps());
     at = millis(); passes = in = draw = net = rest = 0;
     lvgl0 = display_lvgl_us(); px0 = display_flushed_px();
 }
@@ -3056,6 +3057,9 @@ void loop() {
     // by the time the next detent arrives rather than one frame later. Cheap: it compares
     // two integers unless the answer has actually changed.
     wind_notice::tick();
+    // And step the crank toward the knob, on the loop's clock rather than on a timer of its
+    // own. Returns immediately unless the wind screen is up.
+    wind_notice::animate();
     update_hold_warning();          // countdown while the button is held (see build_hold_warning)
     if (knob::takeLongPress()) {    // held ~8 s -> manual recovery reboot
         Serial.println("[main] knob long-press -> reboot");

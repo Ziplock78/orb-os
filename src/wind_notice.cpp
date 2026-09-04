@@ -71,9 +71,9 @@ uint32_t s_lastDetentMs = 0;
 // Where the crank and the gauge are DRAWN, in detents, as a real number so it can sit between
 // two of them. The knob moves clock_wind::progress(); this chases it.
 float      s_shown = 0.0f;
-lv_timer_t *s_anim = nullptr;
 uint32_t   s_animAt = 0;
 int        s_frames = 0;
+uint32_t   s_steps  = 0;
 
 // The screen this is covering, hidden for as long as it is covered. See ensure().
 lv_obj_t  *s_hidden = nullptr;
@@ -123,12 +123,15 @@ void paint_shown() {
 // there was one. Closes the gap on an exponential with TAU_MS as its constant, so the
 // movement lasts the same fifth of a second whether the device managed thirty frames in it
 // or five, and stops when it is close enough to stop.
-void anim_cb(lv_timer_t *) {
+}  // namespace
+
+void wind_notice::animate() {
     if (!s_panel) return;
     const uint32_t now = now_ms();
     const uint32_t dt  = now - s_animAt;
     s_animAt = now;
     ++s_frames;
+    ++s_steps;
 
     const float target = (float)clock_wind::progress();
     const float gap    = target - s_shown;
@@ -139,6 +142,8 @@ void anim_cb(lv_timer_t *) {
     s_shown += gap * (1.0f - expf(-(float)dt / TAU_MS));
     paint_shown();
 }
+
+namespace {
 
 // The compiled ladder, and nothing between its rungs. LVGL fonts are glyph bitmaps rather
 // than outlines, so a size this binary was not built with cannot be drawn at any quality;
@@ -309,10 +314,6 @@ void ensure() {
     if (c.windTitleShow) line(s_panel, c.windTitle, c.windTitleSize, c.windTitleCol, c.windTitleY, c.windTitleML, c.windTitleMR, 0);
     if (c.windAskShow)   line(s_panel, c.windAsk,   c.windAskSize,   c.windAskCol,   c.windAskY,   c.windAskML,   c.windAskMR,   1);
 
-    // 30 ms, which asks for about thirty steps a second. The device will not always manage
-    // that, and it does not need to: a tick that arrives late moves further, because the step
-    // is a fraction of what is left rather than a fixed amount.
-    s_anim = lv_timer_create(anim_cb, 30, nullptr);
 
     if (c.windTurnsShow) {
         // Built rather than written, because the number is the theme's. Writing "five turns"
@@ -330,6 +331,8 @@ void ensure() {
 }  // namespace
 
 bool wind_notice::showing() { return s_panel != nullptr; }
+
+uint32_t wind_notice::steps() { const uint32_t n = s_steps; s_steps = 0; return n; }
 
 void wind_notice::tick() {
     // Only over the clock. The mainspring belongs to that screen, and covering the flight
@@ -421,7 +424,6 @@ void wind_notice::turn(int delta) {
 
 void wind_notice::dismiss() {
     if (!s_panel) return;
-    if (s_anim) { lv_timer_del(s_anim); s_anim = nullptr; }
     lv_obj_del(s_panel);
     s_panel = nullptr;
     s_ring  = nullptr;

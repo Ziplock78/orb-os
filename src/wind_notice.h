@@ -1,5 +1,7 @@
 #pragma once
 
+#include <stdint.h>
+
 // "Please wind the clock using the knob."
 //
 // The panel that goes up when a theme's mainspring has run out. It is the visible half of
@@ -22,6 +24,22 @@ namespace wind_notice {
     // Called every frame from the main loop: raises the panel when the clock is the app on
     // screen and its mainspring has run out, lowers it when either stops being true.
     void tick();
+
+    // Advance the crank one step toward where the knob is. Call every pass of loop(), next
+    // to tick(); it returns immediately when the screen is not up.
+    //
+    // Driven from the loop rather than from an lv_timer of its own, for the reason the
+    // ticker's strip already is: it then moves on the same clock as everything else the
+    // display does and cannot drift against it. A 30 ms lv_timer was the first attempt and
+    // it ran at twelve steps a second while loop() was managing fifty, so the crank was
+    // being animated at a quarter of the rate the device could actually draw and the
+    // movement broke into three visible jumps.
+    void animate();
+
+    // Steps taken since this was last called, and zeroed by the call. Only the profiler in
+    // main.cpp reads it: the whole question this screen kept losing to was how many times a
+    // second the crank actually moves, against how many times a second the device draws.
+    uint32_t steps();
     // One detent while the panel is up. Winds, clicks, and takes the panel down when the
     // fifth turn lands.
     void turn(int delta);

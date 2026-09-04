@@ -1294,6 +1294,10 @@ int main(int argc, char **argv) {
             for (const char *p = wc; *p; ++p) h += (unsigned char)*p;
             route_store(wc, cities[h % 8], cities[(h / 2 + 3) % 8]);
         }
+        // Same place main.cpp calls it: the crank steps on the loop's clock, not on a timer.
+        // The simulator has to make this call too, or --windshot photographs a gauge that
+        // nothing ever advanced.
+        wind_notice::animate();
         lv_timer_handler();
 
         if (g_composite) {   // draw the Orb frame + live lens + control buttons
@@ -1454,7 +1458,11 @@ int main(int argc, char **argv) {
                 // clock once per pass of its main loop, and this runs inside one pass, so
                 // without it the animation timer never fires and the shot is of a gauge that
                 // has not moved. Same trap the --wifishot block documents a few lines up.
-                for (int i = 0; i < 16; ++i) { SDL_Delay(35); lv_tick_inc(35); lv_timer_handler(); }
+                for (int i = 0; i < 16; ++i) {
+                    SDL_Delay(35); lv_tick_inc(35);
+                    wind_notice::animate();
+                    lv_timer_handler();
+                }
                 lv_refr_now(NULL);
             };
             if (windStep == 0 && app_shell::count() > 0 && now - start > 3000) {
