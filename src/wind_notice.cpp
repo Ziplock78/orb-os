@@ -1,6 +1,7 @@
 #include "wind_notice.h"
 
 #include "clock_wind.h"
+#include "clock_view.h"
 #include "theme_style.h"
 #include "theme_font.h"
 #include "custom_sprite.h"
@@ -431,6 +432,13 @@ void wind_notice::dismiss() {
     // Back into the drawing tree before anything asks it to repaint, or the invalidations
     // below would be marking a hidden object dirty and the screen would come back blank.
     if (s_hidden) { lv_obj_clear_flag(s_hidden, LV_OBJ_FLAG_HIDDEN); s_hidden = nullptr; }
+#ifdef ARDUINO
+    // The clock stopped redrawing while it was covered, so its canvas still holds the face
+    // as it stood when this screen went up. Un-hiding shows that stale face until the next
+    // one-second tick, which is up to a second of the wrong time right at the moment
+    // somebody is looking to see that winding worked.
+    clockview::refresh();
+#endif
     // Repaint what was underneath, by hand, twice. Same lesson as update_ui::destroy() and
     // knob_help::dismiss(): a panel on lv_layer_top() does not always leave the screen
     // beneath it fully reclaimed, and what is left is a strip that survives until something

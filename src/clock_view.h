@@ -16,4 +16,5 @@ namespace clockview {
     // somebody IS looking at needs.
     void      onEnter();   // shell is switching to us: take the canvas back
     void      onExit();    // shell is switching away: give it up, plus the decoded face
+    void      refresh();   // redraw the face now, for coming back from something that covered it
 }

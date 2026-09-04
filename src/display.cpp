@@ -44,6 +44,7 @@ uint32_t display_flushed_px() { return s_flushedPx; }
 static bool s_logQuiet = false;
 void orb_log_set_quiet(bool quiet) { s_logQuiet = quiet; }
 bool orb_log_quiet() { return s_logQuiet; }
+
 // Defined at file scope, matching display_frames() above: display.h declares these
 // globally, not inside namespace display.
 uint32_t display_lvgl_us()  { return s_lvglUs; }

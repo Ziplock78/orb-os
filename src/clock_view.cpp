@@ -6,6 +6,7 @@
 // Time comes from the system clock (RTC-seeded, NTP-synced; see main.cpp). TZ is
 // applied at boot, so getLocalTime() returns local time.
 #include "clock_view.h"
+#include "display.h"      // orb_screen_covered(): do not redraw under a cover
 #ifdef ARDUINO
 #include <Arduino.h>
 #include <esp_heap_caps.h>
@@ -1050,6 +1051,24 @@ static void redraw(const struct tm *ti) {
 
 static void tick_cb(lv_timer_t * /*t*/) {
     if (lv_scr_act() != s_screen) return;
+    // ...and not while something is drawn over the top of it. The guard above catches
+    // another APP being on screen, because a switch changes the active screen. It does not
+    // catch a full-screen panel on the top layer, which leaves this the active screen while
+    // hiding every pixel of it, and that is exactly what the wind screen is.
+    //
+    // Measured, not assumed: 655 ms of canvas work here, once a second, every second
+    // somebody spent winding, with all of it discarded because a hidden object's
+    // invalidation is dropped. It was the whole of the hitch.
+    if (orb_screen_covered()) return;
+    struct tm ti;
+    if (getLocalTime(&ti, 0)) redraw(&ti);
+}
+
+// Redraw now, whatever the second says. For coming back from a screen that covered this one
+// for a while: the canvas still holds the face as it was when the cover went up, so without
+// this the clock shows the wrong time for up to a second after it reappears.
+void clockview::refresh() {
+    if (!s_screen) return;
     struct tm ti;
     if (getLocalTime(&ti, 0)) redraw(&ti);
 }
