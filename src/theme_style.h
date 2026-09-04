@@ -422,10 +422,9 @@ struct Clock {
     // asking to be wound in the same grey sans as a factory error message is the seam showing.
     //
     // Sizes come from the compiled ladder and nothing between its rungs: see font_for_px().
-    // Colour and OPACITY, and no picture. Zion's: this is a scrim over the running clock
-    // rather than a screen that replaces it, so at anything under full you can still see the
-    // dial it is asking you to wind. A background image would defeat that and would also be
-    // a second 466x466 plate on the card for a screen you see for ten seconds a day.
+    // The colour behind the picture, and nothing else. There was an opacity beside it, back
+    // when this screen veiled the clock rather than covering it; it is gone with the veil,
+    // because a field nothing reads is a control Studio can offer and the Orb will ignore.
     // THEME_CAPS 44. A picture behind the wind screen, and switches for everything drawn
     // over it. Zion asked for the picture after asking for no picture, and both were right at
     // the time: a scrim over a running clock wants transparency, a designed screen of its own
@@ -448,7 +447,6 @@ struct Clock {
     int       windCrankPX   = 0;     // in the artwork's own pixels
     int       windCrankPY   = 0;
     uint32_t  windBg        = 0x000000;
-    int       windBgOpa     = 255;   // 0..255
     uint32_t  windRingTrack = 0x22282F;
     uint32_t  windRingFill  = 0xD8B56A;
     int       windRingWidth = 8;
