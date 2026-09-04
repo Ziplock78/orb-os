@@ -2992,6 +2992,51 @@ void setup() {
                   freshFirmware ? "first boot after an update" : "already seen this build");
 }
 
+// WHICH timer is the hog.
+//
+// The profiler found it by reporting the worst pass instead of the mean: one pass in every
+// two-second window spends about 660 ms inside lv_timer_handler and flushes nothing, and the
+// other hundred-odd passes are a tidy 6 ms. An average of 11.6 ms described neither of them
+// and sent three rounds of reasoning after the wrong thing.
+//
+// lv_timer_handler dispatches every due timer without saying what it ran, so this brackets
+// the call: snapshot each timer's last_run before, walk the list again after, and name the
+// ones that moved. Only on a pass slow enough to be the hitch, so it prints at most once
+// every couple of seconds.
+//
+// The list is re-walked rather than the snapshot re-read, deliberately: a timer can delete
+// itself during the call, and reading last_run off the pointer we saved would be a
+// use-after-free on exactly the timer most worth knowing about.
+struct TimerSnap { const lv_timer_t *t; uint32_t last_run; };
+static TimerSnap s_tsnap[24];
+static int       s_tsnapN = 0;
+
+static void timers_before() {
+    s_tsnapN = 0;
+    for (lv_timer_t *t = lv_timer_get_next(NULL); t && s_tsnapN < 24; t = lv_timer_get_next(t)) {
+        s_tsnap[s_tsnapN].t = t;
+        s_tsnap[s_tsnapN].last_run = t->last_run;
+        ++s_tsnapN;
+    }
+}
+
+static void timers_after(uint32_t drawUs) {
+    if (drawUs < 100000UL) return;
+    Serial.printf("[hog] %lu us in lv_timer_handler, timers that ran:\n", (unsigned long)drawUs);
+    for (lv_timer_t *t = lv_timer_get_next(NULL); t; t = lv_timer_get_next(t)) {
+        bool known = false, moved = true;
+        for (int i = 0; i < s_tsnapN; ++i) {
+            if (s_tsnap[i].t != t) continue;
+            known = true;
+            moved = (s_tsnap[i].last_run != t->last_run);
+            break;
+        }
+        if (known && !moved) continue;
+        Serial.printf("[hog]   cb=%p period=%lu%s\n", (void *)t->timer_cb,
+                      (unsigned long)t->period, known ? "" : "  (created during the call)");
+    }
+}
+
 // Where a frame actually goes, while the wind screen is up and only then.
 //
 // Written because two rounds of reasoning about the winding lag were both wrong. The first
@@ -3085,8 +3130,10 @@ void loop() {
     }
 
     const uint32_t lp1 = micros();
+    if (wind_notice::showing()) timers_before();
     display::loop();                // drive LVGL (render dirty areas + run timers)
     const uint32_t lp2 = micros();
+    if (wind_notice::showing()) timers_after(lp2 - lp1);
 
     // Network and sensors last: they are throughput work, not interactive. handleClient()
     // in particular can spend real time on an /sdput chunk, and nothing about it should
