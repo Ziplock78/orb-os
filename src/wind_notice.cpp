@@ -3,6 +3,7 @@
 #include "clock_wind.h"
 #include "theme_style.h"
 #include "theme_font.h"
+#include "custom_sprite.h"
 #include "config.h"
 #include "theme_audio.h"
 #include "app_shell.h"
@@ -28,6 +29,22 @@ namespace {
 
 lv_obj_t *s_panel = nullptr;
 lv_obj_t *s_ring  = nullptr;
+lv_obj_t *s_crank = nullptr;
+
+// Descriptors over the decoded sprites. custom_sprite hands back RGB565 plus alpha at three
+// bytes a pixel, which is exactly LV_IMG_CF_TRUE_COLOR_ALPHA, so there is nothing to convert
+// and LVGL can rotate the crank itself.
+lv_img_dsc_t s_bgDsc = {};
+lv_img_dsc_t s_crankDsc = {};
+
+void describe(lv_img_dsc_t &d, const CustomSprite &sp) {
+    d.header.always_zero = 0;
+    d.header.w = sp.w;
+    d.header.h = sp.h;
+    d.header.cf = LV_IMG_CF_TRUE_COLOR_ALPHA;
+    d.data_size = (uint32_t)sp.w * sp.h * 3;
+    d.data = sp.data;
+}
 
 // Last detent that made a sound. A hundred detents at one cue each would queue behind a
 // playback path that holds the amplifier up for about a tenth of a second per tick, so a
@@ -57,6 +74,15 @@ uint32_t s_logAt    = 0;
 int      s_sinceLog = 0;
 
 uint32_t now_ms() { return lv_tick_get(); }
+
+// Tenths of a degree, which is what LVGL wants. One crank turn per knob turn: anything else
+// is a gear ratio nobody asked for, and the point is that it moves the way your hand does.
+int16_t crank_angle() {
+    const int per = clock_wind::DETENTS_PER_TURN;
+    if (per <= 0) return 0;
+    const float turns = (float)clock_wind::progress() / (float)per;
+    return (int16_t)((int)(turns * 3600.0f) % 3600);
+}
 
 // The compiled ladder, and nothing between its rungs. LVGL fonts are glyph bitmaps rather
 // than outlines, so a size this binary was not built with cannot be drawn at any quality;
@@ -118,9 +144,23 @@ void ensure() {
     lv_obj_set_style_radius(s_panel, 0, 0);
     lv_obj_clear_flag(s_panel, LV_OBJ_FLAG_SCROLLABLE);
 
+    // The picture, over the colour and under everything else. A design can have a flat wash,
+    // a photograph, or a photograph with a wash over it, which is why the colour did not move
+    // out of the way when this arrived.
+    if (c.windImageOn) {
+        const CustomSprite bg = wind_background();
+        if (bg.data) {
+            describe(s_bgDsc, bg);
+            lv_obj_t *img = lv_img_create(s_panel);
+            lv_img_set_src(img, &s_bgDsc);
+            lv_obj_center(img);
+        }
+    }
+
     // The wind gauge, out at the bezel where a circular screen has room to spare and where it
     // reads as the rim of the mechanism rather than as a progress bar. Starts at twelve and
     // fills clockwise, which is the direction that winds it.
+    if (c.windRingShow) {
     s_ring = lv_arc_create(s_panel);
     const int d = c.windRingR * 2;
     lv_obj_set_size(s_ring, d, d);
@@ -137,9 +177,27 @@ void ensure() {
     lv_obj_set_style_arc_width(s_ring, c.windRingWidth, LV_PART_INDICATOR);
     lv_obj_set_style_arc_color(s_ring, lv_color_hex(c.windRingTrack), LV_PART_MAIN);
     lv_obj_set_style_arc_color(s_ring, lv_color_hex(c.windRingFill), LV_PART_INDICATOR);
+    }
 
-    line(s_panel, c.windTitle, c.windTitleSize, c.windTitleCol, c.windTitleY, c.windTitleML, c.windTitleMR, 0);
-    line(s_panel, c.windAsk,   c.windAskSize,   c.windAskCol,   c.windAskY,   c.windAskML,   c.windAskMR,   1);
+    // The crank, turned by the knob about its own pivot. Positioned by that PIVOT rather than
+    // its middle, the same arithmetic every hand uses: the artwork is trimmed to its ink, so
+    // the turning point is wherever the designer put it inside that crop and the sprite is
+    // offset to bring it to the spot on the dial.
+    if (c.windCrankOn) {
+        const CustomSprite cr = wind_crank();
+        if (cr.data) {
+            describe(s_crankDsc, cr);
+            s_crank = lv_img_create(s_panel);
+            lv_img_set_src(s_crank, &s_crankDsc);
+            lv_img_set_pivot(s_crank, c.windCrankPX, c.windCrankPY);
+            lv_obj_set_pos(s_crank, (lv_coord_t)(c.windCrankX - c.windCrankPX),
+                                    (lv_coord_t)(c.windCrankY - c.windCrankPY));
+            lv_img_set_angle(s_crank, crank_angle());
+        }
+    }
+
+    if (c.windTitleShow) line(s_panel, c.windTitle, c.windTitleSize, c.windTitleCol, c.windTitleY, c.windTitleML, c.windTitleMR, 0);
+    if (c.windAskShow)   line(s_panel, c.windAsk,   c.windAskSize,   c.windAskCol,   c.windAskY,   c.windAskML,   c.windAskMR,   1);
 
     if (c.windTurnsShow) {
         // Built rather than written, because the number is the theme's. Writing "five turns"
@@ -192,8 +250,9 @@ void wind_notice::turn(int delta) {
         dismiss();
         return;
     }
-    if (s_ring) {
-        lv_arc_set_value(s_ring, clock_wind::progress());
+    if (s_crank) lv_img_set_angle(s_crank, crank_angle());
+    if (s_ring || s_crank) {
+        if (s_ring) lv_arc_set_value(s_ring, clock_wind::progress());
         // Drawn HERE, not at the bottom of the loop.
         //
         // main.cpp handles the knob first and calls lv_timer_handler() last, on purpose, so
@@ -247,6 +306,7 @@ void wind_notice::dismiss() {
     lv_obj_del(s_panel);
     s_panel = nullptr;
     s_ring  = nullptr;
+    s_crank = nullptr;
     // Repaint what was underneath, by hand, twice. Same lesson as update_ui::destroy() and
     // knob_help::dismiss(): a panel on lv_layer_top() does not always leave the screen
     // beneath it fully reclaimed, and what is left is a strip that survives until something

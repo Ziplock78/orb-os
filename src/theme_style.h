@@ -330,7 +330,12 @@ namespace theme_style {
 //      on top" disagreed with the glass; that is fixed on the Studio side and this is the
 //      control it was pretending to be. An Orb below this level draws the hands over the
 //      words whatever the design says.
-constexpr int THEME_CAPS = 43;
+//  44  the wind screen gets a background picture, switches for its gauge and each of its
+//      three lines, and a crank that turns with the knob (wind_bg.png, wind_crank.png). 41
+//      made it a design and 42 gave it type; this is the rest of what a screen has. An Orb
+//      below this level draws no picture and no crank, and shows the gauge and all three
+//      lines whatever the design says.
+constexpr int THEME_CAPS = 44;
 
 struct ClockText {
     bool     show   = false;
@@ -421,6 +426,27 @@ struct Clock {
     // rather than a screen that replaces it, so at anything under full you can still see the
     // dial it is asking you to wind. A background image would defeat that and would also be
     // a second 466x466 plate on the card for a screen you see for ten seconds a day.
+    // THEME_CAPS 44. A picture behind the wind screen, and switches for everything drawn
+    // over it. Zion asked for the picture after asking for no picture, and both were right at
+    // the time: a scrim over a running clock wants transparency, a designed screen of its own
+    // wants art. The colour and its opacity still sit under the image, so a design can have
+    // either, or a photograph with a wash over it.
+    bool      windImageOn   = false;   // wind_bg.png
+    bool      windRingShow  = true;
+    bool      windTitleShow = true;
+    bool      windAskShow   = true;
+    // A crank that turns with the knob. One revolution of the crank per revolution of the
+    // knob, because anything else is a gear ratio nobody asked for and the point is that the
+    // thing on screen moves the way your hand does.
+    bool      windCrankOn   = false;   // wind_crank.png
+    // Where the crank's own turning point sits on the dial, and where that point is INSIDE
+    // the artwork. Exactly the pair a hand carries, and for the same reason: the picture is
+    // trimmed to its ink, so the pivot has to travel with the crop or the crank wobbles
+    // instead of turning.
+    int       windCrankX    = 233;   // on the dial
+    int       windCrankY    = 233;
+    int       windCrankPX   = 0;     // in the artwork's own pixels
+    int       windCrankPY   = 0;
     uint32_t  windBg        = 0x000000;
     int       windBgOpa     = 255;   // 0..255
     uint32_t  windRingTrack = 0x22282F;

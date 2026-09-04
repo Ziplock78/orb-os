@@ -468,6 +468,15 @@ void load() {
             if (doc["windSecs"].is<int>())    s_clock.windSecs   = doc["windSecs"].as<int>();
             if (doc["windTurns"].is<int>())   s_clock.windTurns  = doc["windTurns"].as<int>();
             if (doc["textOverHands"].is<bool>())     s_clock.textOverHands = doc["textOverHands"].as<bool>();
+            if (doc["windImageOn"].is<bool>())       s_clock.windImageOn   = doc["windImageOn"].as<bool>();
+            if (doc["windRingShow"].is<bool>())      s_clock.windRingShow  = doc["windRingShow"].as<bool>();
+            if (doc["windTitleShow"].is<bool>())     s_clock.windTitleShow = doc["windTitleShow"].as<bool>();
+            if (doc["windAskShow"].is<bool>())       s_clock.windAskShow   = doc["windAskShow"].as<bool>();
+            if (doc["windCrankOn"].is<bool>())       s_clock.windCrankOn   = doc["windCrankOn"].as<bool>();
+            if (doc["windCrankX"].is<int>())         s_clock.windCrankX    = doc["windCrankX"].as<int>();
+            if (doc["windCrankY"].is<int>())         s_clock.windCrankY    = doc["windCrankY"].as<int>();
+            if (doc["windCrankPX"].is<int>())        s_clock.windCrankPX   = doc["windCrankPX"].as<int>();
+            if (doc["windCrankPY"].is<int>())        s_clock.windCrankPY   = doc["windCrankPY"].as<int>();
             if (doc["windBg"].is<uint32_t>())        s_clock.windBg        = doc["windBg"].as<uint32_t>();
             s_clock.windBgOpa = opa_of(doc["windBgOpa"], s_clock.windBgOpa);
             if (doc["windRingTrack"].is<uint32_t>()) s_clock.windRingTrack = doc["windRingTrack"].as<uint32_t>();

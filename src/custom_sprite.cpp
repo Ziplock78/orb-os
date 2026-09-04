@@ -212,6 +212,36 @@ const uint8_t *splash_overlay() {
     return s_splashOv;
 }
 
+// The wind screen's picture and its crank. Same shape as every other asset here: flash first
+// where the bake put one, then the card, then nothing at all. Nothing is a plainer screen,
+// which is always the right way to be missing a layer.
+namespace {
+uint8_t *s_windBg = nullptr;    int s_windBgW = 0,    s_windBgH = 0;    bool s_windBgTried = false;
+uint8_t *s_windCrank = nullptr; int s_windCrankW = 0, s_windCrankH = 0; bool s_windCrankTried = false;
+
+CustomSprite load_wind(const char *name, uint8_t *&buf, int &w, int &h, bool &tried, const char *tag) {
+    if (!buf && !tried) {
+        tried = true;
+        int fw = 0, fh = 0;
+        if (const uint8_t *p = theme_art::find_active(name, theme_art::FMT_RGB565_ALPHA, fw, fh)) {
+            buf = (uint8_t *)p; w = fw; h = fh;
+        } else {
+            uint8_t *o = nullptr;
+            if (decode_sd_first(name, nullptr, 0, true, o, fw, fh, tag)) { buf = o; w = fw; h = fh; }
+        }
+    }
+    return { buf, w, h };
+}
+}  // namespace
+
+CustomSprite wind_background() {
+    return load_wind("wind_bg.png", s_windBg, s_windBgW, s_windBgH, s_windBgTried, "wind background");
+}
+
+CustomSprite wind_crank() {
+    return load_wind("wind_crank.png", s_windCrank, s_windCrankW, s_windCrankH, s_windCrankTried, "wind crank");
+}
+
 CustomSprite custom_hand(int kind) {
     if (kind < 0 || kind >= SLOTS) return { nullptr, 0, 0 };
     if (!s_handTried[kind]) {
@@ -267,6 +297,10 @@ CustomSprite custom_shadow(int hand) {
 // Called when the custom clock face is no longer the app on screen, so a design's
 // ~1 MB of decoded pixels isn't held resident while some other app is in front.
 void custom_sprite_release() {
+    if (s_windBg    && !theme_art::owns(s_windBg))    heap_caps_free(s_windBg);
+    if (s_windCrank && !theme_art::owns(s_windCrank)) heap_caps_free(s_windCrank);
+    s_windBg = s_windCrank = nullptr;
+    s_windBgTried = s_windCrankTried = false;
     const uint32_t t0 = millis();
     size_t freed = 0;
     // theme_art::owns() means the pixels live in memory-mapped flash: nothing was

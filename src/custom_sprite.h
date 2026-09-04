@@ -16,4 +16,8 @@ CustomSprite    custom_hand(int kind);  // kind 0=hour,1=minute,2=second,3=stati
 // ships none. Same pivot and size as its hand, so it rotates identically; the offset that
 // makes the light look fixed is applied to the centre by the caller.
 CustomSprite    custom_shadow(int hand);  // hand 0=hour, 1=minute, 2=second
+// The wind screen's two, THEME_CAPS 44. Both carry alpha, so both come back in the same
+// 3-bytes-per-pixel shape a hand does, which is also what LVGL rotates natively.
+CustomSprite    wind_background();   // wind_bg.png, the picture behind the wind screen
+CustomSprite    wind_crank();        // wind_crank.png, turned by the knob about its own pivot
 void            custom_sprite_release();  // free all decoded PSRAM buffers; next call re-decodes
