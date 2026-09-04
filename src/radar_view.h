@@ -38,6 +38,12 @@ struct AcInfo {
 
 namespace radar {
 
+// What the sweep timer has cost since this was last called, and zeroed by the call. The
+// timer is deliberately never paused (the weather screen's sweep shares it), so it runs on
+// screens that cannot show it, and this says what that is worth in microseconds.
+void sweepStats(uint32_t &calls, uint32_t &totalUs, uint32_t &maxUs);
+
+
 // Build the radar scope (rings, crosshair, rose, sweep, center) under `parent`.
 void init(void* lv_parent);                 // pass lv_obj_t*
 

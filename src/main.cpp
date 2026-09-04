@@ -3005,7 +3005,7 @@ void setup() {
 // Costs four micros() calls a pass, about a microsecond, and prints nothing at all unless
 // somebody is winding.
 void wind_profile(uint32_t lp0, uint32_t lp1, uint32_t lp2, uint32_t lp3) {
-    static uint32_t at = 0, passes = 0, in = 0, draw = 0, net = 0, rest = 0;
+    static uint32_t at = 0, passes = 0, in = 0, draw = 0, net = 0, rest = 0, drawMax = 0;
     static uint32_t lvgl0 = 0, px0 = 0;
     if (!wind_notice::showing()) {
         if (at) { at = 0; orb_log_set_quiet(false); }
@@ -3017,30 +3017,38 @@ void wind_profile(uint32_t lp0, uint32_t lp1, uint32_t lp2, uint32_t lp3) {
         // of a second when the buffer is full. On this one screen the console is a cost, and
         // an aggregate every two seconds says more than a line per notch ever did.
         orb_log_set_quiet(true);
-        at = millis(); passes = in = draw = net = rest = 0;
+        { uint32_t a, b, c; radar::sweepStats(a, b, c); }   // discard what accrued before this screen
+        at = millis(); passes = in = draw = net = rest = drawMax = 0;
         lvgl0 = display_lvgl_us(); px0 = display_flushed_px();
         return;
     }
     ++passes;
+    const uint32_t thisDraw = lp2 - lp1;
+    if (thisDraw > drawMax) drawMax = thisDraw;
     in   += lp1 - lp0;
-    draw += lp2 - lp1;
+    draw += thisDraw;
     net  += lp3 - lp2;
     rest += end - lp3;
 
     const uint32_t span = millis() - at;
     if (span < 2000) return;
+    uint32_t swCalls = 0, swTotal = 0, swMax = 0;
+    radar::sweepStats(swCalls, swTotal, swMax);
     // Per pass, in microseconds, because the whole question is which of these is the big
     // one. The 5 ms delay() at the bottom of loop() is deliberately NOT in any of them.
     Serial.printf("[loop] %lu passes in %lu ms (%lu fps): input %lu us, draw %lu us, "
-                  "net %lu us, rest %lu us | lvgl %lu us/pass, %lu px/pass, %lu steps\n",
+                  "net %lu us, rest %lu us (worst draw %lu us) | %lu px/pass, %lu steps, "
+                  "sweep %lu calls %lu us avg %lu us worst\n",
                   (unsigned long)passes, (unsigned long)span,
                   (unsigned long)(passes * 1000UL / span),
                   (unsigned long)(in / passes), (unsigned long)(draw / passes),
                   (unsigned long)(net / passes), (unsigned long)(rest / passes),
-                  (unsigned long)((display_lvgl_us() - lvgl0) / passes),
+                  (unsigned long)drawMax,
                   (unsigned long)((display_flushed_px() - px0) / passes),
-                  (unsigned long)wind_notice::steps());
-    at = millis(); passes = in = draw = net = rest = 0;
+                  (unsigned long)wind_notice::steps(),
+                  (unsigned long)swCalls, (unsigned long)(swCalls ? swTotal / swCalls : 0),
+                  (unsigned long)swMax);
+    at = millis(); passes = in = draw = net = rest = drawMax = 0;
     lvgl0 = display_lvgl_us(); px0 = display_flushed_px();
 }
 
