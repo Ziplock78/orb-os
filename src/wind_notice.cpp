@@ -33,12 +33,14 @@ namespace {
 lv_obj_t *s_panel = nullptr;
 lv_obj_t *s_ring  = nullptr;
 lv_obj_t *s_crank = nullptr;
+lv_obj_t *s_shadow = nullptr;
 
 // Descriptors over the decoded sprites. custom_sprite hands back RGB565 plus alpha at three
 // bytes a pixel, which is exactly LV_IMG_CF_TRUE_COLOR_ALPHA, so there is nothing to convert
 // and LVGL can rotate the crank itself.
 lv_img_dsc_t s_bgDsc = {};
 lv_img_dsc_t s_crankDsc = {};
+lv_img_dsc_t s_shadowDsc = {};
 
 void describe(lv_img_dsc_t &d, const CustomSprite &sp) {
     d.header.always_zero = 0;
@@ -114,7 +116,9 @@ int16_t crank_angle() {
 
 // Put the crank and the gauge where s_shown says they are.
 void paint_shown() {
-    if (s_crank) lv_img_set_angle(s_crank, crank_angle());
+    const int16_t a = crank_angle();
+    if (s_shadow) lv_img_set_angle(s_shadow, a);
+    if (s_crank) lv_img_set_angle(s_crank, a);
     if (s_ring)  lv_arc_set_value(s_ring, (int)(s_shown + 0.5f));
 }
 
@@ -289,6 +293,24 @@ void ensure() {
     // the turning point is wherever the designer put it inside that crop and the sprite is
     // offset to bring it to the spot on the dial.
     if (c.windCrankOn) {
+        // The shadow first, so the crank lands on top of it. Same size, same pivot, same
+        // angle: the only difference is that its position is nudged by the light's offset in
+        // SCREEN space, which is what keeps it pointing one way all the way round instead of
+        // swinging with the arm.
+        if (c.windCrankShadowOn) {
+            const CustomSprite sh = wind_crank_shadow();
+            if (sh.data) {
+                describe(s_shadowDsc, sh);
+                s_shadow = lv_img_create(s_panel);
+                lv_img_set_src(s_shadow, &s_shadowDsc);
+                lv_img_set_antialias(s_shadow, false);
+                lv_img_set_pivot(s_shadow, c.windCrankPX, c.windCrankPY);
+                lv_obj_set_pos(s_shadow,
+                    (lv_coord_t)(c.windCrankX - c.windCrankPX + c.windCrankShadowDX),
+                    (lv_coord_t)(c.windCrankY - c.windCrankPY + c.windCrankShadowDY));
+                lv_img_set_angle(s_shadow, crank_angle());
+            }
+        }
         const CustomSprite cr = wind_crank();
         if (cr.data) {
             describe(s_crankDsc, cr);
@@ -403,8 +425,9 @@ void wind_notice::dismiss() {
     if (!s_panel) return;
     lv_obj_del(s_panel);
     s_panel = nullptr;
-    s_ring  = nullptr;
-    s_crank = nullptr;
+    s_ring   = nullptr;
+    s_crank  = nullptr;
+    s_shadow = nullptr;
     // Back into the drawing tree before anything asks it to repaint, or the invalidations
     // below would be marking a hidden object dirty and the screen would come back blank.
     if (s_hidden) { lv_obj_clear_flag(s_hidden, LV_OBJ_FLAG_HIDDEN); s_hidden = nullptr; }

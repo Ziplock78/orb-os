@@ -335,7 +335,7 @@ namespace theme_style {
 //      made it a design and 42 gave it type; this is the rest of what a screen has. An Orb
 //      below this level draws no picture and no crank, and shows the gauge and all three
 //      lines whatever the design says.
-constexpr int THEME_CAPS = 45;
+constexpr int THEME_CAPS = 46;
 
 struct ClockText {
     bool     show   = false;
@@ -456,6 +456,19 @@ struct Clock {
     //
     // 0 keeps every theme written before this exactly as it was.
     int       windCrankRest = 0;
+    // A shadow under the crank, from the same ONE light the hands use (see shadowOn above).
+    //
+    // Its own sprite, wind_crank_shadow.png, baked to the SAME size and pivot as the crank
+    // so the two turn as one. Softness, colour and strength are baked, so the device does
+    // one more rotate-and-blend and nothing else; only the offset lives here, in SCREEN
+    // pixels, which is what stops the shadow orbiting with the crank and reading as a lamp
+    // going round the dial.
+    //
+    // Its own switch rather than the dial's, because the wind screen is a design in its own
+    // right: its background, typefaces and margins are all separate from the face's, and a
+    // crank can want a shadow on a dial whose hands do not.
+    bool      windCrankShadowOn = false;
+    int       windCrankShadowDX = 0, windCrankShadowDY = 0;
     uint32_t  windBg        = 0x000000;
     uint32_t  windRingTrack = 0x22282F;
     uint32_t  windRingFill  = 0xD8B56A;

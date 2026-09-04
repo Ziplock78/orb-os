@@ -218,6 +218,7 @@ const uint8_t *splash_overlay() {
 namespace {
 uint16_t *s_windBg = nullptr;   int s_windBgW = 0,    s_windBgH = 0;    bool s_windBgTried = false;
 uint8_t *s_windCrank = nullptr; int s_windCrankW = 0, s_windCrankH = 0; bool s_windCrankTried = false;
+uint8_t *s_windCrankSh = nullptr; int s_windCrankShW = 0, s_windCrankShH = 0; bool s_windCrankShTried = false;
 
 CustomSprite load_wind(const char *name, uint8_t *&buf, int &w, int &h, bool &tried, const char *tag) {
     if (!buf && !tried) {
@@ -256,6 +257,13 @@ const uint16_t *wind_background(int &w, int &h) {
 
 CustomSprite wind_crank() {
     return load_wind("wind_crank.png", s_windCrank, s_windCrankW, s_windCrankH, s_windCrankTried, "wind crank");
+}
+
+// Baked to the crank's own size and pivot, so both are placed by the same arithmetic and
+// turned by the same angle. Only the screen-space offset separates them.
+CustomSprite wind_crank_shadow() {
+    return load_wind("wind_crank_shadow.png", s_windCrankSh, s_windCrankShW, s_windCrankShH,
+                     s_windCrankShTried, "wind crank shadow");
 }
 
 CustomSprite custom_hand(int kind) {
@@ -315,9 +323,11 @@ CustomSprite custom_shadow(int hand) {
 void custom_sprite_release() {
     if (s_windBg    && !theme_art::owns((uint8_t *)s_windBg)) heap_caps_free(s_windBg);
     if (s_windCrank && !theme_art::owns(s_windCrank)) heap_caps_free(s_windCrank);
+    if (s_windCrankSh && !theme_art::owns(s_windCrankSh)) heap_caps_free(s_windCrankSh);
     s_windBg = nullptr;
     s_windCrank = nullptr;
-    s_windBgTried = s_windCrankTried = false;
+    s_windCrankSh = nullptr;
+    s_windBgTried = s_windCrankTried = s_windCrankShTried = false;
     const uint32_t t0 = millis();
     size_t freed = 0;
     // theme_art::owns() means the pixels live in memory-mapped flash: nothing was

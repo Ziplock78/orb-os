@@ -20,4 +20,5 @@ CustomSprite    custom_shadow(int hand);  // hand 0=hour, 1=minute, 2=second
 // 3-bytes-per-pixel shape a hand does, which is also what LVGL rotates natively.
 const uint16_t *wind_background(int &w, int &h);   // wind_bg.png, OPAQUE RGB565: the wind screen covers the clock
 CustomSprite    wind_crank();        // wind_crank.png, turned by the knob about its own pivot
+CustomSprite    wind_crank_shadow(); // wind_crank_shadow.png, same size and pivot as the crank
 void            custom_sprite_release();  // free all decoded PSRAM buffers; next call re-decodes
