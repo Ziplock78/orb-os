@@ -2992,7 +2992,52 @@ void setup() {
                   freshFirmware ? "first boot after an update" : "already seen this build");
 }
 
+// Where a frame actually goes, while the wind screen is up and only then.
+//
+// Written because two rounds of reasoning about the winding lag were both wrong. The first
+// blamed the rotation and the second blamed the clock underneath; the clock WAS costing
+// something and hiding it helped, but only from about 102 ms a pass to about 85, and the
+// crank still could not keep up. Meanwhile the display's own instrument says a detent
+// reaches the glass in 13 to 36 ms, which cannot both be true of the same frame. One of
+// those numbers is measuring a part and being read as the whole, and there is no way to
+// tell which by reading the source, so this measures the four parts separately.
+//
+// Costs four micros() calls a pass, about a microsecond, and prints nothing at all unless
+// somebody is winding.
+void wind_profile(uint32_t lp0, uint32_t lp1, uint32_t lp2, uint32_t lp3) {
+    static uint32_t at = 0, passes = 0, in = 0, draw = 0, net = 0, rest = 0;
+    static uint32_t lvgl0 = 0, px0 = 0;
+    if (!wind_notice::showing()) { at = 0; return; }
+    const uint32_t end = micros();
+    if (at == 0) {   // first pass of this screen: start the window here, not at the last one
+        at = millis(); passes = in = draw = net = rest = 0;
+        lvgl0 = display_lvgl_us(); px0 = display_flushed_px();
+        return;
+    }
+    ++passes;
+    in   += lp1 - lp0;
+    draw += lp2 - lp1;
+    net  += lp3 - lp2;
+    rest += end - lp3;
+
+    const uint32_t span = millis() - at;
+    if (span < 2000) return;
+    // Per pass, in microseconds, because the whole question is which of these is the big
+    // one. The 5 ms delay() at the bottom of loop() is deliberately NOT in any of them.
+    Serial.printf("[loop] %lu passes in %lu ms (%lu fps): input %lu us, draw %lu us, "
+                  "net %lu us, rest %lu us | lvgl %lu us/pass, %lu px/pass\n",
+                  (unsigned long)passes, (unsigned long)span,
+                  (unsigned long)(passes * 1000UL / span),
+                  (unsigned long)(in / passes), (unsigned long)(draw / passes),
+                  (unsigned long)(net / passes), (unsigned long)(rest / passes),
+                  (unsigned long)((display_lvgl_us() - lvgl0) / passes),
+                  (unsigned long)((display_flushed_px() - px0) / passes));
+    at = millis(); passes = in = draw = net = rest = 0;
+    lvgl0 = display_lvgl_us(); px0 = display_flushed_px();
+}
+
 void loop() {
+    const uint32_t lp0 = micros();
     // INPUT FIRST. The encoder is interrupt-driven, so no detent is ever lost — but this
     // used to run at the BOTTOM of the loop, after a full LVGL render and after the web
     // server. A detent arriving while the screen was drawing therefore waited for that
@@ -3020,7 +3065,9 @@ void loop() {
         input_router::dispatch((int)kd, pressed);           // same 3-mode routing the sim uses
     }
 
+    const uint32_t lp1 = micros();
     display::loop();                // drive LVGL (render dirty areas + run timers)
+    const uint32_t lp2 = micros();
 
     // Network and sensors last: they are throughput work, not interactive. handleClient()
     // in particular can spend real time on an /sdput chunk, and nothing about it should
@@ -3038,6 +3085,7 @@ void loop() {
         const uint32_t until = millis() + 40;
         while (orb_link::transferActive() && (int32_t)(millis() - until) < 0) orb_link::poll();
     }
+    const uint32_t lp3 = micros();
 
     // scheduled reboot after a fresh WiFi config (see setSaveConfigCallback)
     if (g_rebootAtMs && (int32_t)(millis() - g_rebootAtMs) >= 0) { delay(50); ESP.restart(); }
@@ -3316,5 +3364,6 @@ void loop() {
         }
     }
 
+    wind_profile(lp0, lp1, lp2, lp3);
     delay(5);
 }

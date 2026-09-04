@@ -194,6 +194,13 @@ void ensure() {
     s_shown = (float)clock_wind::progress();
     s_animAt = now_ms();
     s_frames = 0;
+    // And the log's window, which was the one thing not reset here. It measured from the end
+    // of the LAST wind, so the first report of a new one covered the minutes in between and
+    // divided a screen's worth of frames by them: 213 frames, correctly counted, over 81
+    // seconds that were mostly the clock just running. It reported two frames a second for a
+    // screen doing twelve.
+    s_logAt = now_ms();
+    s_sinceLog = 0;
 
     // HIDE THE CLOCK, do not merely cover it. This is the whole cost of the screen.
     //
