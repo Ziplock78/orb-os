@@ -25,4 +25,13 @@ namespace theme_sd {
 uint8_t *read_whole(const char *path, size_t &outLen, size_t maxBytes);
 void free(uint8_t *buf);
 
+// The card is not thread safe and, until the chime started streaming, never needed to be:
+// every reader on this device ran on the main task, which made SD single-threaded by
+// convention rather than by construction. Streaming a chime broke that convention, so the two
+// big readers take this around their file work. It is a lock over the CONVENTION, not over the
+// whole driver: the rarer readers (roads, spycam, the link's transfers) still rely on running
+// where they always have.
+void lock();
+void unlock();
+
 } // namespace theme_sd

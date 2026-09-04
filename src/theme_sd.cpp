@@ -13,9 +13,27 @@
 namespace theme_sd {
 
 #ifdef ARDUINO
+// Created on first use rather than at init, because the first caller may be either task and
+// there is no ordering to rely on.
+static SemaphoreHandle_t s_lock = nullptr;
+static SemaphoreHandle_t lock_handle() {
+    if (!s_lock) s_lock = xSemaphoreCreateMutex();
+    return s_lock;
+}
+void lock()   { if (SemaphoreHandle_t h = lock_handle()) xSemaphoreTake(h, portMAX_DELAY); }
+void unlock() { if (s_lock) xSemaphoreGive(s_lock); }
+
+// Releases the card lock however the function leaves, which is six different ways. Taking it
+// by hand and unlocking at each return is how one of those six ends up holding it forever.
+struct Held {
+    Held()  { lock(); }
+    ~Held() { unlock(); }
+};
+
 uint8_t *read_whole(const char *path, size_t &outLen, size_t maxBytes) {
     outLen = 0;
     if (!sdcard::mounted()) return nullptr;
+    Held held;
     File f = SD.open(path, "r");
     if (!f || f.isDirectory()) { if (f) f.close(); return nullptr; }
     const size_t sz = f.size();

@@ -14,6 +14,7 @@
 #include <math.h>
 #include "chime_westminster.h"
 #include <SD.h>
+#include "theme_sd.h"
 
 #define ES8311_ADDR   0x18
 #define SR            16000          // playback sample rate (a beep; pitch-tolerant)
@@ -230,8 +231,12 @@ static bool superseded(uint32_t myGen) {
 // quickly and a two minute chime costs no more memory than a two second one.
 static void play_file(const char *path, bool sustained) {
     if (!s_buf || !path || !*path) return;
+    // The card is shared with the main task and is not thread safe. Held for the whole
+    // stream rather than per chunk: a theme load part way through a chime would otherwise
+    // interleave reads on one file handle, which is what truncated a chime mid-phrase.
+    theme_sd::lock();
     File f = SD.open(path, FILE_READ);
-    if (!f) { Serial.printf("[audio] cannot open %s\n", path); return; }
+    if (!f) { theme_sd::unlock(); Serial.printf("[audio] cannot open %s\n", path); return; }
     const uint32_t myGen = s_gen;
     const float g = s_vol / 100.0f;
     s_sustained = sustained;
@@ -246,6 +251,7 @@ static void play_file(const char *path, bool sustained) {
     }
     s_sustained = false;
     f.close();
+    theme_sd::unlock();
 }
 
 static void play_cue(int cue) {
@@ -270,7 +276,11 @@ static void play_cue(int cue) {
         }
     } else if (cue == AUDIO_CHIME) {                // real recorded chime, whichever is selected
         const int idx = constrain(s_chimeIdx, 0, CHIME_COUNT - 1);
+        // Sustained, like a chime off the card. This was missed: the flash chimes went
+        // straight to play_pcm and an aircraft beep could truncate Westminster just as easily.
+        s_sustained = true;
         play_pcm(CHIMES[idx].pcm, CHIMES[idx].bytes);
+        s_sustained = false;
     } else if (cue == 4) {                          // preview: a specific chime, for the picker UI
         const int idx = constrain(s_previewIdx, 0, CHIME_COUNT - 1);
         play_pcm(CHIMES[idx].pcm, CHIMES[idx].bytes);
@@ -341,9 +351,14 @@ bool audio_begin() {
     // 2048, not 4096. Measured with uxTaskGetStackHighWaterMark on the device: this task
     // never came within 3,276 bytes of filling its 4 KB, i.e. it uses about 820 B. The other
     // 3 KB sat reserved in INTERNAL RAM, which is the memory the networking stack starves
-    // for — a clean boot leaves roughly 9.5 KB free in total. 2048 keeps well over double
-    // the observed peak and hands the rest back.
-    xTaskCreatePinnedToCore(audio_task, "audio", 2048, nullptr, 1, &s_taskHandle, 0);  // I2S only -> core 0
+    // for — a clean boot leaves roughly 9.5 KB free in total. 2048 was well over double the
+    // observed peak WHEN THIS TASK ONLY TOUCHED I2S.
+    //
+    // It streams chimes off the card now, and SD.open plus the FAT layer underneath it needs
+    // several kilobytes of stack on its own. 2048 was not close, and the result was exactly
+    // what a blown stack looks like from the outside: choosing a chime in Settings crashed the
+    // Orb and rebooted it. Sized for the file work now, not for a sine wave.
+    xTaskCreatePinnedToCore(audio_task, "audio", 8192, nullptr, 1, &s_taskHandle, 0);  // I2S + SD reads -> core 0
     s_ok = true;
     Serial.println("[audio] ES8311 ready");
     return true;
