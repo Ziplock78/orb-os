@@ -813,6 +813,18 @@ static inline void area_union(lv_area_t &d, const lv_area_t &s) {
 static void interp_step(void) {
 #if MOTION_INTERP
     if (!s_acLayer || s_acs.empty()) return;
+    // Positions still advance when nobody can see them; the REPAINT REQUESTS do not.
+    //
+    // That split is the lesson from the wind screen on 2026-09-04. A hidden object's
+    // invalidation is thrown away by LVGL, so asking for one costs only the asking, but the
+    // work of getting there is paid in full either way. Here that work is a bounding box per
+    // contact and a union per contact, with up to 28 of them, on a timer that runs on every
+    // screen the Orb has. Small next to the 655 ms the clock was spending, and free to stop.
+    //
+    // The position is NOT skipped, because it is state rather than drawing: it is a pure
+    // function of elapsed time, and a scope switched to mid-glide should show its aircraft
+    // where they are now, not where they were when somebody last looked.
+    const bool seen = lv_obj_is_visible(s_acLayer);
     const uint32_t now = lv_tick_get();
     float t = s_pollMs ? (float)(now - s_animStartMs) / (float)s_pollMs : 1.0f;
     if (t > 1.0f) t = 1.0f;
@@ -822,6 +834,7 @@ static void interp_step(void) {
         const lv_coord_t ny = ac.from.y + (lv_coord_t)lroundf((float)(ac.to.y - ac.from.y) * e);
         if (nx == ac.pos.x && ny == ac.pos.y) continue;
         lv_point_t np; np.x = nx; np.y = ny;
+        if (!seen) { ac.pos = np; continue; }
         lv_area_t inv = glyph_bbox(ac.pos);
         area_union(inv, glyph_bbox(np));
         ac.pos = np;
@@ -899,6 +912,19 @@ static void sweep_timer_cb(lv_timer_t *t) {
     const uint32_t nowMs = lv_tick_get();
     uint32_t dtMs = s_lastSweepMs ? (uint32_t)(nowMs - s_lastSweepMs) : (uint32_t)SWEEP_FRAME_MS;
     s_lastSweepMs = nowMs;
+    // The RAW gap, kept before the clamp below touches it, because the clamp is a safety
+    // measure and a safety measure must never be what an instrument reads.
+    //
+    // This was one number doing both jobs and the statistics block below could therefore not
+    // see a single stall: every gap longer than half a second was written down as a perfect
+    // 100 ms. It reported 60 frames in a 15 second window, which is a real gap of 250 ms
+    // each, as min/avg/max 100/102/105. The instrument said the sweep was flawless while a
+    // third of its frames were arriving half a second late.
+    //
+    // It was blind to a real fault, too. On 2026-09-04 the clock was found redrawing its
+    // whole face under the wind screen, 655 ms once a second, which is exactly the stall
+    // this clamp was erasing from the record.
+    const uint32_t rawDtMs = dtMs;
     if (dtMs > 500) dtMs = SWEEP_FRAME_MS;   // returning from a stall shouldn't teleport the sweep
     // Advance by a SMOOTHED frame time, not the raw one. Raw elapsed-time stepping keeps
     // the rotation speed exactly right, but when frame times wobble (66-100 ms on this
@@ -910,20 +936,26 @@ static void sweep_timer_cb(lv_timer_t *t) {
     // a low frame rate, it is UNEVEN steps. So measure the spread of frame times directly
     // rather than trusting the average — 12 fps that arrives every 83 ms looks smooth, and
     // 12 fps that arrives 40/120/60/140 does not, and both report the same fps.
-    {
-        static uint32_t s_jMin = 0xFFFFFFFF, s_jMax = 0, s_jAt = 0, s_jN = 0, s_jSum = 0;
-        if (dtMs < s_jMin) s_jMin = dtMs;
-        if (dtMs > s_jMax) s_jMax = dtMs;
-        s_jSum += dtMs; ++s_jN;
+    // Only while somebody can actually see it. The question this number answers is whether
+    // the sweep looks smooth, and it looks like nothing at all when the scope is not on the
+    // glass. Sampling off-screen mixed the unloaded case into the figure and flattered it.
+    if (lv_obj_is_visible(s_sweep)) {
+        static uint32_t s_jMin = 0xFFFFFFFF, s_jMax = 0, s_jAt = 0, s_jN = 0, s_jSum = 0, s_jStall = 0;
+        if (rawDtMs < s_jMin) s_jMin = rawDtMs;
+        if (rawDtMs > s_jMax) s_jMax = rawDtMs;
+        if (rawDtMs > 500) ++s_jStall;
+        s_jSum += rawDtMs; ++s_jN;
         if (lv_tick_get() - s_jAt > 15000) {
             if (s_jAt && s_jN) {
                 const uint32_t avg = s_jSum / s_jN;
-                Serial.printf("[sweep] frames=%lu dt min/avg/max=%lu/%lu/%lu ms spread=%lu ms\n",
+                // Stalls counted separately as well as included in max, because one stall and
+                // twenty read the same in a maximum and mean completely different things.
+                Serial.printf("[sweep] frames=%lu dt min/avg/max=%lu/%lu/%lu ms spread=%lu ms, %lu stalled\n",
                               (unsigned long)s_jN, (unsigned long)s_jMin,
                               (unsigned long)avg, (unsigned long)s_jMax,
-                              (unsigned long)(s_jMax - s_jMin));
+                              (unsigned long)(s_jMax - s_jMin), (unsigned long)s_jStall);
             }
-            s_jAt = lv_tick_get(); s_jMin = 0xFFFFFFFF; s_jMax = 0; s_jN = 0; s_jSum = 0;
+            s_jAt = lv_tick_get(); s_jMin = 0xFFFFFFFF; s_jMax = 0; s_jN = 0; s_jSum = 0; s_jStall = 0;
         }
     }
     if (s_emaDtMs <= 0.0f) s_emaDtMs = (float)dtMs;
