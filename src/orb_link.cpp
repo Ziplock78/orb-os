@@ -365,6 +365,14 @@ void cmd_sweepms(const char *arg) {
 // to find a network with no internet on it. Clears locSet only; coordinates, WiFi, theme
 // and every other setting are untouched. See host_location_reset() in main.cpp for why the
 // cheap version of this test matters.
+void cmd_interpms(const char *arg) {
+    const uint32_t ms = (arg && *arg) ? (uint32_t)atol(arg) : 0;
+    radar::setAcInterpMs(ms);
+    out_reset();
+    out_fmt("{\"ok\":true,\"interpMs\":%lu}", (unsigned long)ms);
+    out_send();
+}
+
 void cmd_locreset() {
     host_location_reset();
     out_reset();
@@ -643,6 +651,7 @@ void dispatch(char *line) {
     else if (!strcmp(line, "wifisaved")) cmd_wifisaved();
     else if (!strcmp(line, "wifirestore")) cmd_wifirestore();
     else if (!strcmp(line, "sweepms"))   cmd_sweepms(arg);
+    else if (!strcmp(line, "interpms")) cmd_interpms(arg);
     else if (!strcmp(line, "get-begin")) cmd_get_begin(arg);
     else if (!strcmp(line, "get-data"))  cmd_get_data();
     else if (!strcmp(line, "put-begin")) cmd_put_begin(arg);

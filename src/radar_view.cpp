@@ -143,6 +143,10 @@ static struct { void printf(const char *fmt, ...) const { va_list a; va_start(a,
 // rate is doing. A frame counter would have made this drift with the very thing it is
 // meant to stabilise.
 #define AC_INTERP_MS      2000
+// Overridable over the cable (?orb interpms), so the cost of a faster glide can be measured
+// by sweeping the value on a running Orb rather than reflashing once per trial. Zero means
+// use AC_INTERP_MS. Deliberately not persisted: it is an instrument, not a setting.
+static uint32_t s_acInterpMs = 0;
 #define TRAIL_MAX         7
 #define TAP_RADIUS_PX     40    // generous finger-tap catch radius (picks the nearest glyph within it)
 #define FLOW_MAX          240   // see setTrailLength: repaint cost is ~300 us per segment
@@ -852,7 +856,8 @@ static void sweep_timer_cb(lv_timer_t *t) {
     {   // aircraft glyph motion, throttled: see AC_INTERP_MS for why this is slow on purpose
         static uint32_t s_lastInterpMs = 0;
         const uint32_t nowIms = lv_tick_get();
-        if (!s_lastInterpMs || (uint32_t)(nowIms - s_lastInterpMs) >= AC_INTERP_MS) {
+        const uint32_t gate = s_acInterpMs ? s_acInterpMs : (uint32_t)AC_INTERP_MS;
+        if (!s_lastInterpMs || (uint32_t)(nowIms - s_lastInterpMs) >= gate) {
             s_lastInterpMs = nowIms;
             interp_step();
         }
@@ -939,7 +944,13 @@ static void sweep_timer_cb(lv_timer_t *t) {
     // Only while somebody can actually see it. The question this number answers is whether
     // the sweep looks smooth, and it looks like nothing at all when the scope is not on the
     // glass. Sampling off-screen mixed the unloaded case into the figure and flattered it.
-    if (lv_obj_is_visible(s_sweep)) {
+    // Whichever sweep object this theme actually shows. A design with an image sweep hand
+    // HIDES s_sweep and shows s_sweepImg in its place, so testing s_sweep alone reported
+    // "not visible" on every such theme and the statistics never printed at all. Caught on
+    // the Steam Punk face within minutes of shipping it, which is the argument for reading
+    // the visible object rather than the one that happens to be first in the file.
+    lv_obj_t *shown = (customStyled() && theme_style::radar().sweepTypeImage) ? s_sweepImg : s_sweep;
+    if (shown && lv_obj_is_visible(shown)) {
         static uint32_t s_jMin = 0xFFFFFFFF, s_jMax = 0, s_jAt = 0, s_jN = 0, s_jSum = 0, s_jStall = 0;
         if (rawDtMs < s_jMin) s_jMin = rawDtMs;
         if (rawDtMs > s_jMax) s_jMax = rawDtMs;
@@ -3006,6 +3017,15 @@ void setSweepFrameMs(uint32_t ms) {
     s_lastSweepMs = 0;
     s_emaDtMs = 0.0f;
     Serial.printf("[sweep] frame period -> %lu ms\n", (unsigned long)use);
+}
+
+// How often aircraft glyphs are allowed to move, live, for measuring what a faster glide
+// costs. Zero restores AC_INTERP_MS. An instrument, not a setting: nothing persists it, so a
+// reboot puts the product decision back.
+void setAcInterpMs(uint32_t ms) {
+    s_acInterpMs = ms;
+    Serial.printf("[radar] glide cadence -> %lu ms%s\n",
+                  (unsigned long)(ms ? ms : (uint32_t)AC_INTERP_MS), ms ? "" : " (default)");
 }
 
 void noteSelectionDetailArrived() {

@@ -110,6 +110,9 @@ void noteSelectionDetailArrived();
 // through candidate values without a reflash each time turns a 6-minute experiment into a
 // 90-second one. 0 restores the compiled default.
 void setSweepFrameMs(uint32_t ms);
+// Live override for the aircraft glide cadence, in ms; 0 restores the compiled default.
+// For measuring what a faster glide costs without a flash per trial. Never persisted.
+void setAcInterpMs(uint32_t ms);
 
 // Tell the scope whether the WiFi is up and how long since the last aircraft. It shows a
 // small banner naming the actual culprit once a gap is real (45 s), because a blank scope
