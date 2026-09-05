@@ -147,6 +147,9 @@ static struct { void printf(const char *fmt, ...) const { va_list a; va_start(a,
 // by sweeping the value on a running Orb rather than reflashing once per trial. Zero means
 // use AC_INTERP_MS. Deliberately not persisted: it is an instrument, not a setting.
 static uint32_t s_acInterpMs = 0;
+// -1 auto (custom designs snap, built-ins glide), 0 force snap, 1 force glide. Never
+// persisted: an instrument, not a setting.
+static int s_forceGlide = -1;
 #define TRAIL_MAX         7
 #define TAP_RADIUS_PX     40    // generous finger-tap catch radius (picks the nearest glyph within it)
 #define FLOW_MAX          240   // see setTrailLength: repaint cost is ~300 us per segment
@@ -830,6 +833,7 @@ static void interp_step(void) {
     // where they are now, not where they were when somebody last looked.
     const bool seen = lv_obj_is_visible(s_acLayer);
     const uint32_t now = lv_tick_get();
+    int moved = 0; long pixels = 0;
     float t = s_pollMs ? (float)(now - s_animStartMs) / (float)s_pollMs : 1.0f;
     if (t > 1.0f) t = 1.0f;
     // LINEAR, not eased. An ease-out is right for a thing arriving somewhere and stopping;
@@ -843,6 +847,8 @@ static void interp_step(void) {
         const lv_coord_t nx = ac.from.x + (lv_coord_t)lroundf((float)(ac.to.x - ac.from.x) * e);
         const lv_coord_t ny = ac.from.y + (lv_coord_t)lroundf((float)(ac.to.y - ac.from.y) * e);
         if (nx == ac.pos.x && ny == ac.pos.y) continue;
+        ++moved;
+        pixels += labs((long)nx - ac.pos.x) + labs((long)ny - ac.pos.y);
         lv_point_t np; np.x = nx; np.y = ny;
         if (!seen) { ac.pos = np; continue; }
         lv_area_t inv = glyph_bbox(ac.pos);
@@ -850,6 +856,20 @@ static void interp_step(void) {
         ac.pos = np;
         lv_obj_invalidate_area(s_acLayer, &inv);
     }
+#ifdef ARDUINO
+    // What the glyphs ACTUALLY did, so the question "does it look smooth" can be answered
+    // from here instead of by asking. Many small moves is a glide; one large move every ten
+    // seconds and nothing in between is a snap.
+    if (seen) {
+        static uint32_t at = 0; static int steps = 0, movers = 0; static long px = 0;
+        ++steps; movers += moved; px += pixels;
+        if (now - at > 5000) {
+            if (at) Serial.printf("[glide] %d steps in %lu ms, %d glyph moves, %ld px total\n",
+                                  steps, (unsigned long)(now - at), movers, px);
+            at = now; steps = 0; movers = 0; px = 0;
+        }
+    }
+#endif
 #endif
 }
 
@@ -2362,8 +2382,16 @@ void update(const std::vector<Aircraft> &aircraft, const RadarSettings &s) {
         // expensive recomposite. Snap straight to the polled position instead of
         // gliding — one redraw per ~2s poll rather than ~22 in between — since a
         // custom design already trades continuous smoothness for that heavier look.
-        if (customStyled()) { d.pos = target; d.from = target; }
-        else                 d.pos = d.from;   // begin the glide at the previous position
+        // Overridable over the cable (?orb glide 1) so the claim above can be TESTED on a
+        // real custom theme rather than trusted. It is a performance claim about a code path
+        // that this same branch then disables, which means nothing has ever measured it on
+        // the hardware it describes. Worse, an attempt to measure it on 2026-09-04 by
+        // sweeping ?orb interpms found "no cost at all" on a Steam Punk face, which was true
+        // and meaningless: with from and to equal there was no glide to cost anything. The
+        // instrument was reading a code path the theme never enters.
+        const bool snap = (s_forceGlide < 0) ? customStyled() : (s_forceGlide == 0);
+        if (snap) { d.pos = target; d.from = target; }
+        else       d.pos = d.from;   // begin the glide at the previous position
 #else
         d.pos = target;
         d.from = target;
@@ -3046,6 +3074,14 @@ void setAcInterpMs(uint32_t ms) {
     s_acInterpMs = ms;
     Serial.printf("[radar] glide cadence -> %lu ms%s\n",
                   (unsigned long)(ms ? ms : (uint32_t)AC_INTERP_MS), ms ? "" : " (default)");
+}
+
+// Force the glide on or off regardless of the theme, for measuring what it costs on a
+// custom design. -1 restores the compiled behaviour.
+void setGlide(int mode) {
+    s_forceGlide = mode;
+    Serial.printf("[radar] glide -> %s\n",
+                  mode < 0 ? "auto (custom designs snap)" : (mode ? "forced on" : "forced off"));
 }
 
 void noteSelectionDetailArrived() {

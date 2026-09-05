@@ -373,6 +373,14 @@ void cmd_interpms(const char *arg) {
     out_send();
 }
 
+void cmd_glide(const char *arg) {
+    const int mode = (arg && *arg) ? atoi(arg) : -1;
+    radar::setGlide(mode);
+    out_reset();
+    out_fmt("{\"ok\":true,\"glide\":%d}", mode);
+    out_send();
+}
+
 void cmd_locreset() {
     host_location_reset();
     out_reset();
@@ -652,6 +660,7 @@ void dispatch(char *line) {
     else if (!strcmp(line, "wifirestore")) cmd_wifirestore();
     else if (!strcmp(line, "sweepms"))   cmd_sweepms(arg);
     else if (!strcmp(line, "interpms")) cmd_interpms(arg);
+    else if (!strcmp(line, "glide"))    cmd_glide(arg);
     else if (!strcmp(line, "get-begin")) cmd_get_begin(arg);
     else if (!strcmp(line, "get-data"))  cmd_get_data();
     else if (!strcmp(line, "put-begin")) cmd_put_begin(arg);
