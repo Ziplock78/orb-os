@@ -142,7 +142,16 @@ static struct { void printf(const char *fmt, ...) const { va_list a; va_start(a,
 // Time-gated rather than counted in frames, so the cadence stays 2 s whatever the frame
 // rate is doing. A frame counter would have made this drift with the very thing it is
 // meant to stabilise.
-#define AC_INTERP_MS      2000
+// Matched to how far a glyph actually travels, which is the only thing that decides how
+// many steps are worth taking. An aircraft crosses about 30 px of a 30 km scope between
+// polls ten seconds apart, so 250 ms gives about forty steps for thirty pixels of travel:
+// slightly more than one step per pixel, and anything faster is work that cannot change a
+// single pixel on the glass.
+//
+// It was 2000, which is five steps across a whole poll, and that was chosen to protect a
+// frame budget. The A/B above says the budget was never at risk: 80 ms and 2000 ms both
+// held 9 fps, because the steps are one pixel each whatever their cadence.
+#define AC_INTERP_MS      250
 // Overridable over the cable (?orb interpms), so the cost of a faster glide can be measured
 // by sweeping the value on a running Orb rather than reflashing once per trial. Zero means
 // use AC_INTERP_MS. Deliberately not persisted: it is an instrument, not a setting.
@@ -2376,12 +2385,25 @@ void update(const std::vector<Aircraft> &aircraft, const RadarSettings &s) {
             } else d.from = target;                                                  // new contact: appear in place
         }
 #if MOTION_INTERP
-        // A custom design's plate/overlay/text-canvas layers are all PSRAM-backed
-        // alpha-composited images (unlike the built-in themes' plain vector draws),
-        // so every ~90ms interpolation step's invalidation forces a much more
-        // expensive recomposite. Snap straight to the polled position instead of
-        // gliding — one redraw per ~2s poll rather than ~22 in between — since a
-        // custom design already trades continuous smoothness for that heavier look.
+        // Custom designs GLIDE too, as of 2.9.5, and the comment that used to sit here was
+        // wrong. It argued that a custom design's PSRAM-backed alpha-composited layers make
+        // each interpolation step's invalidation far more expensive, so aircraft should snap
+        // to each polled position instead of gliding through it.
+        //
+        // Measured on Zion's Steam Punk face, A/B over 40 seconds each, with a counter
+        // watching what the glyphs actually did:
+        //
+        //   snapping:  49 steps per 5 s,  0 glyph moves,  0 px    9 fps
+        //   gliding:   49 steps per 5 s, 29 glyph moves, 30 px    9 fps
+        //
+        // Identical frame rate, no stalls either way, and the sweep's own spread figure
+        // showed no difference outside its noise. The claim assumed roughly 22 expensive
+        // recomposites between polls. What actually happens is about 29 moves of ONE PIXEL
+        // spread over five seconds, because an aircraft only crosses about 30 px of a 30 km
+        // scope in a whole poll. Tiny invalidation boxes, and the cost went with them.
+        //
+        // The line that follows this comment is why nobody had ever measured it: it disabled
+        // the code path the claim was about, so there was nothing running to be expensive.
         // Overridable over the cable (?orb glide 1) so the claim above can be TESTED on a
         // real custom theme rather than trusted. It is a performance claim about a code path
         // that this same branch then disables, which means nothing has ever measured it on
@@ -2389,7 +2411,7 @@ void update(const std::vector<Aircraft> &aircraft, const RadarSettings &s) {
         // sweeping ?orb interpms found "no cost at all" on a Steam Punk face, which was true
         // and meaningless: with from and to equal there was no glide to cost anything. The
         // instrument was reading a code path the theme never enters.
-        const bool snap = (s_forceGlide < 0) ? customStyled() : (s_forceGlide == 0);
+        const bool snap = (s_forceGlide < 0) ? false : (s_forceGlide == 0);
         if (snap) { d.pos = target; d.from = target; }
         else       d.pos = d.from;   // begin the glide at the previous position
 #else
