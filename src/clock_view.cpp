@@ -1385,18 +1385,12 @@ static void sweep_frame(float secs) {
     s_prevAng = ang;
     // From here on, every layer is confined to exactly what was wiped.
     s_runLo = runLo; s_runHi = runHi;
-#if defined(ESP_PLATFORM)
-    const uint32_t tRestore = micros();
-#endif
     CustomSprite spr = custom_hand(2);
     if (cs.shadowOn) {
         CustomSprite sh = custom_shadow(2);
         if (sh.data) blend_shadow(sh.data, sh.w, sh.h, hd.pivotX, hd.pivotY,
                                   (float)(hd.centerX + cs.shadowDX), (float)(hd.centerY + cs.shadowDY), ang);
     }
-#if defined(ESP_PLATFORM)
-    const uint32_t tShadow = micros();
-#endif
     if (spr.data) blend_custom_hand(spr.data, spr.w, spr.h, hd.pivotX, hd.pivotY,
                                     (float)hd.centerX, (float)hd.centerY, ang, hd.blend);
 
@@ -1435,9 +1429,6 @@ static void sweep_frame(float secs) {
             }
         }
     }
-#if defined(ESP_PLATFORM)
-    const uint32_t tHand = micros();
-#endif
     if (const uint8_t *overlay = custom_overlay()) {
         for (int dy = s_clipY0; dy <= s_clipY1; ++dy) {
             const int base = dy * SCREEN_W;
@@ -1454,9 +1445,6 @@ static void sweep_frame(float secs) {
             }
         }
     }
-#if defined(ESP_PLATFORM)
-    const uint32_t tOver = micros();
-#endif
     clip_reset();
     // The box only. Invalidating the whole canvas would hand back every pixel this exists to
     // avoid touching.
@@ -1477,27 +1465,6 @@ static void sweep_frame(float secs) {
         if (s_tick && want != s_tickPeriod) {
             s_tickPeriod = want;
             lv_timer_set_period(s_tick, want);
-        }
-    }
-#endif
-#if defined(ESP_PLATFORM)
-    {
-        static uint32_t at = 0, n = 0, us = 0, px = 0, worst = 0, rs = 0, sd = 0, hd2 = 0, ov = 0;
-        const uint32_t took = micros() - t0;
-        ++n; us += took; px += (uint32_t)(box.x2 - box.x1 + 1) * (uint32_t)(box.y2 - box.y1 + 1);
-        rs += tRestore - t0; sd += tShadow - tRestore; hd2 += tHand - tShadow; ov += tOver - tHand;
-        if (took > worst) worst = took;
-        const uint32_t now = millis();
-        if (now - at > 10000) {
-            if (at && n) Serial.printf("[sweep2] %lu frames in %lu ms (%lu fps): %lu us avg, %lu worst, %lu%% of the dial"
-                                       " | restore %lu, shadow %lu, hand %lu, glass %lu\n",
-                                       (unsigned long)n, (unsigned long)(now - at),
-                                       (unsigned long)(n * 1000UL / (now - at)),
-                                       (unsigned long)(us / n), (unsigned long)worst,
-                                       (unsigned long)(px / n * 100UL / ((uint32_t)SCREEN_W * SCREEN_H)),
-                                       (unsigned long)(rs / n), (unsigned long)(sd / n),
-                                       (unsigned long)(hd2 / n), (unsigned long)(ov / n));
-            at = now; n = 0; us = 0; px = 0; worst = 0; rs = 0; sd = 0; hd2 = 0; ov = 0;
         }
     }
 #endif
