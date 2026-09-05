@@ -335,7 +335,7 @@ namespace theme_style {
 //      made it a design and 42 gave it type; this is the rest of what a screen has. An Orb
 //      below this level draws no picture and no crank, and shows the gauge and all three
 //      lines whatever the design says.
-constexpr int THEME_CAPS = 46;
+constexpr int THEME_CAPS = 47;
 
 struct ClockText {
     bool     show   = false;
@@ -407,6 +407,17 @@ struct Clock {
     // the device nothing at all and the runtime work is one ordinary rotate-and-blend.
     bool      shadowOn = false;
     int       shadowDX = 0, shadowDY = 0;     // px, screen space, applied to every hand
+    // A second hand that sweeps instead of ticking. THEME_CAPS 47.
+    //
+    // Off by default, because a tick is what most clocks do and what every theme written
+    // before this expects. Zion asked for the choice per design: "most of the time i'll want
+    // the second hand to only move every second, but there might be some clocks, like the
+    // modern theme where i'd love it to move perfectly smooth, like some clocks do."
+    //
+    // It is not free and it is not always possible; see clock_view's sweep_possible(). A
+    // design that draws anything above its second hand other than the glass falls back to
+    // ticking rather than drawing the layers in the wrong order.
+    bool      secondSweep = false;
     // THEME_CAPS 38. A virtual mainspring: the clock runs down and has to be wound with the
     // knob. See clock_wind.h for why it exists and what it refuses to do. Off unless a
     // design asks, because a stopped clock reads as a broken one to anybody who did not

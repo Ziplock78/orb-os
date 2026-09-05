@@ -29,6 +29,7 @@ static void  heap_caps_free(void *p) { free(p); }
 #endif
 #include <lvgl.h>
 #include <time.h>
+#include <sys/time.h>   // gettimeofday: the sweeping hand needs the fraction of a second
 #include <math.h>
 #include <string.h>
 #include <ctype.h>
@@ -735,17 +736,62 @@ static void draw_baked_arc_text(const lv_font_t *font, const char *fmt, float R,
 // This samples alpha only, nearest-neighbour, and mixes one constant colour. A blurred
 // silhouette has no detail for bilinear to preserve, so nothing is lost, and it costs
 // roughly a third of the full path.
+// The box everything on this dial is allowed to touch.
+//
+// Full screen except while a smooth second hand is sweeping, when only the hand's own
+// rectangle is repainted. Every full-screen pass on this face costs real time — the plate
+// copy is 28.7 ms and the overlay 26.1 — and both scale straight down with the area, so a
+// hand covering a quarter of the dial costs a quarter of them.
+//
+// A file-static rather than a parameter on nine functions: it is the same box for every
+// layer in one pass, and threading it through by hand is how one helper ends up drawing
+// outside it and smearing the frame.
+static int s_clipX0 = 0, s_clipY0 = 0, s_clipX1 = SCREEN_W - 1, s_clipY1 = SCREEN_H - 1;
+static inline void clip_reset() { s_clipX0 = 0; s_clipY0 = 0; s_clipX1 = SCREEN_W - 1; s_clipY1 = SCREEN_H - 1; }
+
+// The run of dx, within one row, whose source coordinates land inside the sprite.
+//
+// Both rotating blits need this and only one of them had it. blend_custom_hand got the
+// treatment first and went from 234 ms to 16; blend_shadow kept sweeping the whole square,
+// and on a design with shadows switched on it then cost more than every hand put together —
+// 38 ms of a 57 ms sweep frame, for one hand's shadow. Shared now, so they cannot diverge
+// again.
+//
+// sxf and syf are linear in dx within a row, so each axis clips the run to an interval and
+// the answer is the intersection. Callers keep their own per-pixel guard: this narrows the
+// loop, it does not decide what is drawn.
+static inline void row_span(float a, float b, float L, float &lo, float &hi, bool &dead) {
+    if (fabsf(a) < 1e-6f) { if (b < 0.0f || b > L) dead = true; return; }
+    float t0 = (0.0f - b) / a, t1 = (L - b) / a;
+    if (t0 > t1) { const float t = t0; t0 = t1; t1 = t; }
+    if (t0 > lo) lo = t0;
+    if (t1 < hi) hi = t1;
+}
+
 static void blend_shadow(const uint8_t *src, int sw, int sh, int pivotX, int pivotY,
                          float cx, float cy, float angleDeg) {
     if (!src || !s_buf) return;
     const float th = angleDeg * DEG2RAD, ct = cosf(th), st = sinf(th);
     const float reach = sqrtf(fmaxf((float)pivotX, (float)(sw - pivotX)) * fmaxf((float)pivotX, (float)(sw - pivotX))
                             + fmaxf((float)pivotY, (float)(sh - pivotY)) * fmaxf((float)pivotY, (float)(sh - pivotY)));
-    const int x0 = (int)fmaxf(0.0f, cx - reach), x1 = (int)fminf((float)SCREEN_W - 1, cx + reach);
-    const int y0 = (int)fmaxf(0.0f, cy - reach), y1 = (int)fminf((float)SCREEN_H - 1, cy + reach);
+    int x0 = (int)fmaxf(0.0f, cx - reach), x1 = (int)fminf((float)SCREEN_W - 1, cx + reach);
+    int y0 = (int)fmaxf(0.0f, cy - reach), y1 = (int)fminf((float)SCREEN_H - 1, cy + reach);
+    if (x0 < s_clipX0) x0 = s_clipX0;
+    if (y0 < s_clipY0) y0 = s_clipY0;
+    if (x1 > s_clipX1) x1 = s_clipX1;
+    if (y1 > s_clipY1) y1 = s_clipY1;
     for (int dy = y0; dy <= y1; ++dy) {
         const float oy = dy - cy;
-        for (int dx = x0; dx <= x1; ++dx) {
+        const float ax = oy * st + pivotX, ay = oy * ct + pivotY;
+        float uLo = (float)(x0 - cx), uHi = (float)(x1 - cx);
+        bool dead = false;
+        row_span(ct,  ax, (float)(sw - 1), uLo, uHi, dead);
+        row_span(-st, ay, (float)(sh - 1), uLo, uHi, dead);
+        if (dead || uHi < uLo) continue;
+        int rx0 = (int)floorf(cx + uLo) - 1, rx1 = (int)ceilf(cx + uHi) + 1;
+        if (rx0 < x0) rx0 = x0;
+        if (rx1 > x1) rx1 = x1;
+        for (int dx = rx0; dx <= rx1; ++dx) {
             const float ox = dx - cx;
             const int sx = (int)(ox * ct + oy * st + pivotX);
             const int sy = (int)(-ox * st + oy * ct + pivotY);
@@ -773,9 +819,13 @@ static void blend_shadow(const uint8_t *src, int sw, int sh, int pivotX, int piv
 static void blit_upright(const uint8_t *src, int sw, int sh, int pivotX, int pivotY,
                          int cx, int cy, int blend) {
     const int offX = cx - pivotX, offY = cy - pivotY;
-    const int x0 = offX < 0 ? 0 : offX, y0 = offY < 0 ? 0 : offY;
-    const int x1 = (offX + sw < SCREEN_W ? offX + sw : SCREEN_W);
-    const int y1 = (offY + sh < SCREEN_H ? offY + sh : SCREEN_H);
+    int x0 = offX < 0 ? 0 : offX, y0 = offY < 0 ? 0 : offY;
+    int x1 = (offX + sw < SCREEN_W ? offX + sw : SCREEN_W);
+    int y1 = (offY + sh < SCREEN_H ? offY + sh : SCREEN_H);
+    if (x0 < s_clipX0) x0 = s_clipX0;
+    if (y0 < s_clipY0) y0 = s_clipY0;
+    if (x1 > s_clipX1 + 1) x1 = s_clipX1 + 1;
+    if (y1 > s_clipY1 + 1) y1 = s_clipY1 + 1;
     for (int dy = y0; dy < y1; ++dy) {
         const uint8_t *row = src + ((size_t)(dy - offY) * sw) * 3;
         lv_color_t *dstRow = &s_buf[dy * SCREEN_W];
@@ -809,8 +859,12 @@ static void blend_custom_hand(const uint8_t *src, int sw, int sh, int pivotX, in
     const float th = angleDeg * DEG2RAD, ct = cosf(th), st = sinf(th);
     const float reach = sqrtf(fmaxf((float)pivotX, (float)(sw - pivotX)) * fmaxf((float)pivotX, (float)(sw - pivotX))
                             + fmaxf((float)pivotY, (float)(sh - pivotY)) * fmaxf((float)pivotY, (float)(sh - pivotY)));
-    const int x0 = (int)fmaxf(0.0f, cx - reach), x1 = (int)fminf((float)SCREEN_W - 1, cx + reach);
-    const int y0 = (int)fmaxf(0.0f, cy - reach), y1 = (int)fminf((float)SCREEN_H - 1, cy + reach);
+    int x0 = (int)fmaxf(0.0f, cx - reach), x1 = (int)fminf((float)SCREEN_W - 1, cx + reach);
+    int y0 = (int)fmaxf(0.0f, cy - reach), y1 = (int)fminf((float)SCREEN_H - 1, cy + reach);
+    if (x0 < s_clipX0) x0 = s_clipX0;
+    if (y0 < s_clipY0) y0 = s_clipY0;
+    if (x1 > s_clipX1) x1 = s_clipX1;
+    if (y1 > s_clipY1) y1 = s_clipY1;
     // ONLY THE PIXELS THE HAND ACTUALLY LANDS ON.
     //
     // The box above is a square as wide as the hand's whole swing, because `reach` is the
@@ -834,18 +888,8 @@ static void blend_custom_hand(const uint8_t *src, int sw, int sh, int pivotX, in
         const float ax = oy * st + pivotX, ay = oy * ct + pivotY;
         float uLo = (float)(x0 - cx), uHi = (float)(x1 - cx);
         bool empty = false;
-        // Each axis clips the run. a is the slope, b the offset, L the inclusive ceiling.
-        struct Clip {
-            static void apply(float a, float b, float L, float &lo, float &hi, bool &dead) {
-                if (fabsf(a) < 1e-6f) { if (b < 0.0f || b > L) dead = true; return; }
-                float t0 = (0.0f - b) / a, t1 = (L - b) / a;
-                if (t0 > t1) { const float sw2 = t0; t0 = t1; t1 = sw2; }
-                if (t0 > lo) lo = t0;
-                if (t1 < hi) hi = t1;
-            }
-        };
-        Clip::apply(ct,  ax, lx, uLo, uHi, empty);
-        Clip::apply(-st, ay, ly, uLo, uHi, empty);
+        row_span(ct,  ax, lx, uLo, uHi, empty);
+        row_span(-st, ay, ly, uLo, uHi, empty);
         if (empty || uHi < uLo) continue;
         // One pixel of slack each way, because the bounds above are on the sampled point and
         // the guard below tests the texel pair around it.
@@ -949,28 +993,13 @@ static void blit_plate_rot_slow(const uint16_t *src, float angleDeg) {
     }
 }
 
-// Where a second of clock actually goes.
+// Compose the dial.
 //
-// draw_custom rebuilds the ENTIRE dial every tick, and on the Steam Punk face that was
-// measured at 655 ms while hunting the wind screen's freeze. A sweeping second hand needs
-// something like thirty of these a second, so nothing about smoothness can be designed until
-// it is known which of the five phases owns that number. Guessing has been wrong every time
-// it was tried this week.
-//
-// Five micros() calls a second, printed once every ten. Costs nothing and settles it.
-#ifdef ARDUINO
-static uint32_t s_ph[5] = { 0, 0, 0, 0, 0 };
-static uint32_t s_phN = 0, s_phAt = 0;
-#define PH_MARK(i) do { const uint32_t _n = micros(); s_ph[i] += _n - _t; _t = _n; } while (0)
-#else
-#define PH_MARK(i) do { } while (0)
-#endif
-
-static void draw_custom(const struct tm *ti) {
-#ifdef ARDUINO
-    uint32_t _t = micros();
-    const uint32_t _t0 = _t;
-#endif
+// Two flags, and both exist for the smooth second hand. `skipSecond` leaves the sweeping
+// hand out, which is what makes a cached face possible: everything that only changes once a
+// minute is composited once and kept. `withOverlay` leaves the glass off, because the
+// overlay has to go back on TOP of the second hand and so cannot be baked into that cache.
+static void compose_custom(const struct tm *ti, bool skipSecond, bool withOverlay) {
     // Decode the plate first: it's the whole visible dial and the largest buffer,
     // so it gets first claim on PSRAM. (Text is now a baked font, not a giant
     // atlas, so the old "overlay first" ordering is no longer needed.) The overlay
@@ -988,7 +1017,6 @@ static void draw_custom(const struct tm *ti) {
         else memcpy(s_buf, plate, (size_t)SCREEN_W * SCREEN_H * sizeof(lv_color_t));
     }
     else lv_canvas_fill_bg(s_canvas, lv_color_hex(theme_style::clock().bg), LV_OPA_COVER);
-    PH_MARK(0);   // the plate: a 434 KB copy out of PSRAM, or a rotation of one
 
     // Live text banners in the design's real baked font (+ firmware glow). A curved banner
     // arcs along the rim instead of sitting on a straight baseline.
@@ -1018,7 +1046,6 @@ static void draw_custom(const struct tm *ti) {
         }
     };
     if (!theme_style::clock().textOverHands) draw_banners();
-    PH_MARK(1);   // banners drawn under the hands
 
     // kind 3/4 = the two static image layers — same pivot/center/blend metadata as
     // a hand, just always angle 0 (they never rotate, see custom_sprite.cpp).
@@ -1039,6 +1066,7 @@ static void draw_custom(const struct tm *ti) {
         for (int i = 0; i < cs.orderN; ++i) {
             const int k = cs.order[i];
             if (k < 0 || k > 2) continue;              // statics do not cast; they are the face
+            if (skipSecond && k == 2) continue;
             const theme_style::Hand &hd = cs.hand[k];
             if (!hd.show) continue;
             CustomSprite sh = custom_shadow(k);
@@ -1077,10 +1105,10 @@ static void draw_custom(const struct tm *ti) {
                                       (float)(hd.centerY + cs.shadowDY), ang[k]);
         }
     }
-    PH_MARK(2);   // every shadow: a rotated alpha blend each
     for (int i = 0; i < cs.orderN; ++i) {
         const int k = cs.order[i];
         if (k < 0 || k > 4) continue;
+        if (skipSecond && k == 2) continue;
         const theme_style::Hand &hd = cs.hand[k];
         if (!hd.show) continue;
         CustomSprite spr = custom_hand(k);
@@ -1088,34 +1116,219 @@ static void draw_custom(const struct tm *ti) {
                                         (float)hd.centerX, (float)hd.centerY, ang[k], hd.blend);
     }
     if (cs.textOverHands) draw_banners();
-    PH_MARK(3);   // every hand, plus banners that sit over them
 
-    if (overlay) {
-        for (int i = 0; i < SCREEN_W * SCREEN_H; ++i) {
-            const uint8_t a = overlay[i * 3 + 2];
-            if (!a) continue;
-            lv_color_t sc; sc.full = (uint16_t)(overlay[i * 3] | (overlay[i * 3 + 1] << 8));
-            s_buf[i] = lv_color_mix(sc, s_buf[i], a);
+    // Row by row and inside the clip, so a sweeping hand pays for its own box rather than
+    // all 217,156 pixels. Full screen this is 26 ms, the second largest cost on the dial.
+    if (overlay && withOverlay) {
+        for (int dy = s_clipY0; dy <= s_clipY1; ++dy) {
+            const int base = dy * SCREEN_W;
+            for (int dx = s_clipX0; dx <= s_clipX1; ++dx) {
+                const int i = base + dx;
+                const uint8_t a = overlay[i * 3 + 2];
+                if (!a) continue;
+                lv_color_t sc; sc.full = (uint16_t)(overlay[i * 3] | (overlay[i * 3 + 1] << 8));
+                s_buf[i] = lv_color_mix(sc, s_buf[i], a);
+            }
         }
     }
-    PH_MARK(4);   // the overlay: 217,156 pixels, mixed one at a time, every single tick
-#ifdef ARDUINO
-    ++s_phN;
-    if (millis() - s_phAt > 10000) {
-        if (s_phAt && s_phN) {
-            Serial.printf("[face] %lu draws, avg %lu us: plate %lu, banners %lu, shadows %lu, "
-                          "hands %lu, overlay %lu\n",
-                          (unsigned long)s_phN,
-                          (unsigned long)((s_ph[0] + s_ph[1] + s_ph[2] + s_ph[3] + s_ph[4]) / s_phN),
-                          (unsigned long)(s_ph[0] / s_phN), (unsigned long)(s_ph[1] / s_phN),
-                          (unsigned long)(s_ph[2] / s_phN), (unsigned long)(s_ph[3] / s_phN),
-                          (unsigned long)(s_ph[4] / s_phN));
-        }
-        s_phAt = millis(); s_phN = 0;
-        for (int i = 0; i < 5; ++i) s_ph[i] = 0;
+}
+
+static void draw_custom(const struct tm *ti) { compose_custom(ti, false, true); }
+
+// ---- the smooth second hand -------------------------------------------------
+//
+// The dial without its second hand and without its glass, kept between frames. Everything in
+// it changes at most once a minute, so it is composed once and then only the sweeping hand's
+// own rectangle is rebuilt: copy that box back out of here, blend the hand into it, put the
+// glass over it, and invalidate nothing else.
+//
+// Measured, which is why it is built this way. A full custom redraw is 72 ms, and 55 of those
+// are the two full-screen passes: 28.7 ms copying the plate and 26.1 ms mixing the overlay
+// across 217,156 pixels. Both scale with area, so a hand covering a quarter of the dial costs
+// a quarter of each, and a sweep becomes affordable rather than impossible.
+static lv_color_t *s_under = nullptr;
+static int  s_underMin = -1, s_underHr = -1;   // what minute this cache is of
+static bool s_prevSecValid = false;
+static lv_area_t s_prevSec = { 0, 0, 0, 0 };
+
+// Can this design sweep at all?
+//
+// The cache holds everything BELOW the hand, so anything a theme draws ABOVE it — a static
+// layer ordered on top, or banners set to sit over the hands — would be composited under the
+// sweeping hand and come out in the wrong order. Rather than draw it wrongly, such a design
+// keeps its tick. The glass is the one exception, because it is re-applied per frame.
+// -1 auto (the theme decides), 0 force tick, 1 force sweep. Never persisted: an instrument
+// for proving this on the glass before any theme carries the flag.
+static int s_forceSweep = -1;
+
+static bool sweep_possible() {
+    const theme_style::Clock &cs = theme_style::clock();
+    if (s_forceSweep == 0) return false;
+    if (s_forceSweep < 0 && !cs.secondSweep) return false;
+    if (s_face != FACE_CUSTOM) return false;          // the drawn faces have their own painters
+    if (!cs.hand[2].show) return false;
+    if (cs.textOverHands && (cs.text1.show || cs.text2.show)) return false;
+    // Nothing shown may come after the second hand in the back-to-front order.
+    bool seenSecond = false;
+    for (int i = 0; i < cs.orderN; ++i) {
+        const int k = cs.order[i];
+        if (k < 0 || k > 4) continue;
+        if (k == 2) { seenSecond = true; continue; }
+        if (seenSecond && cs.hand[k].show) return false;
     }
-    (void)_t0;
+    return seenSecond;
+}
+
+// The box the second hand can reach at this angle, padded by a pixel for the bilinear tap.
+static lv_area_t second_box(float angDeg) {
+    const theme_style::Hand &hd = theme_style::clock().hand[2];
+    CustomSprite spr = custom_hand(2);
+    const int sw = spr.data ? spr.w : 0, sh = spr.data ? spr.h : 0;
+    const float px = (float)hd.pivotX, py = (float)hd.pivotY;
+    const float th = angDeg * DEG2RAD, ct = cosf(th), st = sinf(th);
+    // The four corners of the sprite, turned about the pivot. A rectangle, not a disc: the
+    // whole point of the box is that it is smaller than the swing.
+    const float xs[4] = { -px, sw - px, sw - px, -px };
+    const float ys[4] = { -py, -py, sh - py, sh - py };
+    float lo_x = 1e9f, hi_x = -1e9f, lo_y = 1e9f, hi_y = -1e9f;
+    for (int i = 0; i < 4; ++i) {
+        const float rx = xs[i] * ct - ys[i] * st + (float)hd.centerX;
+        const float ry = xs[i] * st + ys[i] * ct + (float)hd.centerY;
+        if (rx < lo_x) lo_x = rx;
+        if (rx > hi_x) hi_x = rx;
+        if (ry < lo_y) lo_y = ry;
+        if (ry > hi_y) hi_y = ry;
+    }
+    lv_area_t a;
+    a.x1 = (lv_coord_t)fmaxf(0.0f, floorf(lo_x) - 2.0f);
+    a.y1 = (lv_coord_t)fmaxf(0.0f, floorf(lo_y) - 2.0f);
+    a.x2 = (lv_coord_t)fminf((float)SCREEN_W - 1, ceilf(hi_x) + 2.0f);
+    a.y2 = (lv_coord_t)fminf((float)SCREEN_H - 1, ceilf(hi_y) + 2.0f);
+    return a;
+}
+
+static void area_join(lv_area_t &a, const lv_area_t &b) {
+    if (b.x1 < a.x1) a.x1 = b.x1;
+    if (b.y1 < a.y1) a.y1 = b.y1;
+    if (b.x2 > a.x2) a.x2 = b.x2;
+    if (b.y2 > a.y2) a.y2 = b.y2;
+}
+
+// Compose the dial without its second hand and keep it. Once a minute, not once a frame.
+static bool rebuild_under(const struct tm *ti) {
+    if (!s_buf) return false;
+    if (!s_under) {
+        const size_t bytes = (size_t)SCREEN_W * SCREEN_H * sizeof(lv_color_t);
+#if defined(ESP_PLATFORM)
+        s_under = (lv_color_t *)heap_caps_malloc(bytes, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+#else
+        s_under = (lv_color_t *)malloc(bytes);
 #endif
+        // No cache, no sweep. Falling back to a tick is a slower clock; drawing without the
+        // cache would be a wrong one.
+        if (!s_under) return false;
+    }
+    clip_reset();
+    compose_custom(ti, true, false);
+    memcpy(s_under, s_buf, (size_t)SCREEN_W * SCREEN_H * sizeof(lv_color_t));
+    s_underHr = ti->tm_hour;
+    s_underMin = ti->tm_min;
+    s_prevSecValid = false;
+    return true;
+}
+
+// One frame of sweep: restore the hand's box out of the cache, turn the hand into it, put
+// the glass back over that box, and invalidate only that.
+static void sweep_frame(float secs) {
+#if defined(ESP_PLATFORM)
+    const uint32_t t0 = micros();
+#endif
+    const theme_style::Clock &cs = theme_style::clock();
+    const theme_style::Hand &hd = cs.hand[2];
+    const float ang = secs * 6.0f;
+
+    lv_area_t box = second_box(ang);
+    if (s_prevSecValid) area_join(box, s_prevSec);
+    s_prevSec = second_box(ang);
+    s_prevSecValid = true;
+
+    s_clipX0 = box.x1; s_clipY0 = box.y1; s_clipX1 = box.x2; s_clipY1 = box.y2;
+    // Row runs, not one memcpy: the box is a window onto a wider buffer.
+    const int w = box.x2 - box.x1 + 1;
+    for (int y = box.y1; y <= box.y2; ++y) {
+        memcpy(&s_buf[y * SCREEN_W + box.x1], &s_under[y * SCREEN_W + box.x1],
+               (size_t)w * sizeof(lv_color_t));
+    }
+#if defined(ESP_PLATFORM)
+    const uint32_t tRestore = micros();
+#endif
+    CustomSprite spr = custom_hand(2);
+    if (cs.shadowOn) {
+        CustomSprite sh = custom_shadow(2);
+        if (sh.data) blend_shadow(sh.data, sh.w, sh.h, hd.pivotX, hd.pivotY,
+                                  (float)(hd.centerX + cs.shadowDX), (float)(hd.centerY + cs.shadowDY), ang);
+    }
+#if defined(ESP_PLATFORM)
+    const uint32_t tShadow = micros();
+#endif
+    if (spr.data) blend_custom_hand(spr.data, spr.w, spr.h, hd.pivotX, hd.pivotY,
+                                    (float)hd.centerX, (float)hd.centerY, ang, hd.blend);
+#if defined(ESP_PLATFORM)
+    const uint32_t tHand = micros();
+#endif
+    if (const uint8_t *overlay = custom_overlay()) {
+        for (int dy = s_clipY0; dy <= s_clipY1; ++dy) {
+            const int base = dy * SCREEN_W;
+            for (int dx = s_clipX0; dx <= s_clipX1; ++dx) {
+                const int i = base + dx;
+                const uint8_t a = overlay[i * 3 + 2];
+                if (!a) continue;
+                lv_color_t sc; sc.full = (uint16_t)(overlay[i * 3] | (overlay[i * 3 + 1] << 8));
+                s_buf[i] = lv_color_mix(sc, s_buf[i], a);
+            }
+        }
+    }
+#if defined(ESP_PLATFORM)
+    const uint32_t tOver = micros();
+#endif
+    clip_reset();
+    // The box only. Invalidating the whole canvas would hand back every pixel this exists to
+    // avoid touching.
+    lv_obj_invalidate_area(s_canvas, &box);
+#if defined(ESP_PLATFORM)
+    {
+        static uint32_t at = 0, n = 0, us = 0, px = 0, worst = 0, rs = 0, sd = 0, hd2 = 0, ov = 0;
+        const uint32_t took = micros() - t0;
+        ++n; us += took; px += (uint32_t)(box.x2 - box.x1 + 1) * (uint32_t)(box.y2 - box.y1 + 1);
+        rs += tRestore - t0; sd += tShadow - tRestore; hd2 += tHand - tShadow; ov += tOver - tHand;
+        if (took > worst) worst = took;
+        const uint32_t now = millis();
+        if (now - at > 10000) {
+            if (at && n) Serial.printf("[sweep2] %lu frames in %lu ms (%lu fps): %lu us avg, %lu worst, %lu%% of the dial"
+                                       " | restore %lu, shadow %lu, hand %lu, glass %lu\n",
+                                       (unsigned long)n, (unsigned long)(now - at),
+                                       (unsigned long)(n * 1000UL / (now - at)),
+                                       (unsigned long)(us / n), (unsigned long)worst,
+                                       (unsigned long)(px / n * 100UL / ((uint32_t)SCREEN_W * SCREEN_H)),
+                                       (unsigned long)(rs / n), (unsigned long)(sd / n),
+                                       (unsigned long)(hd2 / n), (unsigned long)(ov / n));
+            at = now; n = 0; us = 0; px = 0; worst = 0; rs = 0; sd = 0; hd2 = 0; ov = 0;
+        }
+    }
+#endif
+}
+
+// A shadow cast by the second hand has to be inside the box too, or it smears. Widen by the
+// light's offset so the restore covers wherever the shadow landed last frame.
+static void sweep_pad_for_shadow() {
+    const theme_style::Clock &cs = theme_style::clock();
+    if (!cs.shadowOn) return;
+    const int dx = cs.shadowDX < 0 ? -cs.shadowDX : cs.shadowDX;
+    const int dy = cs.shadowDY < 0 ? -cs.shadowDY : cs.shadowDY;
+    s_prevSec.x1 = (lv_coord_t)((s_prevSec.x1 - dx) < 0 ? 0 : s_prevSec.x1 - dx);
+    s_prevSec.y1 = (lv_coord_t)((s_prevSec.y1 - dy) < 0 ? 0 : s_prevSec.y1 - dy);
+    s_prevSec.x2 = (lv_coord_t)((s_prevSec.x2 + dx) > SCREEN_W - 1 ? SCREEN_W - 1 : s_prevSec.x2 + dx);
+    s_prevSec.y2 = (lv_coord_t)((s_prevSec.y2 + dy) > SCREEN_H - 1 ? SCREEN_H - 1 : s_prevSec.y2 + dy);
 }
 
 // ---- tick + face management -------------------------------------------------
@@ -1131,6 +1344,40 @@ static void redraw(const struct tm *ti) {
     lv_obj_invalidate(s_canvas);
 }
 
+// Seconds within the minute, with the fraction. A sweeping hand needs to know where it is
+// between ticks, and getLocalTime only ever answers in whole seconds.
+static float second_now() {
+    struct timeval tv;
+    gettimeofday(&tv, nullptr);
+    struct tm ti;
+    const time_t t = (time_t)tv.tv_sec;
+    localtime_r(&t, &ti);
+    return (float)ti.tm_sec + (float)tv.tv_usec / 1000000.0f;
+}
+
+static lv_timer_t *s_tick = nullptr;
+
+// A tick a second, or a frame every 40 ms while sweeping.
+//
+// Reset whenever a theme is applied, because whether this design sweeps is the theme's
+// answer and not a fixed property of the screen.
+static void retime(void) {
+    if (!s_tick) return;
+    // 70 ms, which is what the work actually takes, not what would be nice.
+    //
+    // Measured on the Modern dial: a sweep frame is 50-58 ms (restore 4, shadow 5, hand 28,
+    // glass 14) over 18-25% of the face. Asking every 40 ms for something that takes 52
+    // means the timer is late every single time, which saturates lv_timer_handler and
+    // starves everything else for no extra frames. radar_view learned this on its own sweep
+    // and wrote it down: a frame rate you cannot hit is not a frame rate, it is a source of
+    // jitter.
+    //
+    // Fourteen a second is smooth here in a way it would not be on the radar, because this
+    // hand moves 6 degrees a SECOND. Each step is under half a degree, about a pixel and a
+    // half at the tip, which the eye reads as gliding rather than stepping.
+    lv_timer_set_period(s_tick, sweep_possible() ? 70 : 1000);
+}
+
 static void tick_cb(lv_timer_t * /*t*/) {
     if (lv_scr_act() != s_screen) return;
     // ...and not while something is drawn over the top of it. The guard above catches
@@ -1143,12 +1390,40 @@ static void tick_cb(lv_timer_t * /*t*/) {
     // invalidation is dropped. It was the whole of the hitch.
     if (orb_screen_covered()) return;
     struct tm ti;
-    if (getLocalTime(&ti, 0)) redraw(&ti);
+    if (!getLocalTime(&ti, 0)) return;
+
+    if (sweep_possible()) {
+        // The cache is of one minute. When the minute rolls, the hour and minute hands have
+        // moved and everything under the second hand has to be composed again.
+        if (!s_under || ti.tm_min != s_underMin || ti.tm_hour != s_underHr) {
+            if (!rebuild_under(&ti)) { redraw(&ti); return; }
+            // First frame after a rebuild repaints everything, because everything changed.
+            // Same path as any other frame, just with the whole dial as its box.
+            s_prevSec.x1 = 0; s_prevSec.y1 = 0;
+            s_prevSec.x2 = SCREEN_W - 1; s_prevSec.y2 = SCREEN_H - 1;
+            s_prevSecValid = true;
+        }
+        sweep_pad_for_shadow();
+        sweep_frame(second_now());
+        return;
+    }
+    redraw(&ti);
 }
 
 // Redraw now, whatever the second says. For coming back from a screen that covered this one
 // for a while: the canvas still holds the face as it was when the cover went up, so without
 // this the clock shows the wrong time for up to a second after it reappears.
+void clockview::setSweep(int mode) {
+    s_forceSweep = mode;
+    s_underMin = -1; s_underHr = -1; s_prevSecValid = false;
+    retime();
+#if defined(ESP_PLATFORM)
+    Serial.printf("[clock] sweep -> %s (possible: %s)\n",
+                  mode < 0 ? "auto" : (mode ? "forced on" : "forced off"),
+                  sweep_possible() ? "yes" : "no");
+#endif
+}
+
 void clockview::refresh() {
     if (!s_screen) return;
     struct tm ti;
@@ -1156,6 +1431,10 @@ void clockview::refresh() {
 }
 
 static void apply_face() {
+    // The cache belongs to the old theme's dial. Dropping the minute stamp forces a rebuild
+    // rather than sweeping a new second hand over somebody else's face.
+    s_underMin = -1; s_underHr = -1; s_prevSecValid = false;
+    retime();
     // Hand sprites belong to the aviator face only; draw_aviator() re-shows them.
     if (s_face != FACE_AVIATOR) {
         if (s_hourImg)    lv_obj_add_flag(s_hourImg,    LV_OBJ_FLAG_HIDDEN);
@@ -1270,7 +1549,8 @@ void clockview::init() {
     if (!office_minute_sprite()) Serial.println("[clock] office minute sprite decode failed");
 
     apply_face();
-    lv_timer_create(tick_cb, 1000, nullptr);
+    s_tick = lv_timer_create(tick_cb, 1000, nullptr);
+    retime();
 }
 
 lv_obj_t *clockview::screen() {
