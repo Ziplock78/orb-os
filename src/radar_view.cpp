@@ -832,7 +832,13 @@ static void interp_step(void) {
     const uint32_t now = lv_tick_get();
     float t = s_pollMs ? (float)(now - s_animStartMs) / (float)s_pollMs : 1.0f;
     if (t > 1.0f) t = 1.0f;
-    const float e = t * (2.0f - t);                  // ease-out quad
+    // LINEAR, not eased. An ease-out is right for a thing arriving somewhere and stopping;
+    // an aircraft is not doing that. It is flying at a roughly constant speed, and the two
+    // endpoints of this interpolation are two real reports of where it was. Easing between
+    // them made it dart most of the way in the first half of the interval and then crawl,
+    // which reads as a lurch rather than as flight. Straight line, constant rate, arriving
+    // exactly as the next report does.
+    const float e = t;
     for (AcDraw &ac : s_acs) {
         const lv_coord_t nx = ac.from.x + (lv_coord_t)lroundf((float)(ac.to.x - ac.from.x) * e);
         const lv_coord_t ny = ac.from.y + (lv_coord_t)lroundf((float)(ac.to.y - ac.from.y) * e);
@@ -2546,8 +2552,22 @@ void update(const std::vector<Aircraft> &aircraft, const RadarSettings &s) {
 
     const uint32_t now = lv_tick_get();              // measure actual cadence for the glide clock
     s_pollMs = (s_lastUpdateMs && now > s_lastUpdateMs) ? (now - s_lastUpdateMs) : (uint32_t)POLL_INTERVAL_MS;
-    if (s_pollMs < 400)  s_pollMs = 400;
-    if (s_pollMs > 8000) s_pollMs = 8000;
+    // The CEILING WAS BELOW THE POLL INTERVAL, so the normal case always hit it.
+    //
+    // Polls land about every 10.4 s against a nominal POLL_INTERVAL_MS of 10000, and the
+    // glide clock was clipped to 8000. So every aircraft finished its whole journey two and
+    // a half seconds before the next position arrived and then sat perfectly still waiting
+    // for it. Combined with the ease-out below, which had them 94% of the way there by
+    // t=0.75, the visible result was a lurch followed by four or five seconds of nothing:
+    // "they jump every about 10 or 11 seconds", which is the poll interval exactly.
+    //
+    // A ceiling is still right, because a missed poll should not turn into a half-minute
+    // crawl. It just has to sit ABOVE the interval it is bounding rather than below it. This
+    // is the same fault as the sweep's stall clamp feeding its own statistics: a guard set
+    // to protect something quietly became the thing damaging it.
+    if (s_pollMs < 400) s_pollMs = 400;
+    const uint32_t glideMax = (uint32_t)POLL_INTERVAL_MS + (uint32_t)POLL_INTERVAL_MS / 2;
+    if (s_pollMs > glideMax) s_pollMs = glideMax;
     s_lastUpdateMs = now;
     s_animStartMs  = now;
 
