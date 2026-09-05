@@ -896,10 +896,11 @@ static void blend_custom_hand(const uint8_t *src, int sw, int sh, int pivotX, in
         int rx0 = (int)floorf(cx + uLo) - 1, rx1 = (int)ceilf(cx + uHi) + 1;
         if (rx0 < x0) rx0 = x0;
         if (rx1 > x1) rx1 = x1;
-        for (int dx = rx0; dx <= rx1; ++dx) {
-            const float ox = dx - cx;
-            const float sxf = ox * ct + oy * st + pivotX;
-            const float syf = -ox * st + oy * ct + pivotY;
+        // Stepped, not recomputed. sxf advances by ct and syf by -st for every pixel across
+        // a row, which turns four multiplies and four adds per pixel into two adds.
+        float sxf = (rx0 - cx) * ct + ax;
+        float syf = -(rx0 - cx) * st + ay;
+        for (int dx = rx0; dx <= rx1; ++dx, sxf += ct, syf -= st) {
             const int sx0 = (int)floorf(sxf), sy0 = (int)floorf(syf), sx1 = sx0 + 1, sy1 = sy0 + 1;
             if (sx0 < 0 || sy0 < 0 || sx1 >= sw || sy1 >= sh) continue;
             const float fx = sxf - sx0, fy = syf - sy0;
@@ -910,14 +911,20 @@ static void blend_custom_hand(const uint8_t *src, int sw, int sh, int pivotX, in
             if (aF < 8) continue;
             const float aw00 = p00[2] * w00, aw10 = p10[2] * w10, aw01 = p01[2] * w01, aw11 = p11[2] * w11;
             const float aSum = aw00 + aw10 + aw01 + aw11;
+            // ONE reciprocal, not three divides. Colour is weighted by alpha and then
+            // normalised on all three channels, and a float division is the most expensive
+            // arithmetic on this chip by a distance: three of them per pixel, over the forty
+            // thousand a sweeping hand touches, is the difference between a hand that glides
+            // and one Zion can see stepping.
+            const float invA = 1.0f / aSum;
             uint8_t r, g, b, r2, g2, b2, r3, g3, b3, r4, g4, b4;
             unpack565((uint16_t)(p00[0] | (p00[1] << 8)), r, g, b);
             unpack565((uint16_t)(p10[0] | (p10[1] << 8)), r2, g2, b2);
             unpack565((uint16_t)(p01[0] | (p01[1] << 8)), r3, g3, b3);
             unpack565((uint16_t)(p11[0] | (p11[1] << 8)), r4, g4, b4);
-            float rF = (r * aw00 + r2 * aw10 + r3 * aw01 + r4 * aw11) / aSum;
-            float gF = (g * aw00 + g2 * aw10 + g3 * aw01 + g4 * aw11) / aSum;
-            float bF = (b * aw00 + b2 * aw10 + b3 * aw01 + b4 * aw11) / aSum;
+            float rF = (r * aw00 + r2 * aw10 + r3 * aw01 + r4 * aw11) * invA;
+            float gF = (g * aw00 + g2 * aw10 + g3 * aw01 + g4 * aw11) * invA;
+            float bF = (b * aw00 + b2 * aw10 + b3 * aw01 + b4 * aw11) * invA;
             lv_color_t *dst = &s_buf[dy * SCREEN_W + dx];
             uint8_t dr, dg, db; unpack565(dst->full, dr, dg, db);
             if (blend == 1) { rF = rF * dr / 255.0f; gF = gF * dg / 255.0f; bF = bF * db / 255.0f; }        // multiply
@@ -1150,6 +1157,9 @@ static lv_color_t *s_under = nullptr;
 static int  s_underMin = -1, s_underHr = -1;   // what minute this cache is of
 static bool s_prevSecValid = false;
 static lv_area_t s_prevSec = { 0, 0, 0, 0 };
+static float s_prevAng = 0.0f;
+// The frame after a cache rebuild repaints everything, because everything changed.
+static bool s_fullNext = true;
 
 // Can this design sweep at all?
 //
@@ -1214,6 +1224,27 @@ static void area_join(lv_area_t &a, const lv_area_t &b) {
     if (b.y2 > a.y2) a.y2 = b.y2;
 }
 
+// The run of dx, within one row, that a sprite at this angle and centre can touch.
+//
+// The same arithmetic the blits use, lifted out so the RESTORE and the GLASS can be as
+// tight as the drawing is. A second hand is a thin diagonal; its bounding box is three or
+// four times its own area, and copying and re-glassing that whole rectangle was costing
+// more than the hand itself.
+static bool sprite_span(int dy, float ang, float cx, float cy, int pivotX, int pivotY,
+                        int sw, int sh, int &lo, int &hi) {
+    const float th = ang * DEG2RAD, ct = cosf(th), st = sinf(th);
+    const float oy = dy - cy;
+    const float ax = oy * st + pivotX, ay = oy * ct + pivotY;
+    float uLo = -4000.0f, uHi = 4000.0f;
+    bool dead = false;
+    row_span(ct,  ax, (float)(sw - 1), uLo, uHi, dead);
+    row_span(-st, ay, (float)(sh - 1), uLo, uHi, dead);
+    if (dead || uHi < uLo) return false;
+    lo = (int)floorf(cx + uLo) - 2;
+    hi = (int)ceilf(cx + uHi) + 2;
+    return true;
+}
+
 // Compose the dial without its second hand and keep it. Once a minute, not once a frame.
 static bool rebuild_under(const struct tm *ti) {
     if (!s_buf) return false;
@@ -1234,6 +1265,7 @@ static bool rebuild_under(const struct tm *ti) {
     s_underHr = ti->tm_hour;
     s_underMin = ti->tm_min;
     s_prevSecValid = false;
+    s_fullNext = true;
     return true;
 }
 
@@ -1253,12 +1285,46 @@ static void sweep_frame(float secs) {
     s_prevSecValid = true;
 
     s_clipX0 = box.x1; s_clipY0 = box.y1; s_clipX1 = box.x2; s_clipY1 = box.y2;
-    // Row runs, not one memcpy: the box is a window onto a wider buffer.
-    const int w = box.x2 - box.x1 + 1;
+
+    // What has to be put back, row by row: everywhere the hand WAS and everywhere it is
+    // going, and the same for its shadow. Anything else in the box was never touched.
+    //
+    // The bounding rectangle of a thin diagonal is three or four times its own area, so
+    // restoring and re-glassing the whole box was 18 ms of a 52 ms frame to repair pixels
+    // nothing had drawn on.
+    CustomSprite spr0 = custom_hand(2);
+    const int sw = spr0.data ? spr0.w : 0, sh = spr0.data ? spr0.h : 0;
+    const bool shadow = cs.shadowOn && custom_shadow(2).data;
+    int runLo[SCREEN_H], runHi[SCREEN_H];
     for (int y = box.y1; y <= box.y2; ++y) {
-        memcpy(&s_buf[y * SCREEN_W + box.x1], &s_under[y * SCREEN_W + box.x1],
-               (size_t)w * sizeof(lv_color_t));
+        int lo = 1 << 20, hi = -(1 << 20), a, b;
+        if (!s_fullNext && sw > 0) {
+            const float angs[2] = { s_prevAng, ang };
+            for (int i = 0; i < 2; ++i) {
+                if (sprite_span(y, angs[i], (float)hd.centerX, (float)hd.centerY,
+                                hd.pivotX, hd.pivotY, sw, sh, a, b)) {
+                    if (a < lo) lo = a;
+                    if (b > hi) hi = b;
+                }
+                if (shadow && sprite_span(y, angs[i], (float)(hd.centerX + cs.shadowDX),
+                                          (float)(hd.centerY + cs.shadowDY),
+                                          hd.pivotX, hd.pivotY, sw, sh, a, b)) {
+                    if (a < lo) lo = a;
+                    if (b > hi) hi = b;
+                }
+            }
+        } else {
+            lo = box.x1; hi = box.x2;
+        }
+        if (lo < box.x1) lo = box.x1;
+        if (hi > box.x2) hi = box.x2;
+        runLo[y] = lo; runHi[y] = hi;
+        if (hi < lo) continue;
+        memcpy(&s_buf[y * SCREEN_W + lo], &s_under[y * SCREEN_W + lo],
+               (size_t)(hi - lo + 1) * sizeof(lv_color_t));
     }
+    s_fullNext = false;
+    s_prevAng = ang;
 #if defined(ESP_PLATFORM)
     const uint32_t tRestore = micros();
 #endif
@@ -1279,7 +1345,9 @@ static void sweep_frame(float secs) {
     if (const uint8_t *overlay = custom_overlay()) {
         for (int dy = s_clipY0; dy <= s_clipY1; ++dy) {
             const int base = dy * SCREEN_W;
-            for (int dx = s_clipX0; dx <= s_clipX1; ++dx) {
+            // Exactly the pixels that were restored. Glassing anything else would be
+            // re-mixing the overlay onto a pixel that already has it.
+            for (int dx = runLo[dy]; dx <= runHi[dy]; ++dx) {
                 const int i = base + dx;
                 const uint8_t a = overlay[i * 3 + 2];
                 if (!a) continue;
