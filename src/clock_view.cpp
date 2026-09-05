@@ -747,7 +747,27 @@ static void draw_baked_arc_text(const lv_font_t *font, const char *fmt, float R,
 // layer in one pass, and threading it through by hand is how one helper ends up drawing
 // outside it and smearing the frame.
 static int s_clipX0 = 0, s_clipY0 = 0, s_clipX1 = SCREEN_W - 1, s_clipY1 = SCREEN_H - 1;
-static inline void clip_reset() { s_clipX0 = 0; s_clipY0 = 0; s_clipX1 = SCREEN_W - 1; s_clipY1 = SCREEN_H - 1; }
+// Per-row runs, when the box is not tight enough.
+//
+// A sweep frame wipes only the runs the second hand and its shadow actually cover, not the
+// rectangle around them. Anything redrawn afterwards — a hand the design orders ABOVE the
+// second hand — must go back over exactly those runs and no further, or it would be blended
+// a second time onto pixels that still had it from the last frame, and a semi-transparent
+// hand would darken a little more every frame.
+static const int *s_runLo = nullptr, *s_runHi = nullptr;
+static inline void clip_reset() {
+    s_clipX0 = 0; s_clipY0 = 0; s_clipX1 = SCREEN_W - 1; s_clipY1 = SCREEN_H - 1;
+    s_runLo = nullptr; s_runHi = nullptr;
+}
+// The x range this row may touch, box and run together.
+static inline void clip_row(int dy, int &lo, int &hi) {
+    if (lo < s_clipX0) lo = s_clipX0;
+    if (hi > s_clipX1) hi = s_clipX1;
+    if (s_runLo && dy >= 0 && dy < SCREEN_H) {
+        if (lo < s_runLo[dy]) lo = s_runLo[dy];
+        if (hi > s_runHi[dy]) hi = s_runHi[dy];
+    }
+}
 
 // The run of dx, within one row, whose source coordinates land inside the sprite.
 //
@@ -791,6 +811,7 @@ static void blend_shadow(const uint8_t *src, int sw, int sh, int pivotX, int piv
         int rx0 = (int)floorf(cx + uLo) - 1, rx1 = (int)ceilf(cx + uHi) + 1;
         if (rx0 < x0) rx0 = x0;
         if (rx1 > x1) rx1 = x1;
+        clip_row(dy, rx0, rx1);
         for (int dx = rx0; dx <= rx1; ++dx) {
             const float ox = dx - cx;
             const int sx = (int)(ox * ct + oy * st + pivotX);
@@ -896,6 +917,8 @@ static void blend_custom_hand(const uint8_t *src, int sw, int sh, int pivotX, in
         int rx0 = (int)floorf(cx + uLo) - 1, rx1 = (int)ceilf(cx + uHi) + 1;
         if (rx0 < x0) rx0 = x0;
         if (rx1 > x1) rx1 = x1;
+        clip_row(dy, rx0, rx1);
+        if (rx1 < rx0) continue;
         // Stepped, not recomputed. sxf advances by ct and syf by -st for every pixel across
         // a row, which turns four multiplies and four adds per pixel into two adds.
         float sxf = (rx0 - cx) * ct + ax;
@@ -1070,10 +1093,12 @@ static void compose_custom(const struct tm *ti, bool skipSecond, bool withOverla
     // all the shadows on the face and then standing the hands on top is the same choice a
     // watch photographer makes with a diffuser, and it costs a second short loop.
     if (cs.shadowOn) {
+        bool sawSecondSh = false;
         for (int i = 0; i < cs.orderN; ++i) {
             const int k = cs.order[i];
+            if (skipSecond && k == 2) { sawSecondSh = true; continue; }
+            if (skipSecond && sawSecondSh) continue;   // above the sweeping hand: drawn per frame
             if (k < 0 || k > 2) continue;              // statics do not cast; they are the face
-            if (skipSecond && k == 2) continue;
             const theme_style::Hand &hd = cs.hand[k];
             if (!hd.show) continue;
             CustomSprite sh = custom_shadow(k);
@@ -1112,10 +1137,16 @@ static void compose_custom(const struct tm *ti, bool skipSecond, bool withOverla
                                       (float)(hd.centerY + cs.shadowDY), ang[k]);
         }
     }
+    bool sawSecond = false;
     for (int i = 0; i < cs.orderN; ++i) {
         const int k = cs.order[i];
         if (k < 0 || k > 4) continue;
-        if (skipSecond && k == 2) continue;
+        // Stop at the second hand. Everything from there up is redrawn on every sweep frame,
+        // clipped to the hand's own box, which is what lets a design order a hand ABOVE its
+        // second hand and still sweep. Zion: "there's never a reason to not have a feature
+        // we get working not work for all the themes."
+        if (skipSecond && sawSecond) continue;
+        if (skipSecond && k == 2) { sawSecond = true; continue; }
         const theme_style::Hand &hd = cs.hand[k];
         if (!hd.show) continue;
         CustomSprite spr = custom_hand(k);
@@ -1153,6 +1184,26 @@ static void draw_custom(const struct tm *ti) { compose_custom(ti, false, true); 
 // are the two full-screen passes: 28.7 ms copying the plate and 26.1 ms mixing the overlay
 // across 217,156 pixels. Both scale with area, so a hand covering a quarter of the dial costs
 // a quarter of each, and a sweep becomes affordable rather than impossible.
+static lv_timer_t *s_tick = nullptr;
+// A rolling average of what one sweep frame costs, in milliseconds, measured end to end
+// including everything LVGL then does with it.
+static float s_sweepMs = 45.0f;
+static uint32_t s_tickPeriod = 0;
+
+// 30 a second is the ceiling: the hand turns six degrees a second, so a step is a fifth of a
+// degree, well under a pixel at the tip, and asking for more would spend the whole device on
+// motion nobody can see. 200 ms is the floor, for a design heavy enough that anything faster
+// would be a promise the renderer cannot keep.
+static uint32_t sweep_period() {
+    // Twice the compositing, because LVGL then renders the invalidated box and pushes it over
+    // QSPI, roughly as much again. Measured: 26 ms of work held 13 frames a second at a 70 ms
+    // period, and 52 ms of work could not hold 25 at a 40 ms one.
+    float ms = s_sweepMs * 2.0f;
+    if (ms < 33.0f) ms = 33.0f;
+    if (ms > 150.0f) ms = 150.0f;
+    return (uint32_t)ms;
+}
+
 static lv_color_t *s_under = nullptr;
 static int  s_underMin = -1, s_underHr = -1;   // what minute this cache is of
 static bool s_prevSecValid = false;
@@ -1171,21 +1222,24 @@ static bool s_fullNext = true;
 // for proving this on the glass before any theme carries the flag.
 static int s_forceSweep = -1;
 
+static const char *s_sweepWhyNot = "";
+
 static bool sweep_possible() {
     const theme_style::Clock &cs = theme_style::clock();
-    if (s_forceSweep == 0) return false;
-    if (s_forceSweep < 0 && !cs.secondSweep) return false;
-    if (s_face != FACE_CUSTOM) return false;          // the drawn faces have their own painters
-    if (!cs.hand[2].show) return false;
-    if (cs.textOverHands && (cs.text1.show || cs.text2.show)) return false;
-    // Nothing shown may come after the second hand in the back-to-front order.
+    s_sweepWhyNot = "";
+    if (s_forceSweep == 0) { s_sweepWhyNot = "forced off"; return false; }
+    if (s_forceSweep < 0 && !cs.secondSweep) { s_sweepWhyNot = "the design does not ask for it"; return false; }
+    if (s_face != FACE_CUSTOM) return (s_sweepWhyNot = "not a custom face", false);          // the drawn faces have their own painters
+    if (!cs.hand[2].show) return (s_sweepWhyNot = "the second hand is hidden", false);
+    if (cs.textOverHands && (cs.text1.show || cs.text2.show)) return (s_sweepWhyNot = "the words sit over the hands", false);
+    // A layer ABOVE the second hand used to rule this out, because the cache held the whole
+    // face and the sweeping hand would have landed on top of things meant to cover it. The
+    // cache stops at the second hand now and everything above is redrawn each frame, inside
+    // the runs that were wiped, so any order works. Zion's Beige dial was refused for exactly
+    // this and his objection was the right one: a feature that works should work everywhere.
     bool seenSecond = false;
-    for (int i = 0; i < cs.orderN; ++i) {
-        const int k = cs.order[i];
-        if (k < 0 || k > 4) continue;
-        if (k == 2) { seenSecond = true; continue; }
-        if (seenSecond && cs.hand[k].show) return false;
-    }
+    for (int i = 0; i < cs.orderN; ++i) if (cs.order[i] == 2) seenSecond = true;
+    if (!seenSecond) s_sweepWhyNot = "the second hand is not in the draw order";
     return seenSecond;
 }
 
@@ -1295,7 +1349,11 @@ static void sweep_frame(float secs) {
     CustomSprite spr0 = custom_hand(2);
     const int sw = spr0.data ? spr0.w : 0, sh = spr0.data ? spr0.h : 0;
     const bool shadow = cs.shadowOn && custom_shadow(2).data;
-    int runLo[SCREEN_H], runHi[SCREEN_H];
+    // STATIC, not on the stack. Two arrays of 466 ints is 3.7 KB, and this runs on the LVGL
+    // task whose headroom is measured in single kilobytes; a frame that overflows it would
+    // look like a random crash somewhere else entirely. There is only ever one sweep in
+    // flight, so one copy is enough.
+    static int runLo[SCREEN_H], runHi[SCREEN_H];
     for (int y = box.y1; y <= box.y2; ++y) {
         int lo = 1 << 20, hi = -(1 << 20), a, b;
         if (!s_fullNext && sw > 0) {
@@ -1325,6 +1383,8 @@ static void sweep_frame(float secs) {
     }
     s_fullNext = false;
     s_prevAng = ang;
+    // From here on, every layer is confined to exactly what was wiped.
+    s_runLo = runLo; s_runHi = runHi;
 #if defined(ESP_PLATFORM)
     const uint32_t tRestore = micros();
 #endif
@@ -1339,6 +1399,42 @@ static void sweep_frame(float secs) {
 #endif
     if (spr.data) blend_custom_hand(spr.data, spr.w, spr.h, hd.pivotX, hd.pivotY,
                                     (float)hd.centerX, (float)hd.centerY, ang, hd.blend);
+
+    // Everything the design draws ABOVE its second hand, put back over it, inside the box.
+    //
+    // The cache stops at the second hand, so these are not in it. Redrawing them here is
+    // what makes the sweep work on any layer order rather than only on designs that happen
+    // to put the second hand on top. They are clipped, so this costs their overlap with the
+    // hand's box and nothing more; on a design with nothing above the hand it is an empty
+    // loop. The angles are the same ones the cache was built with, so they land exactly
+    // where the minute has them.
+    {
+        struct tm ti;
+        if (getLocalTime(&ti, 0)) {
+            const float p_sec = (float)ti.tm_sec, p_min = ti.tm_min + p_sec / 60.0f;
+            const float p_hr = (ti.tm_hour % 12) + p_min / 60.0f;
+            const float above[5] = { p_hr * 30.0f, p_min * 6.0f, ang, 0.0f, 0.0f };
+            bool past = false;
+            for (int i = 0; i < cs.orderN; ++i) {
+                const int k = cs.order[i];
+                if (k < 0 || k > 4) continue;
+                if (k == 2) { past = true; continue; }
+                if (!past) continue;
+                const theme_style::Hand &oh = cs.hand[k];
+                if (!oh.show) continue;
+                if (cs.shadowOn && k <= 2) {
+                    CustomSprite osh = custom_shadow(k);
+                    if (osh.data) blend_shadow(osh.data, osh.w, osh.h, oh.pivotX, oh.pivotY,
+                                               (float)(oh.centerX + cs.shadowDX),
+                                               (float)(oh.centerY + cs.shadowDY), above[k]);
+                }
+                CustomSprite ospr = custom_hand(k);
+                if (ospr.data) blend_custom_hand(ospr.data, ospr.w, ospr.h, oh.pivotX, oh.pivotY,
+                                                 (float)oh.centerX, (float)oh.centerY,
+                                                 above[k], oh.blend);
+            }
+        }
+    }
 #if defined(ESP_PLATFORM)
     const uint32_t tHand = micros();
 #endif
@@ -1347,7 +1443,9 @@ static void sweep_frame(float secs) {
             const int base = dy * SCREEN_W;
             // Exactly the pixels that were restored. Glassing anything else would be
             // re-mixing the overlay onto a pixel that already has it.
-            for (int dx = runLo[dy]; dx <= runHi[dy]; ++dx) {
+            int gx0 = s_clipX0, gx1 = s_clipX1;
+            clip_row(dy, gx0, gx1);
+            for (int dx = gx0; dx <= gx1; ++dx) {
                 const int i = base + dx;
                 const uint8_t a = overlay[i * 3 + 2];
                 if (!a) continue;
@@ -1363,6 +1461,25 @@ static void sweep_frame(float secs) {
     // The box only. Invalidating the whole canvas would hand back every pixel this exists to
     // avoid touching.
     lv_obj_invalidate_area(s_canvas, &box);
+
+    // THE WORK, not the interval between frames.
+    //
+    // This measured the gap between one frame and the next, which is a feedback loop with
+    // the very thing it sets: a longer period makes a longer gap, which asks for a longer
+    // period again. It walked straight up to its own ceiling and the hand fell to four
+    // frames a second, worse than the fixed number it replaced. Compositing cost does not
+    // depend on how often it is asked for, so that is what gets measured.
+#if defined(ESP_PLATFORM)
+    {
+        const uint32_t took2 = micros() - t0;
+        if (took2 < 400000UL) s_sweepMs += 0.1f * ((float)took2 / 1000.0f - s_sweepMs);
+        const uint32_t want = sweep_period();
+        if (s_tick && want != s_tickPeriod) {
+            s_tickPeriod = want;
+            lv_timer_set_period(s_tick, want);
+        }
+    }
+#endif
 #if defined(ESP_PLATFORM)
     {
         static uint32_t at = 0, n = 0, us = 0, px = 0, worst = 0, rs = 0, sd = 0, hd2 = 0, ov = 0;
@@ -1423,27 +1540,24 @@ static float second_now() {
     return (float)ti.tm_sec + (float)tv.tv_usec / 1000000.0f;
 }
 
-static lv_timer_t *s_tick = nullptr;
-
 // A tick a second, or a frame every 40 ms while sweeping.
 //
 // Reset whenever a theme is applied, because whether this design sweeps is the theme's
 // answer and not a fixed property of the screen.
 static void retime(void) {
     if (!s_tick) return;
-    // 70 ms, which is what the work actually takes, not what would be nice.
+    // The sweep asks for whatever it has been managing, not a number chosen in advance.
     //
-    // Measured on the Modern dial: a sweep frame is 50-58 ms (restore 4, shadow 5, hand 28,
-    // glass 14) over 18-25% of the face. Asking every 40 ms for something that takes 52
-    // means the timer is late every single time, which saturates lv_timer_handler and
-    // starves everything else for no extra frames. radar_view learned this on its own sweep
-    // and wrote it down: a frame rate you cannot hit is not a frame rate, it is a source of
-    // jitter.
+    // A fixed period was wrong twice over. 40 ms asked for frames the device could not draw,
+    // so the timer was late every time and lv_timer_handler saturated for no extra frames.
+    // 70 ms was measured honestly, and then the frame got two and a half times cheaper and
+    // 70 became a ceiling holding back a hand that could have moved twice as often.
     //
-    // Fourteen a second is smooth here in a way it would not be on the radar, because this
-    // hand moves 6 degrees a SECOND. Each step is under half a degree, about a pixel and a
-    // half at the tip, which the eye reads as gliding rather than stepping.
-    lv_timer_set_period(s_tick, sweep_possible() ? 70 : 1000);
+    // s_sweepMs is an average of what a frame actually costs on THIS design — a plain dial
+    // is a quarter of the work of a busy one — with a fifth on top so the timer, not the
+    // renderer, decides when frames happen. That is radar_view's rule about even arrival,
+    // applied without having to guess the number.
+    lv_timer_set_period(s_tick, sweep_possible() ? sweep_period() : 1000);
 }
 
 static void tick_cb(lv_timer_t * /*t*/) {
@@ -1486,9 +1600,10 @@ void clockview::setSweep(int mode) {
     s_underMin = -1; s_underHr = -1; s_prevSecValid = false;
     retime();
 #if defined(ESP_PLATFORM)
-    Serial.printf("[clock] sweep -> %s (possible: %s)\n",
+    const bool ok = sweep_possible();
+    Serial.printf("[clock] sweep -> %s (possible: %s%s%s)\n",
                   mode < 0 ? "auto" : (mode ? "forced on" : "forced off"),
-                  sweep_possible() ? "yes" : "no");
+                  ok ? "yes" : "no", ok ? "" : " - ", ok ? "" : s_sweepWhyNot);
 #endif
 }
 
