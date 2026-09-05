@@ -811,9 +811,48 @@ static void blend_custom_hand(const uint8_t *src, int sw, int sh, int pivotX, in
                             + fmaxf((float)pivotY, (float)(sh - pivotY)) * fmaxf((float)pivotY, (float)(sh - pivotY)));
     const int x0 = (int)fmaxf(0.0f, cx - reach), x1 = (int)fminf((float)SCREEN_W - 1, cx + reach);
     const int y0 = (int)fmaxf(0.0f, cy - reach), y1 = (int)fminf((float)SCREEN_H - 1, cy + reach);
+    // ONLY THE PIXELS THE HAND ACTUALLY LANDS ON.
+    //
+    // The box above is a square as wide as the hand's whole swing, because `reach` is the
+    // distance from the pivot to the furthest corner. A hand is a long thin rectangle, so
+    // most of that square is empty: a 60 x 230 hand pivoting near one end sweeps a 460 px
+    // square, 212,000 pixels, to cover about 14,000 of them. Every one of the other 198,000
+    // still paid for two multiplies, a floor, and a bounds test before being skipped.
+    //
+    // Measured on the Beige face before this: 234 ms of a 290 ms redraw was the three hands,
+    // 81% of the whole dial. Nothing about a smooth second hand is possible at that price.
+    //
+    // Within one row the source coordinates are LINEAR in dx, so the range of dx that lands
+    // inside the sprite is just two intervals intersected. Solve, clamp, and walk only that.
+    // The original per-pixel test is kept below as the authority: this narrows the loop, it
+    // does not decide what gets drawn, so an off-by-one here costs a wasted iteration rather
+    // than a wrong pixel.
+    const float lx = (float)(sw - 1), ly = (float)(sh - 1);
     for (int dy = y0; dy <= y1; ++dy) {
         const float oy = dy - cy;
-        for (int dx = x0; dx <= x1; ++dx) {
+        // sxf(u) = u*ct + ax and syf(u) = -u*st + ay, for u = dx - cx.
+        const float ax = oy * st + pivotX, ay = oy * ct + pivotY;
+        float uLo = (float)(x0 - cx), uHi = (float)(x1 - cx);
+        bool empty = false;
+        // Each axis clips the run. a is the slope, b the offset, L the inclusive ceiling.
+        struct Clip {
+            static void apply(float a, float b, float L, float &lo, float &hi, bool &dead) {
+                if (fabsf(a) < 1e-6f) { if (b < 0.0f || b > L) dead = true; return; }
+                float t0 = (0.0f - b) / a, t1 = (L - b) / a;
+                if (t0 > t1) { const float sw2 = t0; t0 = t1; t1 = sw2; }
+                if (t0 > lo) lo = t0;
+                if (t1 < hi) hi = t1;
+            }
+        };
+        Clip::apply(ct,  ax, lx, uLo, uHi, empty);
+        Clip::apply(-st, ay, ly, uLo, uHi, empty);
+        if (empty || uHi < uLo) continue;
+        // One pixel of slack each way, because the bounds above are on the sampled point and
+        // the guard below tests the texel pair around it.
+        int rx0 = (int)floorf(cx + uLo) - 1, rx1 = (int)ceilf(cx + uHi) + 1;
+        if (rx0 < x0) rx0 = x0;
+        if (rx1 > x1) rx1 = x1;
+        for (int dx = rx0; dx <= rx1; ++dx) {
             const float ox = dx - cx;
             const float sxf = ox * ct + oy * st + pivotX;
             const float syf = -ox * st + oy * ct + pivotY;
@@ -910,7 +949,28 @@ static void blit_plate_rot_slow(const uint16_t *src, float angleDeg) {
     }
 }
 
+// Where a second of clock actually goes.
+//
+// draw_custom rebuilds the ENTIRE dial every tick, and on the Steam Punk face that was
+// measured at 655 ms while hunting the wind screen's freeze. A sweeping second hand needs
+// something like thirty of these a second, so nothing about smoothness can be designed until
+// it is known which of the five phases owns that number. Guessing has been wrong every time
+// it was tried this week.
+//
+// Five micros() calls a second, printed once every ten. Costs nothing and settles it.
+#ifdef ARDUINO
+static uint32_t s_ph[5] = { 0, 0, 0, 0, 0 };
+static uint32_t s_phN = 0, s_phAt = 0;
+#define PH_MARK(i) do { const uint32_t _n = micros(); s_ph[i] += _n - _t; _t = _n; } while (0)
+#else
+#define PH_MARK(i) do { } while (0)
+#endif
+
 static void draw_custom(const struct tm *ti) {
+#ifdef ARDUINO
+    uint32_t _t = micros();
+    const uint32_t _t0 = _t;
+#endif
     // Decode the plate first: it's the whole visible dial and the largest buffer,
     // so it gets first claim on PSRAM. (Text is now a baked font, not a giant
     // atlas, so the old "overlay first" ordering is no longer needed.) The overlay
@@ -928,6 +988,7 @@ static void draw_custom(const struct tm *ti) {
         else memcpy(s_buf, plate, (size_t)SCREEN_W * SCREEN_H * sizeof(lv_color_t));
     }
     else lv_canvas_fill_bg(s_canvas, lv_color_hex(theme_style::clock().bg), LV_OPA_COVER);
+    PH_MARK(0);   // the plate: a 434 KB copy out of PSRAM, or a rotation of one
 
     // Live text banners in the design's real baked font (+ firmware glow). A curved banner
     // arcs along the rim instead of sitting on a straight baseline.
@@ -957,6 +1018,7 @@ static void draw_custom(const struct tm *ti) {
         }
     };
     if (!theme_style::clock().textOverHands) draw_banners();
+    PH_MARK(1);   // banners drawn under the hands
 
     // kind 3/4 = the two static image layers — same pivot/center/blend metadata as
     // a hand, just always angle 0 (they never rotate, see custom_sprite.cpp).
@@ -1015,6 +1077,7 @@ static void draw_custom(const struct tm *ti) {
                                       (float)(hd.centerY + cs.shadowDY), ang[k]);
         }
     }
+    PH_MARK(2);   // every shadow: a rotated alpha blend each
     for (int i = 0; i < cs.orderN; ++i) {
         const int k = cs.order[i];
         if (k < 0 || k > 4) continue;
@@ -1025,6 +1088,7 @@ static void draw_custom(const struct tm *ti) {
                                         (float)hd.centerX, (float)hd.centerY, ang[k], hd.blend);
     }
     if (cs.textOverHands) draw_banners();
+    PH_MARK(3);   // every hand, plus banners that sit over them
 
     if (overlay) {
         for (int i = 0; i < SCREEN_W * SCREEN_H; ++i) {
@@ -1034,6 +1098,24 @@ static void draw_custom(const struct tm *ti) {
             s_buf[i] = lv_color_mix(sc, s_buf[i], a);
         }
     }
+    PH_MARK(4);   // the overlay: 217,156 pixels, mixed one at a time, every single tick
+#ifdef ARDUINO
+    ++s_phN;
+    if (millis() - s_phAt > 10000) {
+        if (s_phAt && s_phN) {
+            Serial.printf("[face] %lu draws, avg %lu us: plate %lu, banners %lu, shadows %lu, "
+                          "hands %lu, overlay %lu\n",
+                          (unsigned long)s_phN,
+                          (unsigned long)((s_ph[0] + s_ph[1] + s_ph[2] + s_ph[3] + s_ph[4]) / s_phN),
+                          (unsigned long)(s_ph[0] / s_phN), (unsigned long)(s_ph[1] / s_phN),
+                          (unsigned long)(s_ph[2] / s_phN), (unsigned long)(s_ph[3] / s_phN),
+                          (unsigned long)(s_ph[4] / s_phN));
+        }
+        s_phAt = millis(); s_phN = 0;
+        for (int i = 0; i < 5; ++i) s_ph[i] = 0;
+    }
+    (void)_t0;
+#endif
 }
 
 // ---- tick + face management -------------------------------------------------
