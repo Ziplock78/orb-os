@@ -71,23 +71,6 @@ void route_cache_put(const char *callsign, const char *from, const char *to) {
 // The 3-letter IATA airport code ("JFK", "LHR") — short, unambiguous, and what a
 // {from}/{to} banner actually has room for. Falls back to a cleaned-up name (then
 // municipality) only on the rare response that has no IATA code at all.
-static void pick_airport(JsonObjectConst ap, char *out, size_t n) {
-    const char *iata = ap["iata_code"] | "";
-    if (iata[0]) { snprintf(out, n, "%s", iata); return; }
-    String s = (const char *)(ap["name"] | "");
-    s.replace(" International Airport", "");
-    s.replace(" Regional Airport", "");
-    s.replace(" Airport", "");
-    s.replace(" International", "");
-    s.trim();
-    if (s.length() == 0 || s.length() > 18) {           // name missing or too long -> municipality
-        const char *muni = ap["municipality"] | "";
-        snprintf(out, n, "%s", muni);
-        return;
-    }
-    snprintf(out, n, "%s", s.c_str());
-}
-
 bool route_fetch(const char *callsign, char *from, size_t fn, char *to, size_t tn) {
     if (fn) from[0] = 0;
     if (tn) to[0] = 0;
@@ -101,15 +84,28 @@ bool route_fetch(const char *callsign, char *from, size_t fn, char *to, size_t t
     cs[j] = 0;
     if (j == 0) return false;
 
-    char url[96];
-    // PLAIN HTTP, deliberately. This was https, which on this board is not "slower", it is
-    // impossible: a handshake needs two contiguous ~16 KB internal buffers and the largest
-    // free block here runs about 7 KB, so every lookup failed with SSL -32512 and the route
-    // line simply never arrived. The card was not too quick — the data was never coming.
-    // api.adsbdb.com serves the same JSON over port 80 (verified: HNL -> DEN, 702 bytes),
-    // and a public flight's origin and destination are not a secret worth a handshake this
-    // device cannot perform.
-    snprintf(url, sizeof(url), "http://api.adsbdb.com/v0/callsign/%s", cs);
+    char url[128];
+    // THROUGH THE GATEWAY, because adsbdb stopped answering this device.
+    //
+    // This asked api.adsbdb.com directly over plain HTTP, and plain HTTP was not laziness:
+    // a TLS handshake on this board needs two contiguous ~16 KB internal buffers while the
+    // largest free block runs 7-16 KB, so https here is not slower, it is impossible. Every
+    // attempt failed with SSL -32512. Port 80 served the same JSON, so port 80 it was.
+    //
+    // It does not any more. api.adsbdb.com now answers 301 Moved Permanently with an HTML
+    // body, so the parse below found nothing and every route lookup on every Orb reported
+    // "no route". Zion: "I don't see the information in the info card about the airport
+    // they're coming from and where they're going to." Nothing on the device had broken and
+    // nothing in its log looked alarming. The service moved.
+    //
+    // The gateway does the handshake this chip cannot, which is what it exists for, and it
+    // hands back about forty bytes instead of seven hundred: the airport picking that used
+    // to happen here now happens there, where there is memory to do it in.
+#ifdef ARDUINO
+    snprintf(url, sizeof(url), "http://%s/api/route?callsign=%s", INTEL_GATEWAY_HOST, cs);
+#else
+    snprintf(url, sizeof(url), "https://%s/api/route?callsign=%s", INTEL_GATEWAY_HOST, cs);
+#endif
 
     WiFiClient client;
     HTTPClient http;
@@ -125,24 +121,14 @@ bool route_fetch(const char *callsign, char *from, size_t fn, char *to, size_t t
     const int code = http.GET();
     if (code != 200) { http.end(); return false; }
 
-    JsonDocument filter;
-    filter["response"]["flightroute"]["origin"]["municipality"] = true;
-    filter["response"]["flightroute"]["origin"]["iata_code"] = true;
-    filter["response"]["flightroute"]["origin"]["name"] = true;
-    filter["response"]["flightroute"]["destination"]["municipality"] = true;
-    filter["response"]["flightroute"]["destination"]["iata_code"] = true;
-    filter["response"]["flightroute"]["destination"]["name"] = true;
-
+    // {"from":"SMF","to":"PHX"}, or {} for a callsign nobody knows, which is normal rather
+    // than an error. No filter needed at this size.
     JsonDocument doc;
-    DeserializationError err = deserializeJson(doc, http.getStream(),
-                                               DeserializationOption::Filter(filter));
+    DeserializationError err = deserializeJson(doc, http.getStream());
     http.end();
     if (err) return false;
 
-    JsonObjectConst fr = doc["response"]["flightroute"].as<JsonObjectConst>();
-    if (fr.isNull()) return false;   // "unknown callsign" etc.
-
-    pick_airport(fr["origin"].as<JsonObjectConst>(), from, fn);
-    pick_airport(fr["destination"].as<JsonObjectConst>(), to, tn);
+    snprintf(from, fn, "%s", doc["from"] | "");
+    snprintf(to,   tn, "%s", doc["to"]   | "");
     return (from[0] || to[0]);
 }
