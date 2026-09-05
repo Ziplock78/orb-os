@@ -390,6 +390,14 @@ void cmd_sweep(const char *arg) {
     out_send();
 }
 
+void cmd_sweepaa(const char *arg) {
+    const int on = (arg && *arg) ? atoi(arg) : 1;
+    radar::setSweepAA(on);
+    out_reset();
+    out_fmt("{\"ok\":true,\"aa\":%d}", on);
+    out_send();
+}
+
 void cmd_locreset() {
     host_location_reset();
     out_reset();
@@ -671,6 +679,7 @@ void dispatch(char *line) {
     else if (!strcmp(line, "interpms")) cmd_interpms(arg);
     else if (!strcmp(line, "glide"))    cmd_glide(arg);
     else if (!strcmp(line, "sweep"))    cmd_sweep(arg);
+    else if (!strcmp(line, "sweepaa")) cmd_sweepaa(arg);
     else if (!strcmp(line, "get-begin")) cmd_get_begin(arg);
     else if (!strcmp(line, "get-data"))  cmd_get_data();
     else if (!strcmp(line, "put-begin")) cmd_put_begin(arg);

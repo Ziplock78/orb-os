@@ -4,6 +4,7 @@
 //   THEME_ORB   : Orb scope: green gradient, square grid, the 7 nearest
 //                    aircraft as yellow balls (emitting waves) + off-range arrows.
 #include "radar_view.h"
+#include "display.h"   // display_lvgl_us(): see the frame profiler below
 #include "curved_text.h"
 #include "app_theme.h"
 #include "app_shell.h"       // knob capture: default view releases it, selection mode grabs it
@@ -504,7 +505,52 @@ static void flow_redraw_all(void) {
 }
 
 // =============================== grid ========================================
+// Where a radar frame goes.
+//
+// The scope runs at 8 or 9 a second on the Modern design, and its sweep arrives every 100 ms
+// at best and 260 at worst — a spread of 100 to 160 ms in a 15 second window. That variance
+// is the stutter Zion can see, and radar_view's own comment already says why: what the eye
+// catches is not a low frame rate, it is uneven steps.
+//
+// The same question the clock's face answered last night, asked of this screen: which layer
+// owns the frame. Four micros() calls a frame and one line every ten seconds, and it settles
+// what to do instead of another round of reasoning about it.
+#ifdef ARDUINO
+enum { RP_GRID = 0, RP_SWEEP, RP_AC, RP_WX, RP_N };
+static uint32_t s_rp[RP_N] = { 0 };
+static uint32_t s_rpFrames = 0, s_rpAt = 0, s_rpLvgl = 0;
+static const char *RP_NAME[RP_N] = { "grid", "sweep", "aircraft", "wx" };
+struct RadarPhase {
+    int slot; uint32_t t0;
+    explicit RadarPhase(int s) : slot(s), t0(micros()) {}
+    ~RadarPhase() { s_rp[slot] += micros() - t0; }
+};
+#define RADAR_PHASE(x) RadarPhase _rp(x)
+static void radar_phase_report(void) {
+    ++s_rpFrames;
+    const uint32_t now = millis();
+    if (now - s_rpAt <= 10000) return;
+    if (s_rpAt && s_rpFrames) {
+        uint32_t tot = 0;
+        for (int i = 0; i < RP_N; ++i) tot += s_rp[i];
+        Serial.printf("[rframe] %lu frames, %lu us each:", (unsigned long)s_rpFrames,
+                      (unsigned long)(tot / s_rpFrames));
+        for (int i = 0; i < RP_N; ++i)
+            Serial.printf(" %s %lu", RP_NAME[i], (unsigned long)(s_rp[i] / s_rpFrames));
+        Serial.printf(" | lvgl %lu us/frame\n",
+                      (unsigned long)((display_lvgl_us() - s_rpLvgl) / s_rpFrames));
+    }
+    s_rpAt = now; s_rpFrames = 0;
+    for (int i = 0; i < RP_N; ++i) s_rp[i] = 0;
+    s_rpLvgl = display_lvgl_us();
+}
+#else
+#define RADAR_PHASE(x) do { } while (0)
+static void radar_phase_report(void) {}
+#endif
+
 static void grid_draw_cb(lv_event_t *e) {
+    RADAR_PHASE(RP_GRID);
     lv_draw_ctx_t *d = lv_event_get_draw_ctx(e);
     const lv_point_t c = { s_cx, s_cy };
 
@@ -622,6 +668,7 @@ static void draw_glow(lv_draw_ctx_t *d, lv_point_t pos, float baseR, float glowP
 // by real elapsed time in sweep_timer_cb, on a timer created once and never paused. Two
 // objects hang off that as easily as one when only one is ever visible.
 static void wx_sweep_draw_cb(lv_event_t *e) {
+    RADAR_PHASE(RP_WX);
     const theme_style::Weather &ws = theme_style::weather();
     if (!ws.sweepEnabled) return;
     lv_draw_ctx_t *dctx = lv_event_get_draw_ctx(e);
@@ -657,6 +704,7 @@ static void wx_sweep_draw_cb(lv_event_t *e) {
 }
 
 static void sweep_draw_cb(lv_event_t *e) {
+    RADAR_PHASE(RP_SWEEP);
     if (s_loadingPending) return;   // no hand until there is something to sweep over
     if (!customStyled() && orb()) return;
     if (customStyled() && !theme_style::radar().sweepEnabled) return;
@@ -1011,6 +1059,18 @@ static void sweep_timer_cb(lv_timer_t *t) {
             s_jAt = lv_tick_get(); s_jMin = 0xFFFFFFFF; s_jMax = 0; s_jN = 0; s_jSum = 0; s_jStall = 0;
         }
     }
+    // NOT adaptive, and the second attempt at making it so is why.
+    //
+    // The idea was to ask for the rate the sweep was actually achieving, so its frames would
+    // arrive evenly instead of the timer being late on one in seven. Feeding an EMA of the
+    // measured GAP back into the period is a positive loop, though, and this is the second
+    // time that trap has been walked into: a late frame lifts the average, the longer period
+    // makes the next gap longer, and it climbs. Asked for 100 ms it delivered 115; asked to
+    // pace itself it settled at 250 and was far worse.
+    //
+    // A gap is never shorter than the period, so a gap can only ever push the period UP. Any
+    // future attempt has to measure the WORK, which does not depend on how often it is asked
+    // for, the way clock_view's sweep does.
     if (s_emaDtMs <= 0.0f) s_emaDtMs = (float)dtMs;
     s_emaDtMs += 0.08f * ((float)dtMs - s_emaDtMs);
     if (s_emaDtMs < 20.0f) s_emaDtMs = 20.0f;
@@ -1378,6 +1438,10 @@ static void draw_custom_ac(lv_draw_ctx_t *d) {
 }
 
 static void ac_draw_cb(lv_event_t *e) {
+    RADAR_PHASE(RP_AC);
+    // Once per frame, and on THIS layer rather than the grid: a custom design bakes its
+    // rings into the plate, so the grid layer is never drawn and the report never spoke.
+    radar_phase_report();
     lv_draw_ctx_t *d = lv_event_get_draw_ctx(e);
     if (customStyled()) { draw_custom_ac(d); return; }
     const bool drg = orb();
@@ -1822,6 +1886,14 @@ void init(void *lv_parent) {
     // 16k pixels; the ~880 ms/s this screen spends in LVGL goes on recompositing the
     // near-full-screen area the rotation dirties, not on the transform itself. Filtering
     // it is close to free at this size.
+    // Smooth filtering, still on, and deliberately left that way until somebody measures it.
+    //
+    // Turning it off looked like an obvious win by analogy with the wind crank, where the
+    // same call was the difference between a handle that kept up and one that lagged. It was
+    // tried here and the A/B said nothing: Zion's Modern design draws a VECTOR sweep, so this
+    // object is not even on screen, and the apparent improvement in the first run was the
+    // scope settling rather than the change. ?orb sweepaa flips it live on a design that does
+    // use an image sweep, which is where the question can actually be answered.
     lv_img_set_antialias(s_sweepImg, true);
     lv_obj_clear_flag(s_sweepImg, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
     lv_obj_add_flag(s_sweepImg, LV_OBJ_FLAG_HIDDEN);
@@ -3107,6 +3179,16 @@ void setAcInterpMs(uint32_t ms) {
 
 // Force the glide on or off regardless of the theme, for measuring what it costs on a
 // custom design. -1 restores the compiled behaviour.
+// Smooth filtering on the rotated sweep image, on or off, live. For proving whether it is
+// the cost rather than assuming it: the same trend can appear in two runs for reasons that
+// have nothing to do with the change, and a single before-and-after cannot tell them apart.
+void setSweepAA(int on) {
+    if (s_sweepImg) lv_img_set_antialias(s_sweepImg, on != 0);
+    Serial.printf("[radar] sweep antialias -> %s (image sweep %s)\n",
+                  on ? "on" : "off",
+                  (customStyled() && theme_style::radar().sweepTypeImage) ? "in use" : "NOT in use");
+}
+
 void setGlide(int mode) {
     s_forceGlide = mode;
     Serial.printf("[radar] glide -> %s\n",
