@@ -396,16 +396,23 @@ static lv_color_t alt_color(float altFt, bool onGround) {
     return lv_color_hex(0x3CE0FF);
 }
 
-// 1.0 for the first minute (indistinguishable from a contact seen this poll), fading
-// linearly to a dim floor by the second, held there until the table drops it entirely at
-// the third (AC_HARD_EXPIRE_MS, in main.cpp's applyPolledAircraft — this never sees an
-// entry older than that). Never reaches zero before removal: the point is to SAY a contact
-// has gone quiet, not to make it disappear piecemeal ahead of actually being gone.
+// Full brightness for the first 25 s, which is two and a half polls, then fading linearly
+// to AC_DIM_FLOOR_OPA by 75 s and held there until the table drops the entry entirely at
+// AC_HARD_EXPIRE_MS (main.cpp's applyPolledAircraft — this never sees one older). Never
+// reaches zero before removal: the point is to SAY a contact has gone quiet, not to make it
+// disappear piecemeal ahead of actually being gone.
+// The banner may never arrive before anything on the dial looks stale. That ordering IS the
+// 2026-08-24 fix: "No aircraft data" over full-brightness traffic is the instrument
+// contradicting itself. Fading first and announcing later is a graduated warning and is
+// fine. A comment cannot fail; this can.
+static_assert(ADSB_NO_DATA_MS >= AC_DIM_START_MS,
+              "the no-data banner must not appear before the contacts start dimming");
+
 static float ac_freshness(uint32_t ageMs) {
     if (ageMs <= AC_DIM_START_MS) return 1.0f;
-    if (ageMs >= AC_DIM_FLOOR_MS) return 0.22f;
+    if (ageMs >= AC_DIM_FLOOR_MS) return AC_DIM_FLOOR_OPA;
     const float span = (float)(AC_DIM_FLOOR_MS - AC_DIM_START_MS);
-    return 1.0f - 0.78f * (float)(ageMs - AC_DIM_START_MS) / span;
+    return 1.0f - (1.0f - AC_DIM_FLOOR_OPA) * (float)(ageMs - AC_DIM_START_MS) / span;
 }
 
 static inline lv_opa_t scale_opa(lv_opa_t base, float mul) {
@@ -3061,7 +3068,7 @@ void setFeedStatus(bool wifiUp, uint32_t staleSec, bool locationKnown) {
     // feed by reading the screen. With one message for both, they could not.
     if (!wifiUp)             msg = "No WiFi\nYour Orb is fine";
     else if (!locationKnown) msg = "Location not set\nSettings " LV_SYMBOL_RIGHT " Location";
-    else if (staleSec >= AC_DIM_START_MS / 1000) msg = "No aircraft data\n" ADSB_SOURCE_NAME " is not answering";
+    else if (staleSec >= ADSB_NO_DATA_MS / 1000) msg = "No aircraft data\n" ADSB_SOURCE_NAME " is not answering";
     // Log only on change: this is called every status tick, and a line per tick would bury
     // the feed diagnostics underneath it.
     static const char *s_shown = nullptr;

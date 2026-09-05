@@ -7,7 +7,7 @@
 // "1.4.2", said "up to date", and left an Orb missing everything in that list. THEME_CAPS
 // exists because this stopped moving; it covers theme settings and nothing else, so a new
 // command or a deleted screen is invisible to it. Move this too.
-#define FW_VERSION "2.9.5"   // shown on the web config page + Stats screen
+#define FW_VERSION "2.9.6"   // shown on the web config page + Stats screen
 // Edit pins below: replace every -1 with the value from the Waveshare factory demo
 // (see docs/HARDWARE.md and docs/SETUP.md). Do NOT guess them.
 
@@ -85,8 +85,31 @@ static const float RANGE_STEPS_KM[] = {10.0f, 20.0f, 30.0f, 50.0f, 100.0f};
 // the second to the third, then dropped. This is what lets one missed poll (routine ADS-B
 // reception gaps, not a fault) read as a plane going briefly quiet rather than the scope
 // flickering it in and out of existence. See ac_freshness() in radar_view.cpp.
-#define AC_DIM_START_MS      60000         // full brightness up to here
-#define AC_DIM_FLOOR_MS      120000        // dimmest steady state from here
+// Full brightness up to here, then fading to a floor.
+//
+// 25 s, down from 60. Polls land every ~10 s, so 60 meant a contact could go unheard for
+// five whole polls and still be drawn exactly like one confirmed a moment ago: a 25 second
+// outage produced no visible change at all, which is how Zion ended up asking whether the
+// aircraft were stuck. 25 s is two and a half poll intervals, so ordinary jitter and one
+// dropped poll stay invisible and a real silence starts showing immediately.
+#define AC_DIM_START_MS      25000
+#define AC_DIM_FLOOR_MS      75000         // dimmest steady state from here
+// How faint a contact gets once it is being drawn from memory rather than from a report.
+// It was 0.22 and Zion asked for considerably dimmer. Deliberately not zero: the point is
+// to SAY a contact has gone quiet, not to make it vanish ahead of actually being dropped.
+#define AC_DIM_FLOOR_OPA     0.15f
+// When the screen SAYS so, as opposed to when it starts showing it.
+//
+// Separate from AC_DIM_START_MS, and the order between them is the thing that matters. On
+// 2026-08-24 Zion found the banner claiming "No aircraft data" over a dial full of
+// full-brightness traffic, because the banner fired at 45 s and the first dimming at 60.
+// The instrument contradicted itself. The fix was one clock for both.
+//
+// One clock is stricter than the fault required, though. A banner appearing BEFORE anything
+// looks stale is the contradiction; aircraft fading before the banner arrives is a graduated
+// warning, which is what this is for. So the invariant is an ORDER, not an equality, and
+// radar_view.cpp asserts it at compile time rather than trusting this comment.
+#define ADSB_NO_DATA_MS      60000
 #define AC_HARD_EXPIRE_MS    180000        // dropped from the table entirely past here
 
 // ---------- Weather forecast (Open-Meteo, no API key) ----------
