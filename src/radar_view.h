@@ -117,6 +117,8 @@ void setAcInterpMs(uint32_t ms);
 void setGlide(int mode);
 // Smooth filtering on a rotated image sweep, live, for measuring what it costs.
 void setSweepAA(int on);
+// How many lines the sweep's trail fan has, live; 0 restores the design's own count.
+void setTrailSteps(int n);
 
 // Tell the scope whether the WiFi is up and how long since the last aircraft. It shows a
 // small banner naming the actual culprit once a gap is real (45 s), because a blank scope

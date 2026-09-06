@@ -160,6 +160,8 @@ static uint32_t s_acInterpMs = 0;
 // -1 auto (custom designs snap, built-ins glide), 0 force snap, 1 force glide. Never
 // persisted: an instrument, not a setting.
 static int s_forceGlide = -1;
+// 0 = the design's own count. An instrument, never persisted.
+static int s_forceTrailSteps = 0;
 #define TRAIL_MAX         7
 #define TAP_RADIUS_PX     40    // generous finger-tap catch radius (picks the nearest glyph within it)
 #define FLOW_MAX          240   // see setTrailLength: repaint cost is ~300 us per segment
@@ -722,9 +724,12 @@ static void sweep_draw_cb(lv_event_t *e) {
 
     // The trail's line work. Clamped rather than trusted: a theme is a file on an SD card
     // and a zero step count here would divide by zero two lines down.
-    const int steps = customStyled()
+    int steps = customStyled()
         ? (theme_style::radar().sweepTrailSteps < 1 ? 1 : (theme_style::radar().sweepTrailSteps > 60 ? 60 : theme_style::radar().sweepTrailSteps))
         : SWEEP_TRAIL_STEPS;
+    // Overridable over the cable, so the trade between how many lines the fan has and what
+    // a frame costs can be swept on a running Orb instead of reasoned about. Not persisted.
+    if (s_forceTrailSteps > 0) steps = s_forceTrailSteps;
     lv_draw_line_dsc_t ld;
     lv_draw_line_dsc_init(&ld);
     ld.color = trailColor;
@@ -1059,18 +1064,49 @@ static void sweep_timer_cb(lv_timer_t *t) {
             s_jAt = lv_tick_get(); s_jMin = 0xFFFFFFFF; s_jMax = 0; s_jN = 0; s_jSum = 0; s_jStall = 0;
         }
     }
-    // NOT adaptive, and the second attempt at making it so is why.
+    // ASK FOR AS MANY FRAMES AS THE SCREEN CAN ACTUALLY DRAW.
     //
-    // The idea was to ask for the rate the sweep was actually achieving, so its frames would
-    // arrive evenly instead of the timer being late on one in seven. Feeding an EMA of the
-    // measured GAP back into the period is a positive loop, though, and this is the second
-    // time that trap has been walked into: a late frame lifts the average, the longer period
-    // makes the next gap longer, and it climbs. Asked for 100 ms it delivered 115; asked to
-    // pace itself it settled at 250 and was far worse.
+    // SWEEP_FRAME_MS is 100 and it was measured honestly, on a design whose frame cost 166 ms.
+    // Zion's Modern dial costs about a quarter of that — its trail is ONE line, so the fan
+    // this file spends most of its worry on is not even in play — and the sweep was still
+    // being asked for ten frames a second while the device had room for three times as many.
+    // Ten a second is a sweep moving three degrees a step, which is the stutter.
     //
-    // A gap is never shorter than the period, so a gap can only ever push the period UP. Any
-    // future attempt has to measure the WORK, which does not depend on how often it is asked
-    // for, the way clock_view's sweep does.
+    // Measured off the WORK, never off the gap. Two earlier attempts fed an EMA of the
+    // measured interval back into the period; a gap can never be shorter than the period, so
+    // that can only ever push it up, and both walked to their ceiling. lvgl_us divided by
+    // frames is time spent rendering per screen frame, which does not depend on how often
+    // the sweep asks — each frame draws it once either way.
+    //
+    // Half as much again as the work, so the timer rather than the renderer decides when
+    // frames happen, which is this file's own rule about even arrival.
+    //
+    // Device only: display.cpp is not built for the simulator, where these counters do not
+    // exist and a desktop's frame time would say nothing about an ESP32's anyway.
+#ifdef ARDUINO
+    {
+        static uint32_t lastUs = 0, lastFrames = 0, asked = 0;
+        static float ema = 0.0f;
+        const uint32_t us = display_lvgl_us(), fr = display_frames();
+        if (lastFrames && fr > lastFrames) {
+            const float perFrame = (float)(us - lastUs) / (float)(fr - lastFrames) / 1000.0f;
+            if (perFrame > 0.5f && perFrame < 400.0f)
+                ema = (ema <= 0.0f) ? perFrame : ema + 0.15f * (perFrame - ema);
+        }
+        lastUs = us; lastFrames = fr;
+        if (ema > 0.0f) {
+            uint32_t want = (uint32_t)(ema * 1.5f + 0.5f);
+            // 40 ms is the floor on purpose. A sweep is a slow hand; past 25 a second the
+            // extra frames buy nothing an eye can see and cost the whole screen.
+            if (want < 40) want = 40;
+            if (want > 200) want = 200;
+            if (s_timer && (asked == 0 || want > asked + 6 || want + 6 < asked)) {
+                asked = want;
+                lv_timer_set_period(s_timer, want);
+            }
+        }
+    }
+#endif
     if (s_emaDtMs <= 0.0f) s_emaDtMs = (float)dtMs;
     s_emaDtMs += 0.08f * ((float)dtMs - s_emaDtMs);
     if (s_emaDtMs < 20.0f) s_emaDtMs = 20.0f;
@@ -3182,6 +3218,12 @@ void setAcInterpMs(uint32_t ms) {
 // Smooth filtering on the rotated sweep image, on or off, live. For proving whether it is
 // the cost rather than assuming it: the same trend can appear in two runs for reasons that
 // have nothing to do with the change, and a single before-and-after cannot tell them apart.
+void setTrailSteps(int n) {
+    s_forceTrailSteps = n;
+    Serial.printf("[radar] trail lines -> %s%d\n", n > 0 ? "" : "the design's own, currently ", 
+                  n > 0 ? n : theme_style::radar().sweepTrailSteps);
+}
+
 void setSweepAA(int on) {
     if (s_sweepImg) lv_img_set_antialias(s_sweepImg, on != 0);
     Serial.printf("[radar] sweep antialias -> %s (image sweep %s)\n",
