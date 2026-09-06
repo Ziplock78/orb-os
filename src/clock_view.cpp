@@ -1584,6 +1584,10 @@ static void apply_face() {
     // The cache belongs to the old theme's dial. Dropping the minute stamp forces a rebuild
     // rather than sweeping a new second hand over somebody else's face.
     s_underMin = -1; s_underHr = -1; s_prevSecValid = false;
+    // ...and what the last face COST. Nothing about how often this screen redraws is stored
+    // with a design or carried between them: it is measured, here, from whatever is on the
+    // glass now. A heavy dial must not leave a light one running at its pace.
+    s_sweepMs = 45.0f; s_tickPeriod = 0;
     retime();
     // Hand sprites belong to the aviator face only; draw_aviator() re-shows them.
     if (s_face != FACE_AVIATOR) {

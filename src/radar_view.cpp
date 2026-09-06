@@ -162,6 +162,8 @@ static uint32_t s_acInterpMs = 0;
 static int s_forceGlide = -1;
 // 0 = the design's own count. An instrument, never persisted.
 static int s_forceTrailSteps = 0;
+// Set when the style changes under a running screen, so the pacing is measured fresh.
+static bool s_pacingStale = true;
 #define TRAIL_MAX         7
 #define TAP_RADIUS_PX     40    // generous finger-tap catch radius (picks the nearest glyph within it)
 #define FLOW_MAX          240   // see setTrailLength: repaint cost is ~300 us per segment
@@ -1087,6 +1089,11 @@ static void sweep_timer_cb(lv_timer_t *t) {
     {
         static uint32_t lastUs = 0, lastFrames = 0, asked = 0;
         static float ema = 0.0f;
+        // Forget the last design's measurement rather than adapt away from it. A theme
+        // change reboots the Orb, so this only matters for a live style refresh, but the
+        // guarantee is worth making plainly: nothing about how often this screen redraws is
+        // ever carried from one design to another, or stored with one.
+        if (s_pacingStale) { s_pacingStale = false; lastUs = 0; lastFrames = 0; asked = 0; ema = 0.0f; }
         const uint32_t us = display_lvgl_us(), fr = display_frames();
         if (lastFrames && fr > lastFrames) {
             const float perFrame = (float)(us - lastUs) / (float)(fr - lastFrames) / 1000.0f;
@@ -2338,6 +2345,7 @@ static void rebuild_flat_background() {
 // object's src has to be re-set after that, the same way the clock's
 // draw_custom() re-fetches custom_plate()/custom_overlay() every redraw.
 void refreshCustomStyle() {
+    s_pacingStale = true;
     if (s_plateImg) {
         const lv_img_dsc_t *plate = radar_custom_plate();
         if (plate) { lv_img_set_src(s_plateImg, plate); show(s_plateImg, true); }
