@@ -335,7 +335,7 @@ namespace theme_style {
 //      made it a design and 42 gave it type; this is the rest of what a screen has. An Orb
 //      below this level draws no picture and no crank, and shows the gauge and all three
 //      lines whatever the design says.
-constexpr int THEME_CAPS = 47;
+constexpr int THEME_CAPS = 48;
 
 struct ClockText {
     bool     show   = false;
@@ -497,6 +497,17 @@ struct Clock {
     int       windTitleSize = 28;
     uint32_t  windTitleCol  = 0xFFFFFF;
     int       windTitleY    = -84;   // px from the middle, negative is up
+    // How solid each wind line is, 0-255. THEME_CAPS 48.
+    //
+    // Every other themed text on this device has carried an opacity since August, and these
+    // three shipped without one. Caught by preview-truth.test.ts, which reads Studio's
+    // source and refuses a themed text that does not declare it — exactly the check
+    // adding-a-screen.md exists to enforce, after the Headlines screen shipped missing five
+    // standard controls and was repaired one complaint at a time.
+    //
+    // Fully opaque by default, which is what these lines have always drawn at, so no theme
+    // written before this changes.
+    int       windTitleOpa = 255, windAskOpa = 255, windTurnsOpa = 255;
     char      windAsk[96]   = "Please wind the clock using the knob";
     int       windAskSize   = 20;
     uint32_t  windAskCol    = 0x9AA4B0;

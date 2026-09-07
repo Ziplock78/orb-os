@@ -171,7 +171,7 @@ const lv_font_t *font_for_px(int px) {
 // LVGL breaks on \n by itself, so a carriage return somebody typed in Studio is a line break
 // here with nothing to do about it. That is why the words are stored whole rather than split.
 lv_obj_t *line(lv_obj_t *parent, const char *text, int px, uint32_t color, int y,
-               int ml, int mr, int slot) {
+               int ml, int mr, int slot, int opa) {
     lv_obj_t *l = lv_label_create(parent);
     const int band = SCREEN_W - ml - mr;
     if (band > 20) {
@@ -180,6 +180,7 @@ lv_obj_t *line(lv_obj_t *parent, const char *text, int px, uint32_t color, int y
     }
     lv_label_set_text(l, text);
     lv_obj_set_style_text_color(l, lv_color_hex(color), 0);
+    lv_obj_set_style_text_opa(l, (lv_opa_t)(opa < 0 ? 0 : (opa > 255 ? 255 : opa)), 0);
     const lv_font_t *f = theme_font::wind_has_font(slot)
         ? (slot == 0 ? theme_font::wind_title()
          : slot == 1 ? theme_font::wind_ask()
@@ -329,8 +330,8 @@ void ensure() {
         }
     }
 
-    if (c.windTitleShow) line(s_panel, c.windTitle, c.windTitleSize, c.windTitleCol, c.windTitleY, c.windTitleML, c.windTitleMR, 0);
-    if (c.windAskShow)   line(s_panel, c.windAsk,   c.windAskSize,   c.windAskCol,   c.windAskY,   c.windAskML,   c.windAskMR,   1);
+    if (c.windTitleShow) line(s_panel, c.windTitle, c.windTitleSize, c.windTitleCol, c.windTitleY, c.windTitleML, c.windTitleMR, 0, c.windTitleOpa);
+    if (c.windAskShow)   line(s_panel, c.windAsk,   c.windAskSize,   c.windAskCol,   c.windAskY,   c.windAskML,   c.windAskMR,   1, c.windAskOpa);
 
 
     if (c.windTurnsShow) {
@@ -342,7 +343,7 @@ void ensure() {
         char buf[64];
         if (n >= 1 && n <= 10) snprintf(buf, sizeof(buf), "%s turn%s to the right", WORDS[n - 1], n == 1 ? "" : "s");
         else                   snprintf(buf, sizeof(buf), "%d turns to the right", n);
-        line(s_panel, buf, c.windTurnsSize, c.windTurnsCol, c.windTurnsY, c.windTurnsML, c.windTurnsMR, 2);
+        line(s_panel, buf, c.windTurnsSize, c.windTurnsCol, c.windTurnsY, c.windTurnsML, c.windTurnsMR, 2, c.windTurnsOpa);
     }
 }
 

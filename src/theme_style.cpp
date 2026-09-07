@@ -479,6 +479,9 @@ void load() {
             if (doc["windCrankPY"].is<int>())        s_clock.windCrankPY   = doc["windCrankPY"].as<int>();
             if (doc["windCrankRest"].is<int>())      s_clock.windCrankRest = doc["windCrankRest"].as<int>();
             if (doc["secondSweep"].is<bool>())       s_clock.secondSweep = doc["secondSweep"].as<bool>();
+            if (doc["windTitleOpa"].is<int>())       s_clock.windTitleOpa  = doc["windTitleOpa"].as<int>();
+            if (doc["windAskOpa"].is<int>())         s_clock.windAskOpa    = doc["windAskOpa"].as<int>();
+            if (doc["windTurnsOpa"].is<int>())       s_clock.windTurnsOpa  = doc["windTurnsOpa"].as<int>();
             if (doc["windCrankShadowOn"].is<bool>()) s_clock.windCrankShadowOn = doc["windCrankShadowOn"].as<bool>();
             if (doc["windCrankShadowDX"].is<int>())  s_clock.windCrankShadowDX = doc["windCrankShadowDX"].as<int>();
             if (doc["windCrankShadowDY"].is<int>())  s_clock.windCrankShadowDY = doc["windCrankShadowDY"].as<int>();
