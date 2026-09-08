@@ -1,0 +1,33 @@
+The Orb OS: lineage and attribution
+===================================
+
+This file exists because the LICENSE cannot hold it. GitHub identifies a
+licence by matching the file against the exact text of a known one, and prose
+inserted into the middle of MIT's wording defeats that match. The repository
+then reads as "NOASSERTION" rather than "MIT", which is the single word a
+developer looks for before deciding whether they are allowed to use anything
+here. So the licence is now verbatim MIT, and the history it used to carry
+lives here instead, still travelling with the software exactly as before.
+
+Origin
+------
+
+The Orb OS began as a fork of Quique Tortosa's Capsule Radar, and was called
+Capsule Radar itself until August 2026. The original copyright is retained in
+LICENSE, as MIT requires.
+
+What is Zion Brock's later work
+-------------------------------
+
+Substantial later work is Zion Brock's: the clock, menu, settings, news and
+startup screens, the SD-card theme engine, the Orb Studio serial and WiFi
+protocols, and the flash art pipeline.
+
+On the rename
+-------------
+
+The rename does not change any of the above. MIT permits modifying and
+renaming, and says nothing about what a derived work may be called; what it
+requires is that the copyright notice travels with the software, which it
+does. The lineage is recorded here precisely BECAUSE the name no longer
+carries it.
