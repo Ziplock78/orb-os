@@ -36,6 +36,9 @@ void file_progress(const char *name, int count, uint32_t bytes);
 // overlay is up). Swaps the message to "restarting to finish the update" so the reboot
 // reads as expected progress, not a crash.
 void rebooting();
+// Boot is finished. Takes the boot notice down and shows nothing in its place; the splash
+// holds, fades, and the clock is underneath. See update_ui.cpp.
+void booted();
 
 // The host is about to hand this chip to a firmware flasher over USB.
 //

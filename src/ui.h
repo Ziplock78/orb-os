@@ -18,6 +18,11 @@ void ui_set_status(bool wifiUp, bool feedOk, int rssi, const char *clock);  // H
 void ui_set_battery(int pct, bool charging, bool present);  // top HUD battery indicator
 void ui_set_date(const char *date);  // top HUD date line (e.g. "08 Jun 2026")
 void ui_splash_show(void);  // branded boot splash (auto-fades, covers init time)
+// One line of small text at the foot of the splash, for boot work that takes long enough
+// to need narrating: "Preparing theme, 3 of 12", "Connecting to your network". Returns
+// false when no splash is up, so callers fall back to their own overlay. An empty string
+// hides the line. Repaints immediately, because every caller is about to block.
+bool ui_splash_status(const char *text);
 void ui_apply_theme(int theme);  // repaint the HUD chrome to match the active radar theme
 // Range moved to Settings > Range (settings_view.cpp, host_set_range_km). The scope's own
 // range label is fed by radar::update() from the settings struct, so nothing here needs to

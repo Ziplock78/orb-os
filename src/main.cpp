@@ -2642,27 +2642,15 @@ void setup() {
     // --- Radar UI ----------------------------------------------------------
     // radar::init() runs inside display::begin() (LVGL must be up first).
 
-    // Let the boot splash actually hold-then-fade in real time before g_wm.autoConnect()
-    // below blocks for potentially 10-20+ seconds trying the saved WiFi network. LVGL
-    // timers and animations only advance while lv_timer_handler() runs, which does NOT
-    // happen during blocking setup() code — without this pump, the splash's 2s/600ms
-    // timer+fade (ui.cpp) just sit frozen for however long WiFi takes, then both fire
-    // back-to-back the instant loop() finally starts. Clock is already app index 0 and
-    // already loaded (app_shell::begin() above), so this is what actually reveals a
-    // live, correct-time clock quickly instead of a stuck title card. rtc_seed_clock()
-    // has already run, so the time it shows is correct from the very first frame.
-    {
-        const uint32_t pumpUntil = millis() + 2700;   // 2000ms hold + 600ms fade + margin
-        while (millis() < pumpUntil) {
-            lv_timer_handler();
-            delay(5);
-        }
-    }
-
-    // Say what is happening, because the next call blocks for up to twenty seconds without
-    // servicing LVGL or the knob. Before this, the Orb showed a correct, live-looking clock
-    // and answered nothing, and the only way to find out it was busy was to wait.
-    update_ui::booting("Connecting to your network.\nThis can take up to twenty seconds.");
+    // The splash stays up, frozen, through everything below. Its hold-then-fade timer only
+    // advances while lv_timer_handler() runs, and the pump that drives it now sits at the
+    // very END of setup(), after WiFi. It used to sit here, which revealed the clock early
+    // and then drew a black "connecting" notice over it, and a "Ready" card after that:
+    // the clock appeared, so it looked finished, and then it visibly was not. The order
+    // Zion asked for is finish everything, then the splash for three seconds, then the
+    // clock, and nothing after. The next call blocks for up to twenty seconds, so the
+    // splash says what is happening on its own status line meanwhile.
+    update_ui::booting("Connecting to your network");
 
     // --- WiFi (captive portal, non-blocking) ------------------------------
     // First boot opens the "The Orb Setup" AP to enter WiFi creds. Non-blocking
@@ -2970,13 +2958,11 @@ void setup() {
 #endif
     g_web.begin();
 
-    // Everything is up and loop() is about to start polling the knob for the first time.
-    //
-    // Waiting for a press only when the FIRMWARE changed since the last boot. That is the
-    // moment somebody actually asks "is it finished?", and answering it with a clock that
-    // may or may not respond is what made an update feel broken. On an ordinary power-on
-    // the notice clears itself: a desk clock that wants permission every time it is plugged
-    // in is a worse device than one that starts a second slower than it looks.
+    // Everything is up. Noted for the log only: the "Ready, turn the knob" card that used
+    // to gate a first boot after a firmware update is gone. It answered "is it finished?"
+    // by interrupting a clock that was already showing, which is the one thing the
+    // update_ui contract says must never happen. The answer now is the clock itself,
+    // arriving once, after the splash, with nothing behind it.
     bool freshFirmware = false;
     {
         Preferences p;
@@ -2986,7 +2972,18 @@ void setup() {
             p.end();
         }
     }
-    update_ui::ready(freshFirmware);
+    update_ui::booted();
+
+    // Now, and only now, the splash gets its three clean seconds and its fade. The clock
+    // is already built underneath it (app_shell::begin() above, app index 0), seeded from
+    // the RTC, so what the fade reveals is a live, correct clock and the boot is over.
+    {
+        const uint32_t pumpUntil = millis() + 3000 + 600 + 150;   // hold + fade + margin
+        while (millis() < pumpUntil) {
+            lv_timer_handler();
+            delay(5);
+        }
+    }
 
     Serial.printf("setup done (firmware %s, %s)\n", FW_VERSION,
                   freshFirmware ? "first boot after an update" : "already seen this build");

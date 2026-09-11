@@ -1049,7 +1049,33 @@ void ui_show_view(int idx) {
 
 // ------------------------------------------------------------------- splash
 static void splash_fade_cb(void *obj, int32_t v) { lv_obj_set_style_opa((lv_obj_t *)obj, (lv_opa_t)v, 0); }
+// The splash container while it is on screen, and the status line on it. Both null once
+// the fade has run: the status line dies with its parent.
+static lv_obj_t *s_splashCont   = nullptr;
+static lv_obj_t *s_splashStatus = nullptr;
+
+bool ui_splash_status(const char *text) {
+    if (!s_splashCont) return false;
+    if (!s_splashStatus) {
+        s_splashStatus = lv_label_create(s_splashCont);
+        lv_obj_set_style_text_color(s_splashStatus, lv_color_white(), 0);
+        lv_obj_set_style_text_opa(s_splashStatus, LV_OPA_70, 0);
+        lv_obj_set_style_text_align(s_splashStatus, LV_TEXT_ALIGN_CENTER, 0);
+        lv_obj_set_width(s_splashStatus, SCREEN_W - 120);
+        // Low on the dial, under the three standing lines, inside the glass. The round
+        // panel narrows fast down here, hence the width above.
+        lv_obj_align(s_splashStatus, LV_ALIGN_BOTTOM_MID, 0, -58);
+    }
+    lv_label_set_text(s_splashStatus, text ? text : "");
+    if (!text || !*text) lv_obj_add_flag(s_splashStatus, LV_OBJ_FLAG_HIDDEN);
+    else                 lv_obj_clear_flag(s_splashStatus, LV_OBJ_FLAG_HIDDEN);
+    lv_refr_now(NULL);
+    return true;
+}
+
 static void splash_del_cb(lv_anim_t *a) {
+    s_splashCont   = nullptr;
+    s_splashStatus = nullptr;
     // Before the container goes, not after. splash_lines owns a 651 KB PSRAM buffer and
     // holds pointers to two children of this object; deleting the parent first would free
     // neither the buffer nor the pointers, and leave release() deleting objects that are
@@ -1073,6 +1099,7 @@ static void splash_dismiss_cb(lv_timer_t *t) {
 
 void ui_splash_show(void) {
     lv_obj_t *cont = lv_obj_create(lv_layer_top());
+    s_splashCont = cont;
     lv_obj_remove_style_all(cont);
     lv_obj_set_size(cont, SCREEN_W, SCREEN_H);
     lv_obj_center(cont);
@@ -1103,12 +1130,15 @@ void ui_splash_show(void) {
     // fires too, a barely-visible flash instead of the held title card it's meant to be.
     lv_refr_now(NULL);
 
-    // Hold 2s then fade. This timer only advances while lv_timer_handler() is being
-    // called, which does NOT happen during setup()'s blocking work (WiFi connect, sensor
-    // init) -- main.cpp deliberately pumps the UI for ~2.6s right after the boot app
-    // (Clock) is loaded and BEFORE the blocking WiFi connect call, specifically so this
-    // timer gets to fire for real instead of sitting frozen for however long WiFi takes.
-    lv_timer_t *t = lv_timer_create(splash_dismiss_cb, 2000, cont);
+    // Hold 3s then fade. This timer only advances while lv_timer_handler() is being
+    // called, which does NOT happen during setup()'s blocking work. main.cpp pumps the UI
+    // for the hold plus the fade at the very END of setup(), once the bake and the WiFi
+    // connect are behind it, so the three seconds are three clean seconds of the title
+    // card with nothing left to interrupt them. It used to pump BEFORE WiFi, which put a
+    // clock on screen and then a black "connecting" notice over the top of it, and that
+    // read as the update failing after it had apparently finished. Zion asked for: finish
+    // everything, then the splash for three seconds, then the clock, and done.
+    lv_timer_t *t = lv_timer_create(splash_dismiss_cb, 3000, cont);
     lv_timer_set_repeat_count(t, 1);
 }
 

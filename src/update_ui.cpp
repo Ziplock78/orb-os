@@ -1,4 +1,5 @@
 #include "update_ui.h"
+#include "ui.h"   // ui_splash_status(): during boot the splash narrates, not an overlay
 #include <lvgl.h>
 #include <stdio.h>
 #ifdef ARDUINO
@@ -190,6 +191,10 @@ void rebooting() {
 }
 
 void booting(const char *what) {
+    // While the boot splash is up, the message goes on the splash rather than over it.
+    // A black notice appearing over the title card, then the title card coming back,
+    // then the clock, read as the boot restarting. One screen, one line of status.
+    if (ui_splash_status(what ? what : "Starting up")) return;
     ensure();
     s_lastActivity = millis();
     lv_label_set_text(s_title, "Starting up");
@@ -232,6 +237,15 @@ void ready(bool needsAck) {
 #ifdef ARDUINO
     Serial.printf("[update_ui] ready (%s)\n", needsAck ? "waiting for the knob" : "clearing itself");
 #endif
+}
+
+// Boot is finished and nothing else is coming. Takes the boot notice down, wherever it
+// was drawn, and shows NOTHING in its place: the splash's own hold and fade follow, and
+// the clock after that. This replaced ready(), which put a "Ready" card over a clock that
+// was already showing, which is exactly the "it looked done and then it wasn't" moment.
+void booted() {
+    ui_splash_status("");
+    destroy();
 }
 
 bool awaitingAck() { return s_awaitAck && s_panel; }
@@ -279,6 +293,11 @@ void firmware_incoming() {
 }
 
 void bake_begin(int totalAssets) {
+    {
+        char b[64];
+        snprintf(b, sizeof(b), "Preparing theme, 0 of %d", totalAssets);
+        if (ui_splash_status(b)) return;   // splash is up: narrate there, no overlay
+    }
     ensure();
     s_lastActivity = millis();
     // "Installing update, Step 3 of 3" was the language of a Studio install, which really
@@ -299,6 +318,11 @@ void bake_begin(int totalAssets) {
 }
 
 void bake_progress(const char *assetName, int done, int totalAssets) {
+    {
+        char b[64];
+        snprintf(b, sizeof(b), "Preparing theme, %d of %d", done, totalAssets);
+        if (ui_splash_status(b)) return;
+    }
     if (!s_panel) return;
     s_lastActivity = millis();
     char b[128];
@@ -309,6 +333,7 @@ void bake_progress(const char *assetName, int done, int totalAssets) {
 }
 
 void bake_done() {
+    ui_splash_status("");   // clears the line if it was on the splash; harmless otherwise
     destroy();
 #ifdef ARDUINO
     Serial.println("[update_ui] install finished — update overlay down, boot continues");
