@@ -6,8 +6,11 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/code-MIT-2088FF" alt="License: MIT"></a>
 </p>
 
-Firmware for **The Orb**, a round-AMOLED desk instrument: a clock, a live flight tracker,
-weather radar, and a news screen, all dressed by SD-card themes designed in Orb Studio.
+Firmware for **The Orb**, a round-AMOLED desk instrument: a clock, a live flight tracker
+and a news screen, all dressed by SD-card themes designed in Orb Studio.
+
+The name stands for Occasionally Relevant Ball: open firmware, open themes, occasionally
+relevant.
 
 
 <!-- The photographs, the GIF and the four skin screenshots that used to sit here are
@@ -18,14 +21,14 @@ weather radar, and a news screen, all dressed by SD-card themes designed in Orb 
 
 ## What it does
 
-Six screens, reached by rocking the knob to open the app menu and turning to choose:
+Four screens, reached by rocking the knob to open the app menu and turning to choose:
 
-- **Clock** — analogue hands over the theme's own dial, with optional date and second banners, hand shadows, and a plate that can turn with a hand.
-- **Flight tracker** — live traffic from [adsb.lol](https://api.adsb.lol), a sweep, trails, coastlines, roads and airports, with a card for the selected aircraft and up to three readout lines the theme composes itself.
-- **Weather radar** — animated precipitation over the same map.
-- **News** — headlines from BBC, the Guardian or NASA. Turn to move the highlight, press to read the story's own summary in the same band the list was in.
-- **Surveillance** — an off-by-default camera view.
-- **Settings** — display, location, sound, units, range, WiFi, theme, and About, on a knob-driven wheel.
+- **Clock**: analogue hands over the theme's own dial, with optional date and second banners, hand shadows, a plate that can turn with a hand, and a chime on the hour if you turn that on.
+- **Flight tracker**: live traffic from [adsb.lol](https://api.adsb.lol), a sweep, trails, coastlines, roads and airports, with a card for the selected aircraft and up to three readout lines the theme composes itself.
+- **News**: headlines from BBC, the Guardian or NASA. Turn to move the highlight, press to read the story's own summary in the same band the list was in.
+- **Settings**: display, location, sound, units, range, WiFi, theme, and About, on a knob-driven wheel.
+
+A weather radar, a stock ticker and a camera view are in the tree but compiled out of launch one (`APPS_LAUNCH_ONE` in [`src/config.h`](src/config.h)), so they are absent from the menu rather than present and switched off.
 
 Every one of them is dressed by a **theme**: a folder of baked artwork and JSON on the SD card, designed in [Orb Studio](https://zionbrock.com/orb) in a browser and sent over USB. Backgrounds, glass and CRT overlays, typefaces, colours, opacity, glow, layer order and layout are the theme's to choose. Themes are switched on the device itself under **Settings → Theme**, with no computer needed.
 
@@ -44,7 +47,7 @@ pio run -e esp32-s3-amoled-175 -t upload     # build + flash over USB-C
 pio device monitor -b 115200                  # serial log
 ```
 
-On a first flash you may need to hold **BOOT** then tap **RESET**. On first boot, join the **`The Orb Setup`** WiFi from a phone and enter your home network.
+On a first flash you may need to hold **BOOT** then tap **RESET**. On first boot the Orb asks for your WiFi on its own screen, and you pick the network and type the password with the knob. If you would rather use a phone, it also opens a network called **The Orb Setup** with a setup page.
 
 Most flashing happens from Orb Studio's **My Orb** tab instead, which writes the same images from the browser over Web Serial and checks each region back against the chip afterwards.
 
@@ -86,10 +89,10 @@ src/
   knob.*              quadrature decoding, detents, the rock gesture
   input_router.*      one place that decides what a turn or press means
   clock_view.*        the clock
-  radar_view.*        the flight tracker and weather radar scope
+  radar_view.*        the flight tracker scope (and the weather radar, out of launch one)
   intel_view.*        the news screen  (named intel for historical reasons)
   settings_view.*     the settings wheel
-  spycam_view.*       surveillance
+  spycam_view.*       surveillance (out of launch one)
   theme_style.*       the theme model and THEME_CAPS
   theme_art*.*        decoding theme art and baking it into flash
   theme_font.*        per-theme converted typefaces
@@ -106,7 +109,7 @@ Adding or changing a screen? Read [`docs/adding-a-screen.md`](docs/adding-a-scre
 
 ## Community ports and forks
 
-- **[Capsule Radar for the Waveshare ESP32-S3-Touch-LCD-2.1](https://github.com/alexzogh/capsule-radar/tree/port/esp32-s3-lcd-21)** by **@alexzogh (STLWarehouse)** — a port of the upstream project to the 2.1" round LCD (ST7701), with double-tap aircraft tracking, an idle clock face, and a busy-airspace query-radius fix that was merged back upstream.
+- **[Capsule Radar for the Waveshare ESP32-S3-Touch-LCD-2.1](https://github.com/alexzogh/capsule-radar/tree/port/esp32-s3-lcd-21)** by **@alexzogh (STLWarehouse)**: a port of the upstream project to the 2.1" round LCD (ST7701), with double-tap aircraft tracking, an idle clock face, and a busy-airspace query-radius fix that was merged back upstream.
 
 ## Data and licence
 
@@ -114,4 +117,4 @@ Adding or changing a screen? Read [`docs/adding-a-screen.md`](docs/adding-a-scre
 
 The Orb OS began as a fork of [Quique Tortosa's Capsule Radar](https://github.com/socquique/capsule-radar) and carries his copyright alongside Zion Brock's. See [`LICENSE`](LICENSE) for what came from where.
 
-Aircraft data from **adsb.lol**, free and non-commercial. Weather from **Open-Meteo** and **RainViewer**. Map data **© OpenStreetMap contributors**, ODbL, credited on the Orb's own About screen where it cannot be switched off. Headlines from **BBC**, **The Guardian** and **NASA** RSS.
+Aircraft data from **adsb.lol**, free and non-commercial. First location from **ip-api.com** and city search from **Open-Meteo**'s geocoding. Map data **© OpenStreetMap contributors**, ODbL, credited on the Orb's own About screen where it cannot be switched off. Headlines from **BBC**, **The Guardian** and **NASA** RSS.
