@@ -138,7 +138,7 @@ void input_router::dispatch(int delta, bool pressed) {
     // theme could strand somebody on a screen that will not take no for an answer, which is
     // the thing CUT-05 exists to forbid.
     if (wind_notice::showing()) {
-        if (!app_shell::captured() && rocked()) { app_shell::openSwitcher(); return; }
+        if (rocked()) { app_shell::openSwitcher(); return; }
         if (delta != 0) wind_notice::turn(delta);
         return;
     }
@@ -156,14 +156,29 @@ void input_router::dispatch(int delta, bool pressed) {
     // also handed to the app underneath. Without this, rocking out of the flight tracker
     // would select an aircraft on the way past.
     //
-    // An app that has CAPTURED the knob owns it, rock included. Settings is the case: its
-    // wheel scrolls with the knob, and scrolling a list back and forth is an ordinary thing
-    // to do in it. Leaving the rock live there threw you out to the app menu, with nothing
-    // chosen, in the middle of reading a list. Capturing already means "this screen is using
-    // the knob for something else", and the rock was the one input ignoring that.
+    // The rock works EVERYWHERE, captured screens included. Reversed 2026-09-11.
     //
-    // Nothing gets trapped: a capturing screen carries its own way out. Settings has Back.
-    if (!app_shell::captured() && rocked()) {
+    // It was switched off for any screen that had captured the knob, on the reasoning that
+    // Settings scrolls a list with it and scrolling back and forth is an ordinary thing to do
+    // there, so a rock would throw you out mid-read. Two things have changed since that was
+    // written.
+    //
+    // The detector no longer accepts a scroll. knob.cpp's run-length rule means only a flick
+    // of one or two detents followed by a reversal within 45-900 ms qualifies; a list scrolled
+    // three detents and corrected by one is not a rock and never was going to be. What is
+    // left is a single overshoot corrected within a second, which is narrow, and Zion has
+    // chosen it over the alternative.
+    //
+    // The alternative was the Orb contradicting itself. The hint it shows on a press that has
+    // nowhere to go says "To activate the main menu from any app, rock the knob", and Settings
+    // was the one screen where that sentence was false. Zion: "if anywhere in the settings
+    // menu, if you want to get out of it, go back to the main menu, you should be able to do
+    // the rock motion." One gesture, one meaning, every screen.
+    //
+    // Safe to allow: load() sets the captured flag from the app being entered and runs the
+    // outgoing app's exit hook on every real switch, so a screen rocked out of leaves neither
+    // its capture nor its state behind.
+    if (rocked()) {
         app_shell::openSwitcher();
         return;
     }

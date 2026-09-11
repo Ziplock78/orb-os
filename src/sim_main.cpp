@@ -766,6 +766,7 @@ int main(int argc, char **argv) {
     // the way out. Painting the panel by hand would photograph a layout while proving
     // nothing about the wiring, and the wiring is the whole feature.
     const char *knobShot   = (argc >= 3 && strcmp(argv[1], "--knobshot")   == 0) ? argv[2] : NULL;
+    const char *rockShot   = (argc >= 3 && strcmp(argv[1], "--rockshot")   == 0) ? argv[2] : NULL;
     // --windshot <prefix>: the wound-down clock and its wind gauge. On hardware this state
     // is reached by waiting out a theme's whole mainspring, which is a day or two, so there
     // is no other way to look at the screen at all. Three frames: the panel as it appears,
@@ -802,7 +803,7 @@ int main(int argc, char **argv) {
     // --newsshot is headless but drives the KNOB, so it needs the full app lineup that only
     // interactive mode registers. It is the one capture that walks the shell rather than
     // putting a single screen up directly.
-    const bool  interactive = !shotPath && !gifPath && !updateShot && !readyShot && !bakeShot && !wifiShot && !knobShot && !windShot;
+    const bool  interactive = !shotPath && !gifPath && !updateShot && !readyShot && !bakeShot && !wifiShot && !knobShot && !windShot && !rockShot;
     (void)wxShot;   // live knob/app-shell only outside headless capture
     (void)setShot;
 
@@ -935,7 +936,7 @@ int main(int argc, char **argv) {
     // clock: the feature under test is what happens when the CURRENT APP ignores a
     // press, and with no apps registered there is no current app to ignore one. Left
     // off this line, the harness waited forever for a roster that never arrived.
-    if (interactive || wifiShot || knobShot || windShot) sim_register_apps(radarScreen);   // live app switcher driven by the virtual knob
+    if (interactive || wifiShot || knobShot || windShot || rockShot) sim_register_apps(radarScreen);   // live app switcher driven by the virtual knob
 #if CUSTOM_BOOT_TARGET == 1
     // Set only by the splash push (the clock push clears it, even if a custom
     // splash is still baked in) — so this is genuinely "you just pushed the
@@ -1517,6 +1518,45 @@ int main(int argc, char **argv) {
         // --knobshot: press on the clock, shoot; press again, shoot.
         static int knobStep = 0;
         static Uint32 knobAt = 0;
+        // THE ROCK LEAVES EVERY SCREEN, Settings included.
+        //
+        // Settings captures the knob for its list, and for a while that also switched the rock
+        // off there, so the one gesture the Orb teaches for reaching the menu did nothing on
+        // one screen. Reversed 2026-09-11 at Zion's request. This is the assertion that keeps
+        // it reversed: a captured screen, a rock, and the switcher must be open afterwards.
+        //
+        // Through simknob rather than straight at the router, because the rock is decided in
+        // the knob driver from detent timing, and that is the thing under test here.
+        static int rockStep = 0;
+        if (rockShot) {
+            auto pump = [&]() {
+                const int32_t kd = knob::takeDelta();
+                const bool pr = knob::takePress();
+                input_router::dispatch((int)kd, pr);
+                lv_timer_handler();
+            };
+            if (rockStep == 0 && app_shell::count() > 0 && now - start > 3000) {
+                if (app_shell::browsing()) { simknob::injectPress(true, now); simknob::injectPress(false, now); pump(); }
+                app_shell::selectApp(app_shell::APP_SETTINGS);
+                lv_timer_handler(); lv_refr_now(NULL);
+                printf("[sim] --rockshot: on Settings, captured=%d browsing=%d\n",
+                       (int)app_shell::captured(), (int)app_shell::browsing());
+                printf("[sim] --rockshot: Settings has the knob: %s\n", app_shell::captured() ? "PASS" : "FAIL");
+                rockStep = 1;
+            } else if (rockStep == 1 && now - start > 3600) {   // past the rock window, so the
+                simknob::injectTurn(-1); pump();                 // switch itself cannot count
+                SDL_Delay(120); lv_tick_inc(120);
+                simknob::injectTurn(+1); pump();
+                lv_timer_handler(); lv_refr_now(NULL);
+                char path[300];
+                snprintf(path, sizeof(path), "%s-rocked.bmp", rockShot);
+                sim_save_frame(path);
+                printf("[sim] --rockshot: a rock on Settings opens the switcher: %s (browsing=%d)\n",
+                       app_shell::browsing() ? "PASS" : "FAIL", (int)app_shell::browsing());
+                run = false;
+            }
+        }
+
         if (knobShot) {
             // Straight at the router, the way the other harnesses in this file drive it.
             // Going through simknob would queue the edge for a poll that runs elsewhere in
