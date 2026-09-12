@@ -90,14 +90,35 @@ bool clock_wind::enabled()  { return s_on; }
 bool clock_wind::soundOn()  { return s_sound; }
 bool clock_wind::noticeOn() { return s_notice; }
 
+// A spring can hold no more than one full wind OF THIS DESIGN. The deadline in NVS was set
+// by whatever design was wound last, and it survives a theme install and a reboot, which is
+// right for the same design and wrong the moment the design changes its run time: a clock
+// wound for a day and then reinstalled with "runs for 10 seconds" sat there running for the
+// rest of the day, and the wind screen never came. Zion, 2026-09-12: "it should be on the
+// wind screen by now." Clamped here, on every read, rather than once in applyTheme, because
+// the time may not be known yet when the theme is applied at boot.
+static void clamp_to_full_wind() {
+    if (!s_on || !time_known()) return;
+    const int64_t most = now_epoch() + (int64_t)s_secs;
+    if (s_woundUntil > most) {
+        s_woundUntil = most;
+        save();
+#ifdef ARDUINO
+        Serial.printf("[wind] stored wind was longer than this design allows; now runs to %lld\n", (long long)s_woundUntil);
+#endif
+    }
+}
+
 bool clock_wind::stopped() {
     if (!s_on) return false;
     if (!time_known()) return false;   // see EPOCH_IS_REAL
+    clamp_to_full_wind();
     return now_epoch() >= s_woundUntil;
 }
 
 float clock_wind::charge() {
     if (!s_on || !time_known()) return 1.0f;
+    clamp_to_full_wind();
     const int64_t full = (int64_t)s_secs;
     const int64_t left = s_woundUntil - now_epoch();
     if (left <= 0)   return 0.0f;
