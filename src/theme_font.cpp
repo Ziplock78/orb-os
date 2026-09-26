@@ -75,7 +75,12 @@ enum Slot { S_CLOCK1, S_CLOCK2, S_MENU_CUR, S_MENU_PREV, S_MENU_NEXT, S_SETTINGS
             S_INTEL_TITLE, S_INTEL_TEXT, S_INTEL_SOURCE, S_INTEL_AGE, S_INTEL_BRIEF,
             S_TICK_NAME, S_TICK_PRICE, S_TICK_CHANGE, S_TICK_STRIP,
             S_WX1, S_WX2, S_WX3, S_WX4,
-            S_WIND_TITLE, S_WIND_ASK, S_WIND_TURNS, S_COUNT };
+            S_WIND_TITLE, S_WIND_ASK, S_WIND_TURNS,
+            // The Flight Tracker's location line, THEME_CAPS 54. Appended rather than
+            // slotted beside S_RADAR4 because the order is the accessor order and the file
+            // list below is positional: inserting in the middle would silently hand every
+            // later slot the wrong face.
+            S_RADAR_LOC, S_COUNT };
 
 // Asset names Launch Kit ships. Kept here rather than derived, so the contract between
 // the two programs is one readable list instead of a naming convention nobody can see.
@@ -97,6 +102,9 @@ const char *SLOT_FILE[S_COUNT] = {
     // which is right for a recovery screen and wrong for one that appears over a themed clock
     // during ordinary use.
     "font_wind_title.bin", "font_wind_ask.bin", "font_wind_turns.bin",
+    // The location line's own face, THEME_CAPS 54, so it is a text box like any other
+    // rather than one that borrows a readout's typeface.
+    "font_radar_loc.bin",
 };
 
 const lv_font_t *s_font[S_COUNT] = { nullptr };
@@ -268,6 +276,13 @@ const lv_font_t *radar_text(int idx) {
     if (idx < 0) idx = 0;
     if (idx > 3) idx = 3;
     return get((Slot)(S_RADAR1 + idx));
+}
+
+// The location line. Falls back through radar_text(0) rather than get()'s compiled default,
+// the same reasoning as intel_brief(): a theme that dressed its readouts and then switched
+// this on should get its own face here, not LV_FONT_DEFAULT in the middle of its design.
+const lv_font_t *radar_loc() {
+    return s_font[S_RADAR_LOC] ? s_font[S_RADAR_LOC] : radar_text(0);
 }
 
 const lv_font_t *weather_text(int idx) {

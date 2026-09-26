@@ -18,6 +18,14 @@ Rules for a section, all of them learned from what reads badly on that card:
 
 ---
 
+## 2.16.30
+
+- Your flight tracker can show the name of the place it is centred on, so the scope says
+  Leeds, Utah rather than leaving you to read coordinates
+- Switch it on in Orb Studio under Flight tracker, Location line: it is off until you ask,
+  and it has every control the other text boxes have, including its own typeface and ALL CAPS
+- Asked for by Lerxtwood, who had already built it in his own copy of the firmware
+
 ## 2.16.29
 
 - City search keys do their own jobs again. Yesterday's comma landed one place along from

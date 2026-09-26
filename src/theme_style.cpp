@@ -729,6 +729,9 @@ void load() {
                     i++;
                 }
             }
+            // THEME_CAPS 54. Same merge as the four above, so it inherits every field a
+            // text slot has without a second parser to keep in step.
+            merge_rtext(doc["locText"], s_radar.locText);
             merge_radar_card(doc["card"], s_radar.card);
             if (doc["mapRoadsOn"].is<bool>()) s_radar.mapRoadsOn = doc["mapRoadsOn"].as<bool>();
             if (doc["ringsPlate"].is<bool>()) s_radar.ringsPlate = doc["ringsPlate"].as<bool>();

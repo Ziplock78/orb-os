@@ -11,6 +11,7 @@
 #include <math.h>
 #include <lvgl.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <stdbool.h>
 #include <string.h>
 #include <unistd.h>
@@ -73,6 +74,17 @@ namespace {
     constexpr int SIM_RECENTS_MAX = 8;
     SimRecent g_recents[SIM_RECENTS_MAX];
     int       g_recentCount = 0;
+}
+
+// Where the simulator pretends to be, for the Flight Tracker's location banner
+// (THEME_CAPS 54). SIM_CITY overrides it, and SIM_CITY="" is how you check what a design
+// does on an Orb that has never been told what its coordinates are called: the banner
+// draws nothing at all rather than an empty plate.
+bool host_location_name(char *out, size_t n) {
+    if (!n) return false;
+    const char *env = getenv("SIM_CITY");
+    snprintf(out, n, "%s", env ? env : "Phoenix, Arizona");
+    return out[0] != 0;
 }
 
 int host_recents_get(char names[][40], double *lats, double *lons, int maxN) {

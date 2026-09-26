@@ -177,6 +177,11 @@ static volatile uint32_t     g_rebootAtMs = 0;
 static String                g_pendingSlug;
 static volatile uint32_t     g_applySlugAtMs = 0;                       // !=0: reboot when millis() reaches it (clean start after WiFi config)
 static String                g_tz = TZ_STR;                          // POSIX timezone (web-configurable, NVS); applied via configTzTime
+// The name of wherever the Orb is, as the person who set it would say it ("Leeds, Utah").
+// Beside g_tz because it is loaded in the same block and for the same reason: both are what
+// a position MEANS rather than the position itself. Empty until something names it, which is
+// the honest state for a device handed bare coordinates. THEME_CAPS 54.
+static String                g_locName;
 static volatile bool         g_weatherDirty = false;
 static volatile bool         g_wxRadarDirty = false;
 static volatile bool         g_wxAnimDirty = false;      // new Weather app: frame set ready
@@ -719,6 +724,13 @@ static void loadSettings() {
     if (g_tz == "CET-1CEST,M3.5.0,M10.5.0/3") g_tz = TZ_STR;
     g_bigText          = p.getBool("bigtext", false);
     g_chimeIdx         = p.getInt("chimeIdx", 0);
+    // What this place is CALLED. Every path that sets a location already learns a name:
+    // the Settings search, a Studio setloc, and the IP lookup all hand one to
+    // host_recents_add(). Until now it was thrown away the moment the position was saved,
+    // and the flight tracker had nothing but coordinates to show. Kept as its own pref so
+    // the scope can name the place without reverse-geocoding anything, which is the whole
+    // reason the Orb needs no city database for this (Lerxtwood's request, 2026-09-25).
+    g_locName          = p.getString("homeName", "");
     p.end();
     audio_set_chime(g_chimeIdx);   // no hardware dependency, safe before audio_begin()
     // fonts are baked into the widgets at creation time, so the large-text flag must be
@@ -1004,6 +1016,27 @@ void host_wx_zoom_set(int tier) {
     g_wxZoomChanged = true;   // adsb_task refetches with the new range on its next pass
 }
 
+// Remember what this place is called. Separate from persist_location() because a position
+// can arrive without a name (?orb setloc with bare coordinates) and a name must never
+// overwrite a good one with an empty string.
+static void persist_location_name(const char *name) {
+    if (!name || !name[0]) return;
+    g_locName = name;
+    Preferences p;
+    p.begin("capsuleradar", false);
+    p.putString("homeName", name);
+    p.end();
+}
+
+// For the flight tracker's location line (theme_style Radar::locText) and anything else
+// that wants to say where the scope is pointed. False when nothing has ever named it, so
+// the caller can draw nothing rather than an empty plate.
+bool host_location_name(char *out, size_t n) {
+    if (!n) return false;
+    snprintf(out, n, "%s", g_locName.c_str());
+    return out[0] != 0;
+}
+
 // Write a location down. Split out of host_set_location() so the boot-time lookup can save
 // a position WITHOUT the reboot below it: an Orb that restarted on its own because it
 // worked out where it was would be the device reconfiguring itself, which UX-048 forbids.
@@ -1263,6 +1296,7 @@ static bool ip_lookup_location(double &lat, double &lon) {
         char nm[40];
         snprintf(nm, sizeof(nm), "%s%s%s", city, region[0] ? ", " : "", region);
         host_recents_add(nm, la, lo);            // remember where we landed
+        persist_location_name(nm);               // and what it is called
     }
     // Derive + persist the timezone, so the clock reads local wherever this landed.
     const long off = doc["offset"] | 0x7FFFFFFFL;
@@ -1297,7 +1331,7 @@ static bool ip_lookup_location(double &lat, double &lon) {
 // be applied without a restart, and the boot-time lookup already uses them that way.
 void host_set_location_from_studio(const char *name, double lat, double lon,
                                    long tzOffsetSec, bool haveTz) {
-    if (name && name[0]) host_recents_add(name, lat, lon);
+    if (name && name[0]) { host_recents_add(name, lat, lon); persist_location_name(name); }
     // The browser's own timezone, which beats the IP lookup's guess for the same reason the
     // position does. Stored the same way and in the same format; the clock reads local from
     // the next second, with no restart, because tzset() is all that stands behind it.
@@ -1443,6 +1477,7 @@ void host_recents_add(const char *name, double lat, double lon) {
 // Like host_set_location but records the named city in the recents list first (then reboots).
 void host_set_location_named(const char *name, double lat, double lon) {
     host_recents_add(name, lat, lon);
+    persist_location_name(name);
     host_set_location(lat, lon);
 }
 

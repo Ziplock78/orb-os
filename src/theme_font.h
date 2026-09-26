@@ -47,6 +47,7 @@ const lv_font_t *settings_item();
 // same face as settings_item(). See THEME_CAPS 22.
 const lv_font_t *settings_sel();
 const lv_font_t *radar_text(int idx);      // idx 0..3, clamped
+const lv_font_t *radar_loc();              // the Flight Tracker's location line, THEME_CAPS 54
 
 // The Weather map's four, THEME_CAPS 28. Check weather_has_font() before honouring a size
 // control: a loaded face is baked at one size and ignores any size asked of it afterwards.

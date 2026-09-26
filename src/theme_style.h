@@ -391,7 +391,21 @@ namespace theme_style {
 //      the faces carry 0x20-0x7F and an accented letter has no uppercase form to draw.
 //      Studio bakes the glyphs against the uppercased text, so the letters are there.
 //      An Orb below this level draws every line in the case the design typed it.
-constexpr int THEME_CAPS = 53;
+//  54  the Flight Tracker's location line (Radar::locText): a text slot that names the place
+//      the scope is centred on, {city} expanding to whatever the location was called when it
+//      was set. Lerxtwood asked for it on 2026-09-25, having built it in his own fork, and
+//      asked specifically that it be a layer a theme can switch rather than something the
+//      firmware always draws. Off unless a design asks, per Zion.
+//
+//      No city database and no reverse geocoding. Every path that sets a location already
+//      learns a name on its way past (the Settings search, a Studio setloc, the IP lookup),
+//      and the name is now kept in NVS beside the coordinates, so this only has to read it
+//      back. An Orb that has never been told what its position is called draws nothing here,
+//      rather than a plate with nothing in it.
+//
+//      It is an ordinary TextSlot, so it has every control the other lines have, including
+//      the pill, the arc and ALL CAPS. An Orb below this level ignores it entirely.
+constexpr int THEME_CAPS = 54;
 
 struct ClockText {
     // ALL CAPS. THEME_CAPS 53. Applied to the finished line at the moment of drawing, so it
@@ -949,6 +963,14 @@ struct Radar {
     uint32_t centerInnerColor  = 0x0B1F0F;
 
     RadarText rtext[4];
+    // The place the scope is centred on, by name. THEME_CAPS 54. Its own slot rather than a
+    // fifth rtext because the four are the selection readout and are driven by whichever
+    // aircraft is picked; this one is about the Orb, is true with nothing selected, and a
+    // design should be able to have it without spending one of the four.
+    //
+    // Default fmt is the bare token, so switching it on in Studio shows the city and nothing
+    // else until the designer decides to dress it.
+    RadarText locText;
     RadarCard card;
     // The map the Orb carries: real OSM roads around wherever it is, drawn under the
     // scope's chrome. Always on and always the same grey until now, which a dark themed
