@@ -18,6 +18,14 @@ Rules for a section, all of them learned from what reads badly on that card:
 
 ---
 
+## 2.16.31
+
+- Settings, Location now shows the name of where your Orb is set, above the coordinates,
+  so you can check it at a glance instead of reading numbers
+- An Orb that was given bare coordinates and never told what they mean shows nothing there,
+  rather than a blank line
+- The other half of Lerxtwood's request, after the flight tracker line in the last update
+
 ## 2.16.30
 
 - Your flight tracker can show the name of the place it is centred on, so the scope says

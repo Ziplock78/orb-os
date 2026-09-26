@@ -1214,6 +1214,33 @@ int main(int argc, char **argv) {
             app_shell::setCaptured(false);
         }
 
+        // Settings > Location names the place, not just its coordinates (Lerxtwood,
+        // 2026-09-25). Two states, because the second is the one that goes wrong: an Orb
+        // handed bare coordinates has never been told what they mean and must show nothing
+        // there rather than an empty line in the primary ink.
+        {
+            app_shell::setCaptured(false);
+            if (app_shell::browsing()) press();
+            settle();
+            app_shell::selectApp(app_shell::APP_SETTINGS); pump();
+            settingsview::onEnter(); pump();
+            settingsview::openLocationPage(); pump();
+            const char *named = settingsview::locCityText();
+            printf("[selftest] Settings>Location: name line reads \"%s\" (expect the sim's city)\n",
+                   named ? named : "(hidden)");
+            const bool okNamed = named && named[0];
+
+            // Same page, with nothing naming the position.
+            setenv("SIM_CITY", "", 1);
+            settingsview::openLocationPage(); pump();
+            const char *blank = settingsview::locCityText();
+            printf("[selftest] Settings>Location, unnamed: %s (expect hidden)\n",
+                   blank ? "still showing" : "hidden");
+            unsetenv("SIM_CITY");
+            printf("[selftest] Settings>Location: %s\n", (okNamed && !blank) ? "PASS" : "FAIL");
+            app_shell::setCaptured(false);
+        }
+
         // Headlines scroll mode (THEME_CAPS 11): same press-to-own-the-knob grammar as
         // the Flight Tracker's selection, but only when the theme's type size actually
         // overflows the dial. With everything fitting, a push stays a refresh and must

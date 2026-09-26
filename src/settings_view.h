@@ -34,6 +34,12 @@ namespace settingsview {
     // POSITION, so one new character moved every special key one place along.
     const char *searchKeys();
     const char *searchType(char c);
+    // The Location page's two readouts, for the self-test: openLocationPage() puts the
+    // Orb on that page through the real show_page(), and locCityText() answers what the
+    // name line is showing, or nullptr when it is hidden because nothing has named the
+    // position. The coordinates line is separate and has always been there.
+    void openLocationPage();
+    const char *locCityText();
 
     // How to reach the web config page (IP / hostname / setup AP). Shown on the About
     // page alongside the firmware version. Both moved here from the old touch-only

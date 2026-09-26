@@ -29,6 +29,11 @@ extern void host_set_location_named(const char *name, double lat, double lon);  
 extern bool host_locate_current();                                 // IP-locate + set + reboot; false = failed, didn't reboot
 extern int  host_geocode(const char *query, char names[][40], double *lats, double *lons, int maxN);
 extern int  host_recents_get(char names[][40], double *lats, double *lons, int maxN);
+// What this place is CALLED, saved beside the coordinates by whichever path set them.
+// Lerxtwood asked for it on the Location page as well as on the flight tracker, and said
+// the Settings one is fine always on, which is how it is drawn: it is not themeable and
+// there is nothing to switch.
+extern bool host_location_name(char *out, size_t n);
 extern void host_recents_add(const char *name, double lat, double lon);
 extern int  host_get_volume();
 extern void host_set_volume(int v, bool save);
@@ -364,6 +369,7 @@ namespace {
     char      s_netInfo[112] = "";     // last line handed to setNetInfo(), replayed on page open
     char      s_homeCoords[48] = "";   // last value handed to setHomeCoords(), same contract
     lv_obj_t *s_lmCoords = nullptr;    // the readout under the Location page's title
+    lv_obj_t *s_lmCity   = nullptr;    // the place's NAME, above those coordinates
     lv_obj_t *s_aboutImg  = nullptr;   // decoded fresh each time (see refresh_about()) — cheap, avoids relying on splash_art's shared decode buffer staying valid
     // --- first-boot WiFi choice (UX-019 as amended 2026-08-30, UX-022) ---
     //
@@ -805,6 +811,18 @@ namespace {
         // you set is the location it uses - and it used to be legible only on the splash,
         // for three seconds, at the bottom of a crowded dial.
         if (s_lmCoords) lv_label_set_text(s_lmCoords, s_homeCoords[0] ? s_homeCoords : "location not set");
+        // Hidden rather than blank when nothing has named this position: an Orb given bare
+        // coordinates over the cable genuinely does not know, and an empty line in the
+        // primary ink reads as something failing to load.
+        if (s_lmCity) {
+            char city[48] = "";
+            if (host_location_name(city, sizeof(city))) {
+                lv_label_set_text(s_lmCity, city);
+                lv_obj_clear_flag(s_lmCity, LV_OBJ_FLAG_HIDDEN);
+            } else {
+                lv_obj_add_flag(s_lmCity, LV_OBJ_FLAG_HIDDEN);
+            }
+        }
         wheel_layout(s_lmItems, LM_COUNT, s_lmSel, s_lmHl);
     }
 
@@ -1692,8 +1710,20 @@ void settingsview::init() {
     lv_label_set_text(lmtitle, "Location");
     lv_obj_set_style_text_color(lmtitle, C_DIM, 0);
     lv_obj_set_style_text_font(lmtitle, &lv_font_montserrat_16, 0);
-    lv_obj_align(lmtitle, LV_ALIGN_CENTER, 0, -122);
+    // Lifted from -122 to make room for the place's name underneath it. The name is the
+    // line somebody actually came here to read; the coordinates below stay exactly where
+    // they have always been, because the wheel's upper rows pass through that band and the
+    // spacing there is already tuned against them.
+    lv_obj_align(lmtitle, LV_ALIGN_CENTER, 0, -146);
     reg_hint(lmtitle);
+    // The name, in the primary ink rather than the secondary: between "Leeds, Utah" and
+    // "37.23859, -113.35912" it is the first one that answers the question.
+    s_lmCity = lv_label_create(s_lmPage);
+    lv_label_set_text(s_lmCity, "");
+    lv_obj_set_style_text_color(s_lmCity, C_WHITE, 0);
+    lv_obj_set_style_text_font(s_lmCity, &lv_font_montserrat_18, 0);
+    lv_obj_set_style_text_align(s_lmCity, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_align(s_lmCity, LV_ALIGN_CENTER, 0, -122);
     // Directly under the title and above the wheel, in the dim ink the other secondary
     // readouts use. Text is set in refresh_locmenu(), which runs on every entry.
     s_lmCoords = lv_label_create(s_lmPage);
@@ -2376,6 +2406,20 @@ const char *settingsview::searchType(char c) {
     s_kbIdx = (int)(at - KEYS);
     settingsview::onPress();
     return s_str;
+}
+
+void settingsview::openLocationPage() {
+    s_sel = ITEM_LOCATION;
+    s_lmSel = 0;
+    show_page(MODE_LOCATION);
+}
+
+// nullptr when the line is hidden, which is the state an Orb is in when it was handed
+// coordinates and never told what they mean. Reading the label rather than calling
+// host_location_name() again is the point: this asserts what is ON THE GLASS.
+const char *settingsview::locCityText() {
+    if (!s_lmCity || lv_obj_has_flag(s_lmCity, LV_OBJ_FLAG_HIDDEN)) return nullptr;
+    return lv_label_get_text(s_lmCity);
 }
 
 void settingsview::openAboutPage() {
