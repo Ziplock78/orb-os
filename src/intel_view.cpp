@@ -158,6 +158,9 @@ RowBox row_box(int y) {
 }
 
 lv_obj_t *s_screen = nullptr;
+// The two repeating timers, so destroy() can stop them (see the end of init()).
+lv_timer_t *s_tickTimer       = nullptr;
+lv_timer_t *s_scrollIdleTimer = nullptr;
 lv_obj_t *s_title  = nullptr;
 lv_obj_t *s_age    = nullptr;
 // The age line's glow: the clock banner's ring technique (draw the string again in the
@@ -992,6 +995,7 @@ void attach_art() {
 lv_obj_t *intelview::screen() { return s_screen; }
 
 void intelview::onExit() {
+    if (!s_screen) return;   // not built (app_shell::addLazy); nothing to act on
     // Close the briefing before the artwork goes: leaving it open would hold a panel over a
     // screen whose plate has been freed, and the next entry would find a paragraph about a
     // story chosen before the list was refetched.
@@ -1006,6 +1010,7 @@ void intelview::onExit() {
 // timer. A press is the only gesture on this screen that means "this one", and spending it
 // on a refresh left the selection with nothing to do.
 void intelview::onPress() {
+    if (!s_screen) return;   // not built (app_shell::addLazy); nothing to act on
     if (s_briefOpen) { close_brief(); return; }
     open_brief();
 }
@@ -1030,6 +1035,7 @@ void intelview::onPress() {
 // but there is still something to choose, and refusing the turn would make the press look
 // broken on exactly the short lists most designs show.
 void intelview::onTurn(int delta) {
+    if (!s_screen) return;   // not built (app_shell::addLazy); nothing to act on
     if (s_briefOpen) {
         s_briefScroll += delta * BRIEF_STEP_PX;
         if (s_briefScroll < 0) s_briefScroll = 0;
@@ -1050,6 +1056,7 @@ void intelview::onTurn(int delta) {
 // Flight Tracker does, and for the same reason — stale mode from a prior visit must not
 // leak into this one.
 void intelview::onEnter() {
+    if (!s_screen) return;   // not built (app_shell::addLazy); nothing to act on
     s_scroll = 0;
     s_sel    = 0;
     // A briefing left open on the way out must not be what greets you on the way back in:
@@ -1364,6 +1371,64 @@ void intelview::init() {
     attach_age_canvas();
     render();
     if (s_overlayImg) lv_obj_move_foreground(s_overlayImg);
-    lv_timer_create(tick_cb, 30000, nullptr);
-    lv_timer_create(scroll_idle_cb, 1000, nullptr);
+    // Handles kept, and never created twice — same reason as settings_view.cpp. These were
+    // anonymous, which was survivable while this screen was built once at boot and held for
+    // ever. It is not survivable now it can be given back: a 30 s tick and a 1 s scroll
+    // check still firing after their widgets are freed walk dangling pointers on the UI
+    // thread, which is the "wedged display thread" failure in docs/memory.md.
+    if (!s_tickTimer)       s_tickTimer       = lv_timer_create(tick_cb, 30000, nullptr);
+    if (!s_scrollIdleTimer) s_scrollIdleTimer = lv_timer_create(scroll_idle_cb, 1000, nullptr);
+}
+
+// Build on demand for app_shell::addLazy. init() is re-runnable because destroy() puts
+// every pointer back to null.
+lv_obj_t *intelview::build() {
+    if (!s_screen) init();
+    return s_screen;
+}
+
+// Give the screen back: ~303 LVGL allocations and ~7.4 KB of internal RAM, measured
+// 2026-10-06. See the residency note in app_shell.h.
+//
+// Same order as settings_view::destroy(), for the same reasons: timers first, then the
+// things that hold their own pointers INTO this tree (the sprites, the age canvas and its
+// PSRAM buffer, the briefing panel), then the tree, then every pointer this file kept.
+// onExit() already does the middle step on a normal app switch and each piece is
+// null-guarded, so doing it again here is free and makes destroy() safe to call directly.
+void intelview::destroy() {
+    if (s_tickTimer)       { lv_timer_del(s_tickTimer);       s_tickTimer       = nullptr; }
+    if (s_scrollIdleTimer) { lv_timer_del(s_scrollIdleTimer); s_scrollIdleTimer = nullptr; }
+    if (s_briefOpen) close_brief();
+    intelview::sprite_release();
+    release_age_canvas();
+    // Not parented to s_screen, so lv_obj_del would not reach it: an lv_mem block sized to
+    // the fade zone, cached across repaints. Dropped here so a rebuilt screen sizes a new
+    // one rather than trusting dimensions from a previous life.
+    if (s_fadeMap) { lv_mem_free(s_fadeMap); s_fadeMap = nullptr; s_fadeMapW = 0; s_fadeMapH = 0; }
+    if (s_screen) { lv_obj_del(s_screen); s_screen = nullptr; }
+    s_age = nullptr;
+    s_ageCanvas = nullptr;
+    s_block = nullptr;
+    s_briefBack = nullptr;
+    s_briefBackChev = nullptr;
+    s_briefBackLbl = nullptr;
+    s_briefBody = nullptr;
+    s_briefFoot = nullptr;
+    s_briefHead = nullptr;
+    s_briefPanel = nullptr;
+    s_briefText = nullptr;
+    s_chevDown = nullptr;
+    s_chevUp = nullptr;
+    s_empty = nullptr;
+    s_overlayImg = nullptr;
+    s_plateImg = nullptr;
+    s_selBar = nullptr;
+    s_title = nullptr;
+    memset(s_ageGlow, 0, sizeof(s_ageGlow));
+    memset(s_credit, 0, sizeof(s_credit));
+    memset(s_rowBox, 0, sizeof(s_rowBox));
+    memset(s_rows, 0, sizeof(s_rows));
+    // Back to what a fresh build expects: top of the list, nothing selected, no briefing.
+    s_scroll = 0;
+    s_sel    = 0;
 }

@@ -6,7 +6,18 @@
 // switching apps); selecting Back releases it and returns to the first app.
 namespace settingsview {
     void      init();
-    lv_obj_t* screen();
+    lv_obj_t* screen();        // nullptr while this screen is not built — see build()
+
+    // Residency, for app_shell::addLazy(). build() makes the screen and returns it;
+    // destroy() deletes it and puts every pointer in the module back to null, so build()
+    // may be called again afterwards. Settings is the biggest single holder of internal
+    // RAM in the firmware (~909 LVGL allocations, ~24 KB, measured 2026-10-06) and the
+    // app reached least often, which is why it is the first screen to be made lazy.
+    //
+    // Everything else in this namespace is null-guarded as a result: with Settings
+    // unbuilt, calls from main.cpp's loop() have to be no-ops, not crashes.
+    lv_obj_t* build();
+    void      destroy();
     void      onTurn(int delta);   // knob turn while captured
     void      onPress();           // knob push
     void      onEnter();           // entered from the app switcher: reset to the menu

@@ -5,7 +5,19 @@
 // on a screen that is only ever read at a glance. Reached by the knob like Clock/Weather.
 namespace intelview {
     void      init();       // build the screen (core 1 / LVGL)
-    lv_obj_t* screen();
+    lv_obj_t* screen();     // nullptr while this screen is not built — see build()
+
+    // Residency, for app_shell::addLazy(). See the note in app_shell.h.
+    //
+    // Note which calls below are NOT null-guarded, because it is deliberate:
+    //   fetchStep()   is core 0 network work that fills the headline STORE and touches no
+    //                 widget. Guarding it would stop the news being fetched while the
+    //                 screen is unbuilt, so you would open Headlines to a stale list.
+    //   scrollState() reads three plain ints.
+    //   tick()/render() already guard themselves, and render()'s comment explains why.
+    // Everything that writes widgets does return early when unbuilt.
+    lv_obj_t* build();
+    void      destroy();
     // Knob push. When the headlines all fit: fetch now rather than waiting out the poll.
     // When the theme's type size overflows the dial: toggle scroll mode instead — the
     // same press-to-own-the-knob grammar the Flight Tracker's aircraft selection uses.

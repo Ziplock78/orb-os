@@ -30,6 +30,13 @@ namespace {
         app_action_t  onEnter;
         app_action_t  onExit;
         bool          hidden;    // registered but skipped when cycling the menu
+        // Residency. `build`/`destroy` are null for an eagerly-built app, whose screen is
+        // handed in at registration and never released — that is still the right answer for
+        // a screen two apps share (radar/weather) or one built before the shell exists.
+        app_build_t   build;
+        app_action_t  destroy;
+        bool          pinned;    // never evicted (the Clock)
+        uint32_t      lastUsed;  // s_useTick when this app was last loaded; 0 = never
     };
 
     constexpr int   MAX_APPS      = 8;
@@ -39,6 +46,10 @@ namespace {
     int  s_count    = 0;
     int  s_cur      = 0;
     bool s_captured = false;
+    // Monotonic "when was this app last looked at" clock. Not millis(): the ORDER is the
+    // only thing eviction needs, and a counter cannot wrap into the past mid-session the
+    // way a 32-bit millisecond count can.
+    uint32_t s_useTick = 0;
 
     // app-switcher overlay (lives on the top layer, above whatever screen is loaded)
     bool      s_browsing      = false;
@@ -253,13 +264,84 @@ namespace {
         return from;
     }
 
+    // Is LVGL still holding this screen for a load animation? Deleting one that is would
+    // leave the animation walking a freed object.
+    //
+    // lv_scr_load_anim is called with auto_del=false, so the OUTGOING screen stays alive
+    // for ANIM_MS after the swap and LVGL tracks it as prev_scr for exactly that long.
+    // scr_to_load is the incoming one before the swap completes. Both are off limits, and
+    // checking the display rather than timing it against ANIM_MS means a fast double-turn
+    // cannot slip between the two.
+    bool screen_in_use(const lv_obj_t *scr) {
+        if (!scr) return false;
+        if (scr == lv_scr_act()) return true;
+        lv_disp_t *d = lv_disp_get_default();
+        return d && (scr == d->prev_scr || scr == d->scr_to_load);
+    }
+
+    // Give back every cached screen beyond RESIDENT_CACHE, newest kept.
+    //
+    // Called BEFORE the incoming screen is built, which is the whole point: the memory an
+    // arriving screen needs is the memory the one you stopped looking at is holding, and
+    // freeing it afterwards would mean peaking at both at once — on a board that has been
+    // measured ending boot with 2.5 KB contiguous, that peak is the failure.
+    //
+    // `keep` is the app about to be shown; it is never a candidate however stale its tick.
+    void evict(int keep) {
+        for (;;) {
+            int victim = -1;
+            int resident = 0;
+            for (int i = 0; i < s_count; ++i) {
+                const App &a = s_apps[i];
+                if (!a.screen || a.pinned || !a.destroy) continue;   // eager/pinned apps stay
+                ++resident;
+            }
+            if (resident <= app_shell::RESIDENT_CACHE) return;
+            // The stalest evictable screen that nothing is currently drawing.
+            uint32_t oldest = 0xFFFFFFFFu;
+            for (int i = 0; i < s_count; ++i) {
+                const App &a = s_apps[i];
+                if (!a.screen || a.pinned || !a.destroy) continue;
+                if (i == keep || i == s_cur) continue;
+                if (screen_in_use(a.screen)) continue;
+                if (a.lastUsed < oldest) { oldest = a.lastUsed; victim = i; }
+            }
+            if (victim < 0) return;    // nothing safe to drop; try again on the next switch
+            Serial.printf("[shell] release %s (resident %d > %d)\n",
+                          s_apps[victim].name, resident, app_shell::RESIDENT_CACHE);
+            s_apps[victim].destroy();
+            s_apps[victim].screen = nullptr;
+        }
+    }
+
+    // Build a lazy app's screen if it is not up. Returns false when it could not be had,
+    // which the caller must treat as "do not switch" rather than pressing on into a null.
+    bool ensure_built(int idx) {
+        App &a = s_apps[idx];
+        if (a.screen) return true;
+        if (!a.build) return false;
+        a.screen = a.build();
+        if (!a.screen) {
+            Serial.printf("[shell] %s could not be built; staying put\n", a.name);
+            diag::log("app %s build failed", a.name);
+            return false;
+        }
+        return true;
+    }
+
     void load(int idx, bool animate, bool forward) {
-        if (idx < 0 || idx >= s_count || !s_apps[idx].screen) return;
+        if (idx < 0 || idx >= s_count) return;
+        // Hand back what is stale before taking what is needed, then build. An app that
+        // cannot be built leaves the current one exactly where it was: a failed switch is
+        // recoverable, a switch into a null screen is a wedged display thread.
+        evict(idx);
+        if (!ensure_built(idx)) return;
         // Tell the outgoing app it's leaving before we swap, so it can free whatever it
         // decoded. Both this and onEnter now fire ONLY on a real app change (boot, a
         // committed switcher selection, or next()/prev()), never per switcher detent.
         if (idx != s_cur && s_count && s_apps[s_cur].onExit) s_apps[s_cur].onExit();
         s_cur = idx;
+        s_apps[idx].lastUsed = ++s_useTick;
         s_captured = s_apps[idx].capture;   // menu apps grab the knob on entry
         if (s_apps[idx].screen != lv_scr_act()) {   // apps sharing a screen (radar/weather) skip the load
             if (animate) {
@@ -287,8 +369,49 @@ void app_shell::add(lv_obj_t *screen, const char *name,
         s_apps[s_count].onEnter = onEnter;
         s_apps[s_count].onExit  = onExit;
         s_apps[s_count].hidden  = hidden;
+        s_apps[s_count].build   = nullptr;    // eager: the screen is already made and kept
+        s_apps[s_count].destroy = nullptr;
+        s_apps[s_count].pinned  = true;       // nothing can release it, so say so plainly
+        s_apps[s_count].lastUsed = 0;
         s_count++;
     }
+}
+
+void app_shell::addLazy(const char *name, app_build_t build, app_action_t destroy,
+                        app_action_t onPress, app_turn_t onTurn, bool capture,
+                        app_action_t onEnter, app_action_t onExit, bool hidden, bool pinned) {
+    // Both halves or neither. A build with no destroy is a screen that would be constructed
+    // on demand and then held for ever, which is the behaviour this exists to end, and it
+    // would be invisible: the app would simply never appear in an eviction pass.
+    if (!build || !destroy) {
+        Serial.printf("[shell] addLazy(%s) needs BOTH build and destroy; refusing\n",
+                      name ? name : "(unnamed)");
+        return;
+    }
+    if (s_count >= MAX_APPS) return;
+    s_apps[s_count].screen   = nullptr;       // not built until somebody looks at it
+    s_apps[s_count].name     = name;
+    s_apps[s_count].onPress  = onPress;
+    s_apps[s_count].onTurn   = onTurn;
+    s_apps[s_count].capture  = capture;
+    s_apps[s_count].onEnter  = onEnter;
+    s_apps[s_count].onExit   = onExit;
+    s_apps[s_count].hidden   = hidden;
+    s_apps[s_count].build    = build;
+    s_apps[s_count].destroy  = destroy;
+    s_apps[s_count].pinned   = pinned;
+    s_apps[s_count].lastUsed = 0;
+    s_count++;
+}
+
+lv_obj_t *app_shell::screenAt(int idx) {
+    if (idx < 0 || idx >= s_count) return nullptr;
+    return s_apps[idx].screen;
+}
+
+bool app_shell::residentAt(int idx) {
+    if (idx < 0 || idx >= s_count) return false;
+    return s_apps[idx].screen != nullptr;
 }
 
 void app_shell::add_active(const char *name,
@@ -327,7 +450,7 @@ void app_shell::turnCurrent(int delta) {
 // this replaces produced no output at all. It does not halt: a device that boots to the
 // wrong screen is still a device somebody can turn the knob on, and refusing to start would
 // be a worse failure than the one being reported.
-bool app_shell::verifySlots(lv_obj_t *settingsScreen) {
+bool app_shell::verifySlots(lv_obj_t *settingsScreen, app_build_t settingsBuild) {
     bool ok = true;
 
     if (s_count != APP_COUNT) {
@@ -338,7 +461,17 @@ bool app_shell::verifySlots(lv_obj_t *settingsScreen) {
         ok = false;
     }
 
-    if (APP_SETTINGS >= s_count || s_apps[APP_SETTINGS].screen != settingsScreen) {
+    // Identity, not the label, because a theme may rename Settings to anything it likes.
+    // For a LAZY Settings the screen pointer is null until it is first shown, so the thing
+    // that identifies the slot is its build function instead — equally unique, equally
+    // immune to relabelling, and available at boot. Whichever token the caller has, the
+    // check stays a pointer comparison: this is the test that caught two silent reorders
+    // and it must not degrade into "something is registered here".
+    const bool settingsSlotOk =
+        APP_SETTINGS < s_count &&
+        (settingsBuild ? (s_apps[APP_SETTINGS].build  == settingsBuild)
+                       : (s_apps[APP_SETTINGS].screen == settingsScreen && settingsScreen != nullptr));
+    if (!settingsSlotOk) {
         Serial.printf("[shell] SLOT TABLE IS WRONG: APP_SETTINGS is %d but slot %d holds "
                       "\"%s\". A boot with no network jumps there to open WiFi setup, so it "
                       "will land on that screen instead and the owner will see no way to "

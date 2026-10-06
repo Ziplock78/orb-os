@@ -14,6 +14,45 @@
 typedef void (*app_action_t)();
 typedef void (*app_turn_t)(int delta);
 
+// --- residency: which screens exist, as opposed to which one is shown ---------------
+//
+// An app registered with addLazy() does not exist until somebody looks at it. `build`
+// constructs the screen and returns it — the same work the old init() did at boot — and
+// `destroy` deletes it and puts every pointer it kept back to null. build may be called
+// again after destroy, so it has to be re-runnable rather than once-only.
+//
+// Why: every screen used to be built at boot and kept for the life of the device. Measured
+// 2026-10-06 on a themed Orb, the four screens held 1,936 live LVGL allocations and 71 KB
+// of INTERNAL RAM, of which exactly one screen was ever on the dial. Settings alone was 909
+// allocations and 24 KB, for the screen reached least often. The onEnter/onExit contract in
+// docs/memory.md already releases a screen's ART on exit and works — but art is PSRAM, and
+// PSRAM is not the pool that runs out. The object trees are internal, and nothing released
+// them. That contract now extends to the objects.
+//
+// `pinned` keeps a screen resident for ever: that is the Clock, because it is the screen
+// people come back to and rebuilding it would be felt. Everything else is cached, newest
+// first, up to RESIDENT_CACHE — so the app you were just on is still built when you turn
+// back to it, and the one before that has been given back. See the note over evict().
+typedef lv_obj_t *(*app_build_t)();
+
+namespace app_shell {
+    // Non-pinned screens kept built at once, the current one included.
+    //
+    // ONE, not two. Two was the first answer and it was sized for a roster that does not
+    // exist: with APPS_LAUNCH_ONE the four apps are Clock and Flight (both pinned — the
+    // Clock by choice, Flight because its screen is the one ui_create() builds at boot and
+    // Weather shares) plus Headlines and Settings. That is two evictable screens against a
+    // budget of two, so the count never exceeded the limit and nothing was ever actually
+    // evicted: opening Settings cost its 24 KB back and kept it until reboot, which is the
+    // thing this was built to stop.
+    //
+    // At one, the lazy screens take turns: whichever of Headlines or Settings you are on is
+    // built and the other is not. Going home to the Clock still keeps the one you just
+    // left, because a pinned screen is not counted here — so "the last other screen stays
+    // warm" still holds, which was the point of the cache.
+    constexpr int RESIDENT_CACHE = 1;
+}
+
 namespace app_shell {
     // The menu's running order, written down once.
     //
@@ -70,6 +109,26 @@ namespace app_shell {
     void add_active(const char *name,
                     app_action_t onPress = nullptr, app_turn_t onTurn = nullptr, bool capture = false,
                     app_action_t onEnter = nullptr, app_action_t onExit = nullptr, bool hidden = false);
+
+    // Same app, built on demand. `pinned` opts out of eviction entirely.
+    //
+    // The screen pointer is NOT available until the app has been shown once, which is the
+    // one way a lazy app differs from an eager one for its caller: anything that needs the
+    // pointer up front (verifySlots' settingsScreen check) must use screenAt() and cope
+    // with nullptr, and anything that reaches into a screen's widgets from outside has to
+    // tolerate the screen not being there yet.
+    void addLazy(const char *name, app_build_t build, app_action_t destroy,
+                 app_action_t onPress = nullptr, app_turn_t onTurn = nullptr, bool capture = false,
+                 app_action_t onEnter = nullptr, app_action_t onExit = nullptr, bool hidden = false,
+                 bool pinned = false);
+
+    // The screen of an app, or nullptr when a lazy app is not currently built. Never
+    // builds anything: asking must not be the thing that allocates.
+    lv_obj_t *screenAt(int idx);
+
+    // Is this app's screen built right now? For diagnostics (`?orb apps`) and tests.
+    bool residentAt(int idx);
+
     void begin();                                  // show the first app (no animation)
 
     // Check that the Slot enum above still describes the roster that actually registered,
@@ -82,7 +141,9 @@ namespace app_shell {
     // wrong screen, which is indistinguishable from a broken device to the person holding
     // it. `settingsScreen` is checked by POINTER rather than by name, because a theme may
     // relabel Settings to anything it likes and the label is therefore worthless as proof.
-    bool verifySlots(lv_obj_t *settingsScreen);
+    // Pass the screen pointer for an eagerly-built Settings, or its build function when
+    // Settings is registered with addLazy() and has no screen yet. Exactly one of the two.
+    bool verifySlots(lv_obj_t *settingsScreen, app_build_t settingsBuild = nullptr);
 
     void next();          // advance to the next app (knob right), slides left
     void prev();          // go to the previous app (knob left), slides right

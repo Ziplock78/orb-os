@@ -2791,6 +2791,9 @@ void setup() {
     clockview::init();
     psram_mark("after clockview");
     // onEnter takes the canvas, onExit gives it back. It answers neither a turn nor a press.
+    // The Clock stays built for ever. It is registered eagerly, which app_shell treats as
+    // pinned: it is the screen people come back to, and a rebuild would be felt there more
+    // than anywhere else. See the residency note in app_shell.h.
     app_shell::add(clockview::screen(), theme_style::names().clock, nullptr, nullptr, false, clockview::onEnter, clockview::onExit, !theme_style::apps().clock);
     app_shell::add(radarScreen, theme_style::names().flight, radar_press_custom_or_theme, radar_turn_select, false, radar_show_home_custom, radar_exit_release_style, !theme_style::apps().flight);
 #if !APPS_LAUNCH_ONE
@@ -2805,10 +2808,14 @@ void setup() {
     // were written as bare integers and moving anything would have pointed the jumps at
     // the wrong screen. They name app_shell::Slot now, so the menu can be ordered the way it
     // should read: Settings last, after everything it configures.
-    intelview::init();
-    psram_mark("after intelview");
-    app_shell::add(intelview::screen(), theme_style::names().headlines,
-                   intelview::onPress, intelview::onTurn, false, intelview::onEnter, intelview::onExit, !theme_style::apps().headlines);  // push fetches now, or toggles scroll mode when the type size overflows; onEnter resets to the top
+    // Built the first time it is opened, like Settings. ~303 LVGL allocations and ~7.4 KB
+    // of internal RAM. Its network step keeps running while the screen is unbuilt, so the
+    // headlines are current when you do open it — see the note in intel_view.h.
+    app_shell::addLazy(theme_style::names().headlines,
+                       intelview::build, intelview::destroy,
+                       intelview::onPress, intelview::onTurn, false,
+                       intelview::onEnter, intelview::onExit, !theme_style::apps().headlines);  // push fetches now, or toggles scroll mode when the type size overflows; onEnter resets to the top
+    psram_mark("after intelview (lazy)");
 #if !APPS_LAUNCH_ONE
     tickerview::init();
     psram_mark("after tickerview");
@@ -2816,11 +2823,16 @@ void setup() {
                    tickerview::onPress, tickerview::onTurn, false,
                    tickerview::onEnter, tickerview::onExit, !theme_style::apps().ticker);  // turn steps the watchlist; onEnter takes the strip canvas only when the design curves it
 #endif
-    settingsview::init();
-    psram_mark("after settingsview");
-    app_shell::add(settingsview::screen(), theme_style::names().settings,
-                   settingsview::onPress, settingsview::onTurn,
-                   true, settingsview::onEnter, settingsview::onExit, false);  // captures the knob on entry; onEnter resets to the menu and takes the text canvas, onExit gives it back
+    // Settings is built the first time somebody opens it, not here. It was the single
+    // largest holder of internal RAM on the device — 909 LVGL allocations and ~24 KB,
+    // measured 2026-10-06 — for the screen reached least often, and internal RAM is the
+    // pool that runs out (docs/memory.md). app_shell keeps it resident afterwards under
+    // RESIDENT_CACHE, so coming straight back to it costs no rebuild.
+    app_shell::addLazy(theme_style::names().settings,
+                       settingsview::build, settingsview::destroy,
+                       settingsview::onPress, settingsview::onTurn,
+                       true, settingsview::onEnter, settingsview::onExit, false);  // captures the knob on entry; onEnter resets to the menu and takes the text canvas, onExit gives it back
+    psram_mark("after settingsview (lazy)");
     // Before anything jumps to a slot by name. See app_shell::verifySlots(): the enum and
     // the registration order above have drifted apart twice, and both times the only
     // symptom was the wrong screen appearing with nothing said about it.
@@ -2843,7 +2855,9 @@ void setup() {
                               "read and kept; nothing draws them.\n", c.name);
     }
 #endif
-    app_shell::verifySlots(settingsview::screen());
+    // By build function, not screen: a lazy Settings has no screen yet. Still a pointer
+    // comparison, so the check that caught two silent slot reorders is undiminished.
+    app_shell::verifySlots(nullptr, settingsview::build);
     app_shell::begin();                // start on the clock (index 0 — see comment above)
     psram_mark("after app_shell::begin");
 
