@@ -2551,6 +2551,33 @@ static unsigned host_lvgl_load() {
     last = us; lastMs = now;
     return v;
 }
+// How many of the theme's declared background frames are actually baked into themeart.
+// Read-only: theme_art::has() is an index lookup, it decodes and allocates nothing.
+static int host_bg_frames_baked() {
+    const int want = theme_style::clock().bgAnim.frames;
+    const char *slug = theme_select::activeSlug();
+    int got = 0;
+    for (int i = 1; i <= want; ++i) {
+        char name[32];
+        snprintf(name, sizeof(name), "clock_plate_%02d.png", i);
+        if (theme_art::has(slug, name)) ++got;
+    }
+    return got;
+}
+
+// Internal-heap block counts, for the leak hunt. A rising allocated-block count with a
+// falling free total is a leak; a steady count with a falling total is fragmentation.
+// They are different faults with different fixes, and "free KB" cannot tell them apart.
+static unsigned host_internal_alloc_blocks() {
+    multi_heap_info_t hi;
+    heap_caps_get_info(&hi, MALLOC_CAP_INTERNAL);
+    return (unsigned)hi.allocated_blocks;
+}
+static unsigned host_internal_free_blocks() {
+    multi_heap_info_t hi;
+    heap_caps_get_info(&hi, MALLOC_CAP_INTERNAL);
+    return (unsigned)hi.free_blocks;
+}
 static unsigned host_flush_load() {
     static uint32_t last = 0, lastMs = 0;
     const uint32_t us = display_flush_us(), now = millis();
@@ -3175,7 +3202,10 @@ void setup() {
     // free: an allocation can fail with plenty of total free PSRAM if churn has
     // fragmented it below the requested size.
     g_web.on("/health", []{
-        char b[420];
+        // 640, not 420: the allocation-census fields below pushed it past the old size,
+        // and snprintf would have silently truncated the JSON into something no client
+        // could parse.
+        char b[640];
         snprintf(b, sizeof(b),
                  // slug is the permanent folder id, theme is the display name. Reporting
                  // only the slug is what made "Modern" and "the-office" look unrelated.
@@ -3188,6 +3218,23 @@ void setup() {
                  "\"heap_free_kb\":%u,\"heap_largest_kb\":%u,"
                  "\"fps\":%u,\"lvgl_ms_per_s\":%u,\"flush_ms_per_s\":%u,"
                  "\"screens_per_s\":%u,"
+                 // The allocation CENSUS, not just the free total. Added 2026-10-06 after
+                 // /health showed internal free falling 59 KB -> 11 KB over a 30-minute
+                 // uptime and the device then rebooting: a leak, which "free" alone can
+                 // report but cannot attribute. alloc_blocks climbing is the signature;
+                 // lv_int/lv_allocs say whether LVGL is the one doing it, which is the
+                 // single most useful split because it separates the UI from the network
+                 // stack. The same numbers print to serial as [lvmem]/[memdbg], but a leak
+                 // takes half an hour to show and a cable cannot be left attached that
+                 // long without ESP_RST_USB rebooting the thing being measured.
+                 // Whether the animated background CAN play, which until now was only
+                 // answerable with a cable and a lucky boot. bg_frames is what the theme
+                 // declares, bg_frames_baked is how many of them are actually in themeart.
+                 // Unequal means the partition filled before the frames were reached and
+                 // the dial is stuck on frame 0 — see custom_plate_frame().
+                 "\"bg_frames\":%d,\"bg_frames_baked\":%d,"
+                 "\"alloc_blocks\":%u,\"free_blocks\":%u,"
+                 "\"lv_int\":%u,\"lv_allocs\":%u,\"lv_peak_int\":%u,"
                  "\"wifi_rssi\":%d,\"boot_reason\":\"%s\"}",
                  FW_VERSION, theme_select::activeSlug(), theme_style::themeLabel(),
                  (unsigned long)CUSTOM_WELD_HASH,
@@ -3198,10 +3245,15 @@ void setup() {
                  (unsigned)(ESP.getFreeHeap() / 1024),
                  (unsigned)(heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL) / 1024),
                  host_fps(), host_lvgl_load(), host_flush_load(), host_screens_per_s(),
+                 theme_style::clock().bgAnim.frames, host_bg_frames_baked(),
+                 host_internal_alloc_blocks(), host_internal_free_blocks(),
+                 (unsigned)orb_lv_live_int_bytes, (unsigned)orb_lv_live_int_count,
+                 (unsigned)orb_lv_peak_int_bytes,
                  (int)WiFi.RSSI(),
-                 esp_reset_reason() == ESP_RST_POWERON ? "power-on" :
-                 esp_reset_reason() == ESP_RST_SW      ? "software" :
-                 esp_reset_reason() == ESP_RST_TASK_WDT ? "watchdog" : "other");
+                 // Was three cases and "other", which reported a USB-triggered reset
+                 // and a panic as the same word. diag_log.cpp owns the full mapping; use
+                 // it rather than keeping a second, shorter copy here that can disagree.
+                 diag::resetReasonText());
         g_web.send(200, "application/json", b);
     });
     g_web.on("/sdput", HTTP_POST, handleSdPutDone, handleSdPutUpload);   // Launch Kit pushes theme files here

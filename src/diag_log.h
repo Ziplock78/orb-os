@@ -10,6 +10,9 @@ namespace diag {
     void   boot();                       // call once, first thing in setup() (after Serial.begin)
     void   log(const char *fmt, ...);    // printf-style, truncated to fit one entry
     String text();                       // the whole ring buffer as plain text
+    // Why this device last restarted, in words. Shared with /health so the cable and the
+    // network can never give different answers to the same question.
+    const char *resetReasonText();
 }
 #else
 // Desktop/native build: no RTC memory, no Serial-backed ring buffer. Just print,
@@ -22,5 +25,6 @@ namespace diag {
         va_list a; va_start(a, fmt); vprintf(fmt, a); putchar('\n'); va_end(a);
     }
     inline const char *text() { return ""; }
+    inline const char *resetReasonText() { return "simulator"; }
 }
 #endif
