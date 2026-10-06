@@ -24,6 +24,7 @@
 #include "app_shell.h"   // selectApp/nameAt for the app + apps commands
 #include <strings.h>     // strncasecmp
 #include <esp_heap_caps.h> // heap_caps_get_info for the "mem" command
+#include "lv_psram_alloc.h" // ?orb mem: what the LVGL allocator holds in internal RAM
 #include "radar_view.h"  // debugHideLayer for the "layer" command
 void host_set_poll_override(uint32_t ms);   // main.cpp
 void host_location_reset();                 // main.cpp
@@ -504,10 +505,34 @@ void cmd_mem() {
     multi_heap_info_t hi;
     heap_caps_get_info(&hi, MALLOC_CAP_INTERNAL);
     out_reset();
-    out_fmt("{\"ok\":true,\"free\":%u,\"largest\":%u,\"freeBlocks\":%u,\"allocBlocks\":%u,\"psramFree\":%u}",
+    out_fmt("{\"ok\":true,\"free\":%u,\"largest\":%u,\"freeBlocks\":%u,\"allocBlocks\":%u,\"psramFree\":%u",
             (unsigned)hi.total_free_bytes, (unsigned)hi.largest_free_block,
             (unsigned)hi.free_blocks, (unsigned)hi.allocated_blocks,
             (unsigned)ESP.getFreePsram());
+#if ORB_LV_STATS
+    // What the LVGL allocator holds, and at what sizes. `lvInt` against `allocBlocks`/the
+    // internal heap total is the question ORB_LV_BIG_ALLOC has twice been tuned without:
+    // if LVGL holds most of internal RAM then the threshold is the fix and `hist` says
+    // where to put it, and if it does not then the leak is somewhere else entirely.
+    //
+    // hist[] is LIVE INTERNAL allocations by size: 0:<64 1:<128 2:<256 3:<512 4:<1k
+    // 5:<2k 6:<4k 7:4k+. With the threshold at 2048 everything from index 6 up is
+    // already going to PSRAM and should read ~0 bar fallbacks, so indices 0-5 are the
+    // whole of what a LOWER threshold could move out of the scarce pool.
+    out_fmt(",\"lvInt\":%u,\"lvIntCount\":%u,\"lvExt\":%u,\"lvExtCount\":%u,\"lvPeakInt\":%u"
+            ",\"lvFallbackInt\":%u,\"lvFallbackExt\":%u,\"lvThreshold\":%u",
+            (unsigned)orb_lv_live_int_bytes, (unsigned)orb_lv_live_int_count,
+            (unsigned)orb_lv_live_ext_bytes, (unsigned)orb_lv_live_ext_count,
+            (unsigned)orb_lv_peak_int_bytes,
+            (unsigned)orb_lv_fallback_to_int, (unsigned)orb_lv_fallback_to_ext,
+            (unsigned)ORB_LV_BIG_ALLOC);
+    out_str(",\"histCount\":[");
+    for (int i = 0; i < ORB_LV_NBUCKETS; ++i) out_fmt(i ? ",%u" : "%u", (unsigned)orb_lv_hist_count[i]);
+    out_str("],\"histBytes\":[");
+    for (int i = 0; i < ORB_LV_NBUCKETS; ++i) out_fmt(i ? ",%u" : "%u", (unsigned)orb_lv_hist_bytes[i]);
+    out_str("]");
+#endif
+    out_str("}");
     out_send();
 }
 

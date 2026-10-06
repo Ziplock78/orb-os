@@ -40,6 +40,7 @@
 #include "theme_audio.h"   // sounds a theme brings with it: wind.pcm, chime.pcm
 #include "chime_library.h" // every chime on the device, from flash and from every theme
 #include "display.h"                  // M0: CO5300 + LVGL bring-up
+#include "lv_psram_alloc.h"           // [lvmem]: what the LVGL allocator holds, and where
 #include "imu_qmi8658.h"             // face-down sleep
 #include "battery.h"                 // AXP2101 battery gauge
 #include "rtc_pcf85063.h"            // PCF85063 RTC (offline clock + date)
@@ -2515,6 +2516,23 @@ static void psram_mark(const char *stage) {
     if (s_prevInt) Serial.printf("   (%+ld B)", (long)((int32_t)nowInt - (int32_t)s_prevInt));
     Serial.println();
     s_prevInt = nowInt;
+
+#if ORB_LV_STATS
+    // ...and how much of that internal RAM is the LVGL allocator's, which is the half the
+    // [intram] line above cannot answer. `held` against `free` says whether LVGL IS the
+    // problem; the histogram says what a different ORB_LV_BIG_ALLOC would actually move,
+    // since everything in the bands below the current threshold is what a lower one sends
+    // to PSRAM. See the note over the threshold in lv_psram_alloc.h.
+    // ONE line per milestone, not three. This printed a total, a size histogram and a
+    // fallback count at each of the thirteen boot marks — thirty-nine lines of diagnostics
+    // for a question (is LVGL holding internal RAM?) that has been answered. The histogram
+    // is what sized ORB_LV_BIG_ALLOC and it still exists, on the runtime line below and in
+    // ?orb mem, where it can be asked for rather than being printed at everyone.
+    Serial.printf("[lvmem] %-25s held %6u B in %4u allocs (peak %6u B)  psram %u B%s\n",
+                  stage, (unsigned)orb_lv_live_int_bytes, (unsigned)orb_lv_live_int_count,
+                  (unsigned)orb_lv_peak_int_bytes, (unsigned)orb_lv_live_ext_bytes,
+                  (orb_lv_fallback_to_int || orb_lv_fallback_to_ext) ? "  (FALLBACKS)" : "");
+#endif
 }
 
 
@@ -3510,6 +3528,48 @@ void loop() {
                               (unsigned)audio_stack_free_bytes(),
                               (unsigned)uxTaskGetStackHighWaterMark(nullptr),
                               (int)g_radarViewActive, realFps);
+#if ORB_LV_STATS
+                // Every FOURTH [memdbg], i.e. once a minute, and only when a number has
+                // actually moved.
+                //
+                // At 115200 baud these three lines are about 300 bytes, and Serial.printf
+                // blocks the render loop while they go out: measured at roughly 50 ms of
+                // every second in the windows they landed in, which showed up as a real fps
+                // dip and briefly looked like the animation burst I was hunting. A
+                // diagnostic that perturbs the thing it measures has to be rare.
+                static int      s_lvEvery = 0;
+                static uint32_t s_lvPrevInt = 0;
+                static uint32_t s_lvPrevCount = 0;
+                const bool lvMoved = (orb_lv_live_int_bytes != s_lvPrevInt) ||
+                                     (orb_lv_live_int_count != s_lvPrevCount);
+                s_lvPrevInt   = orb_lv_live_int_bytes;
+                s_lvPrevCount = orb_lv_live_int_count;
+                if (++s_lvEvery >= 4 && lvMoved) {
+                    s_lvEvery = 0;
+                    // The interesting state is the one AFTER a theme is up and apps have been
+                    // switched, which no boot mark can reach.
+                    Serial.printf("[lvmem] runtime: held %u B internal in %u allocs (peak %u), "
+                                  "psram %u B in %u; bands <64:%u <128:%u <256:%u <512:%u "
+                                  "<1k:%u <2k:%u <4k:%u 4k+:%u\n",
+                                  (unsigned)orb_lv_live_int_bytes, (unsigned)orb_lv_live_int_count,
+                                  (unsigned)orb_lv_peak_int_bytes,
+                                  (unsigned)orb_lv_live_ext_bytes, (unsigned)orb_lv_live_ext_count,
+                                  (unsigned)orb_lv_hist_count[0], (unsigned)orb_lv_hist_count[1],
+                                  (unsigned)orb_lv_hist_count[2], (unsigned)orb_lv_hist_count[3],
+                                  (unsigned)orb_lv_hist_count[4], (unsigned)orb_lv_hist_count[5],
+                                  (unsigned)orb_lv_hist_count[6], (unsigned)orb_lv_hist_count[7]);
+                    // BYTES per band as well as counts. The first capture printed only counts,
+                    // and a count cannot answer "how much would a lower threshold move?" — 1612
+                    // allocations under 64 bytes could be 30 KB or 60 KB and the two lead to
+                    // different decisions. This is the line that settles it.
+                    Serial.printf("[lvmem] runtime bytes: <64:%u <128:%u <256:%u <512:%u "
+                                  "<1k:%u <2k:%u <4k:%u 4k+:%u\n",
+                                  (unsigned)orb_lv_hist_bytes[0], (unsigned)orb_lv_hist_bytes[1],
+                                  (unsigned)orb_lv_hist_bytes[2], (unsigned)orb_lv_hist_bytes[3],
+                                  (unsigned)orb_lv_hist_bytes[4], (unsigned)orb_lv_hist_bytes[5],
+                                  (unsigned)orb_lv_hist_bytes[6], (unsigned)orb_lv_hist_bytes[7]);
+                }
+#endif
             }
         }
 #if DEBUG_MEM
