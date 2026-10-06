@@ -22,7 +22,22 @@ static Arduino_DataBus *s_bus = nullptr;
 static Arduino_CO5300  *s_gfx = nullptr;
 
 // --- LVGL plumbing -----------------------------------------------------------
-#define LVGL_BUF_LINES 40    // partial draw-buffer height (lines); kept in fast internal RAM
+// Partial draw-buffer height, in lines; kept in fast internal RAM.
+//
+// 20, not 40, since 2026-10-06. At 40 this buffer is 466 x 40 x 2 = 37,280 bytes of the
+// ~238 KB internal heap — the single largest deliberate internal allocation in the
+// firmware, and internal RAM is the pool that actually runs out (docs/memory.md). A themed
+// Orb was measured ending boot with 3,304 bytes free and a 2,548-byte largest block, at
+// which point the renderer sat at 0-1 fps, mDNS could not answer, the USB command handler
+// could not allocate a reply and the web server could not accept a connection. Halving
+// this gives 18,640 bytes back for one constant.
+//
+// What it costs: twice as many flush_cb calls for a full-screen repaint. That is the right
+// trade on this board because the frame cost here is COMPOSITING, not QSPI transfer — the
+// [perf] work recorded in the accounting block below found the aircraft drawing taking
+// 0.2 ms against a 5 fps frame, and lvgl_ms_per_s / flush_ms_per_s in /health exist to
+// keep those two apart. If flush_ms_per_s turns out to dominate after this, put it back.
+#define LVGL_BUF_LINES 20
 static lv_disp_draw_buf_t s_draw_buf;
 static lv_disp_drv_t      s_disp_drv;
 static lv_color_t        *s_buf1 = nullptr;
