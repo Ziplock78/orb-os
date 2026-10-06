@@ -76,6 +76,10 @@ void booting(const char *what);
 // respond is what made the update feel broken. On an ordinary power-on it clears itself
 // after a moment: a desk clock that demands a button press every time it is plugged in is a
 // worse device than one that occasionally starts a second slower than it looks.
+// An install finished successfully. Call it once, from whatever drove the transfer: the
+// watchdog cannot tell a completed send from a dead one, because both end with files
+// stopping, so silence is read as failure unless something says otherwise.
+void installed(int files);
 void ready(bool needsAck);
 
 // True while a ready notice is waiting to be acknowledged. input_router asks, so whichever

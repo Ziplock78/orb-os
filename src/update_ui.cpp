@@ -1,4 +1,5 @@
 #include "update_ui.h"
+#include <string.h>   // strcmp, for the _installed sentinel below
 #include "ui.h"   // ui_splash_status(): during boot the splash narrates, not an overlay
 // main.cpp. True while any update surface is up: the screen goes to full brightness no
 // matter how dim the owner keeps it or how long it has sat idle, and comes back to its
@@ -13,6 +14,12 @@ static unsigned long millis() { return 0; }
 #endif
 
 namespace update_ui {
+
+// Defined near the bottom; file_received() below reaches back to it when the _installed
+// sentinel arrives. Declared out here rather than inside the anonymous namespace, where
+// it would be a second, unrelated `installed` and make the call ambiguous.
+void installed(int files);
+
 namespace {
 
 // One overlay, three moments: receiving files, restarting, baking. Deliberately plain
@@ -26,6 +33,9 @@ lv_obj_t *s_hint     = nullptr;
 lv_timer_t *s_timer  = nullptr;
 uint32_t  s_lastActivity = 0;
 bool      s_interrupted  = false;
+// The install SUCCEEDED and said so. Without this the watchdog below cannot tell the end of
+// a transfer from the death of one: files stop arriving either way. See installed().
+bool      s_finished     = false;
 bool      s_rebootPending = false;
 // Waiting to be replaced by a USB flash. Changes what the watchdog below means: see
 // firmware_incoming().
@@ -77,6 +87,7 @@ void destroy() {
     const bool had = s_panel != nullptr;
     if (s_panel) { lv_obj_del(s_panel); s_panel = nullptr; s_title = s_sub = s_hint = nullptr; }
     s_interrupted = false;
+    s_finished = false;
     s_rebootPending = false;
     s_firmwareWait = false;
     s_awaitAck = false;
@@ -139,10 +150,22 @@ void watchdog_cb(lv_timer_t *) {
         }
         return;
     }
+    // A finished install is not a stalled one. installed() has already put the outcome on
+    // screen, so leave it there: clear it after a few seconds, or hold it until the knob is
+    // turned when it asked to be acknowledged.
+    if (s_finished) {
+        if (!s_awaitAck && idle > 6000) destroy();
+        return;
+    }
     if (!s_interrupted && idle > 12000) {
         s_interrupted = true;
         lv_label_set_text(s_title, "Update interrupted");
-        lv_label_set_text(s_sub, "The transfer stopped partway.\nNothing was changed. Install again from Orb Studio.");
+        // NOT "nothing was changed", which was never true. Files are written as they
+        // arrive, so a transfer that stops partway leaves exactly the files that made it —
+        // which is why _installed is written last and why a folder without it is not a
+        // theme. Claiming a rollback that does not happen sent people looking for a fault
+        // in the wrong place.
+        lv_label_set_text(s_sub, "The transfer stopped partway.\nThe theme is incomplete. Install it again.");
 #ifdef ARDUINO
         Serial.println("[update_ui] transfer went quiet for 12s — showing 'interrupted', will clear");
 #endif
@@ -159,6 +182,29 @@ void watchdog_cb(lv_timer_t *) {
 void file_received(const char *name, int count) {
     ensure();
     s_lastActivity = millis();
+    // A FILE ARRIVING AFTER A FINISHED NOTICE MEANS MORE WAS COMING.
+    //
+    // _installed ends A THEME, not necessarily the session: Orb Studio can push several in
+    // one send, each with its own sentinel. Greg saw the consequence on 2026-10-06 — the
+    // overlay said "Theme installed" when the first one landed and then sat there while the
+    // second was still arriving, so a send that was half done looked finished. So the
+    // terminal state is given up the moment another file turns up, and the next sentinel
+    // announces the next theme.
+    if (s_finished) {
+        s_finished = false;
+        lv_label_set_text(s_title, "Updating theme");
+    }
+    // _installed ARRIVING IS THE COMPLETION SIGNAL, whatever sent it.
+    //
+    // Every install path writes it LAST and nothing else does: the browser page sorts it to
+    // the end, theme_pull queues it last, and the cable does the same. That invariant is
+    // already load-bearing — a folder without _installed is not a theme, which is what makes
+    // a half-finished transfer invisible rather than broken — so it can be trusted here too.
+    //
+    // This is what lets the cable path be fixed without Orb Studio changing: the explicit
+    // signals (POST /installed, ?orb put-done) are better because they carry a count and
+    // cannot be confused by a one-file push, but this one needs nothing from the sender.
+    if (name && !strcmp(name, "_installed")) { installed(count); return; }
     if (s_interrupted) {   // the send resumed after a stall: back to the normal state
         s_interrupted = false;
         lv_label_set_text(s_title, "Updating theme");
@@ -177,6 +223,10 @@ void file_received(const char *name, int count) {
 void file_progress(const char *name, int count, uint32_t bytes) {
     ensure();                       // first chunk of the first file also raises the overlay
     s_lastActivity = millis();      // the whole point: this is activity
+    if (s_finished) {               // ...and a new file means the send is not over either
+        s_finished = false;
+        lv_label_set_text(s_title, "Updating theme");
+    }
     if (s_interrupted) {            // a big file mid-flight is not an interruption after all
         s_interrupted = false;
         lv_label_set_text(s_title, "Updating theme");
@@ -223,10 +273,41 @@ void booting(const char *what) {
 
 void auto_clear_cb(lv_timer_t *) { destroy(); }
 
+// AN INSTALL FINISHED. Say so, and mean it.
+//
+// Nothing ever called ready() outside the simulator's screenshot path, so no install on any
+// transport — cable, WiFi pull, or the browser install page — ever reached a terminal state.
+// Every one of them simply went quiet at the end, and twelve seconds later the watchdog
+// declared "Update interrupted ... Nothing was changed" over a perfectly good install.
+// Reported on the browser path and then on the cable path too, which is what showed it was
+// not a quirk of one transport but a state that had been written and never wired up.
+//
+// The watchdog cannot work this out for itself: a finished transfer and a dead one both
+// look like files stopping. Only the thing doing the sending knows, so it has to say.
+void installed(int files) {
+    ensure();
+    s_lastActivity = millis();
+    s_interrupted  = false;
+    s_finished     = true;
+    s_awaitAck     = false;
+    lv_label_set_text(s_title, "Theme installed");
+    char b[96];
+    if (files > 0) snprintf(b, sizeof(b), "%d file%s written.\nPick it on the Orb to wear it.",
+                            files, files == 1 ? "" : "s");
+    else           snprintf(b, sizeof(b), "Pick it on the Orb to wear it.");
+    lv_label_set_text(s_sub, b);
+    lv_label_set_text(s_hint, "");
+    if (!s_timer) s_timer = lv_timer_create(watchdog_cb, 1000, nullptr);
+#ifdef ARDUINO
+    Serial.printf("[update_ui] install finished: %d file(s)\n", files);
+#endif
+}
+
 void ready(bool needsAck) {
     ensure();
     s_lastActivity = millis();
     s_awaitAck = needsAck;
+    s_finished = true;   // a ready notice is an outcome, not a stall
     lv_label_set_text(s_title, "Ready");
     lv_label_set_text(s_sub, needsAck
         ? "The update is finished.\nEverything is running."
@@ -275,6 +356,7 @@ void firmware_incoming() {
     ensure();
     s_lastActivity  = millis();
     s_interrupted   = false;
+    s_finished      = false;
     s_rebootPending = false;
     s_firmwareWait  = true;
     lv_label_set_text(s_title, "Updating firmware");

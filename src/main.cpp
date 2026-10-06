@@ -180,6 +180,10 @@ static volatile uint32_t     g_lastFeedOkMs = 0;                     // millis()
 
 static volatile uint32_t     g_rebootAtMs = 0;
 static uint32_t g_rebakeAtMs = 0;   // /rebake: forced full art re-bake, run from loop()
+// Files written by the browser install page this session. Was a static local inside the
+// upload handler; /installed needs to read it to report the count and reset it for the
+// next install, so it lives out here now.
+static int g_sdUpCount = 0;
 // /theme?slug=... — applied from loop() rather than the request handler, because
 // theme_select::set() reboots and would cut the HTTP reply off mid-flight.
 static String                g_pendingSlug;
@@ -2431,6 +2435,11 @@ $('#f').onchange=async e=>{
    if(!r.ok) throw new Error(it.name+' failed to write ('+r.status+')');
    say((i+1)+'/'+items.length+'  '+it.name);
   }
+  // Tell the Orb the send is over. It cannot work this out for itself: a finished
+  // transfer and an abandoned one both end with files simply stopping, and without this
+  // the device sat for twelve seconds and then announced "Update interrupted" over an
+  // install that had completely succeeded.
+  try { await fetch('/installed',{method:'POST'}); } catch(e) {}
   say('Done.','ok'); refresh();
  }catch(err){ say(String(err.message||err),'bad'); }
 };
@@ -2473,9 +2482,8 @@ static void handleSdPutUpload() {
             Serial.printf("[sdput] done %s (%u bytes)\n", g_sdUpPath.c_str(), (unsigned)up.totalSize);
             // Tell the user the device is mid-update. Without this, files arrived in
             // silence and the reboot that follows read as a crash or a stale load.
-            static int s_updateFiles = 0;
             const int slash = g_sdUpPath.lastIndexOf('/');
-            update_ui::file_received(g_sdUpPath.c_str() + (slash >= 0 ? slash + 1 : 0), ++s_updateFiles);
+            update_ui::file_received(g_sdUpPath.c_str() + (slash >= 0 ? slash + 1 : 0), ++g_sdUpCount);
         }
     }
 }
@@ -3277,6 +3285,13 @@ void setup() {
         g_web.send(200, "application/json", b);
     });
     g_web.on("/sdput", HTTP_POST, handleSdPutDone, handleSdPutUpload);   // Launch Kit pushes theme files here
+    // "I am done sending." Without it the install overlay has no way to tell the end of a
+    // transfer from the death of one — see update_ui::installed().
+    g_web.on("/installed", HTTP_POST, []{
+        update_ui::installed(g_sdUpCount);
+        g_sdUpCount = 0;
+        g_web.send(200, "text/plain", "ok");
+    });
     // The page that drives /sdput from a browser, so a theme can arrive over WiFi from any
     // device on the network rather than only down a USB cable from a Chromium desktop.
     g_web.on("/install", []{ g_web.send_P(200, "text/html", INSTALL_PAGE); });

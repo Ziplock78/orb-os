@@ -909,6 +909,19 @@ void cmd_put_end() {
     out_send();
 }
 
+// "That was the last file." put-end closes ONE file and cannot know whether another is
+// coming, so the overlay stayed in its receiving state and the watchdog eventually called a
+// finished install an interrupted one. Reported on the cable path as well as the browser
+// one, which is what showed the fault was the missing terminal state rather than either
+// transport. Old versions of Studio simply never send this and get the previous behaviour.
+void cmd_put_done() {
+    update_ui::installed(s_putCount);
+    s_putCount = 0;
+    out_reset();
+    out_str("{\"ok\":true,\"installed\":true}");
+    out_send();
+}
+
 void dispatch(char *line) {
     // Split the verb from the rest. Only one argument is ever needed, so the remainder is
     // taken whole rather than tokenised further: a slug never contains a space, and if one
@@ -947,6 +960,7 @@ void dispatch(char *line) {
     else if (!strcmp(line, "put-begin")) cmd_put_begin(arg);
     else if (!strcmp(line, "put-data"))  cmd_put_data(arg);
     else if (!strcmp(line, "put-end"))   cmd_put_end();
+    else if (!strcmp(line, "put-done"))  cmd_put_done();
     else if (!strcmp(line, "wifi-scan"))     cmd_wifi_scan();
     else if (!strcmp(line, "wifi-networks")) cmd_wifi_networks();
     else if (!strcmp(line, "wifi-join"))     cmd_wifi_join(arg);
