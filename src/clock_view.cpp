@@ -845,6 +845,236 @@ static inline void clip_row(int dy, int &lo, int &hi) {
     }
 }
 
+// ---- the hands layer cache --------------------------------------------------
+//
+// WHY. Measured on Steam Punk with [compose]: a full face is 527 ms, of which the HANDS are
+// 472 — 90% of it. The plate is 29 ms and the glass 27. An animated background has to do one
+// full face per frame, because the background is the bottom layer and everything above was
+// composited onto it, so at 8 fps the theme was asking for 4.2 seconds of work per second
+// and getting about one frame.
+//
+// The hands do not move during a burst. Six frames at 8 fps is 750 ms, in which the minute
+// hand turns 0.075 degrees and the hour hand 0.006. So their contribution is computed once
+// and kept: two RGB565+alpha layers, blitted in place of four bilinear sprite passes.
+//
+// TWO layers, not one, and this is the whole reason the order works out. The pipeline lays
+// every shadow down before any hand, deliberately — "interleaving them would let the minute
+// hand's shadow fall across the hour hand drawn below it" — and this theme's draw order puts
+// the second hand UNDER the minute and hour. So the true sequence is
+//
+//     plate -> text -> S2 -> S1 -> S0 -> H2 -> H1 -> H0 -> glass
+//
+// with S=shadow, H=hand, 2=second, 1=minute, 0=hour. The second hand's two pieces come
+// first in each group and must stay live, because it is the one thing that does move. One
+// combined layer would have to be drawn either side of them and would reorder something.
+// Splitting at exactly those two points reproduces the sequence with nothing moved:
+//
+//     plate -> text -> S2 -> [shadow layer] -> H2 -> [hand layer] -> glass
+//
+// 3 bytes a pixel, 651 KB each, PSRAM, taken on first use and given back in onExit() like
+// every other screen's art.
+static uint8_t *s_layShadow = nullptr;   // minute + hour shadows, composited
+static uint8_t *s_layHand   = nullptr;   // minute + hour hands, composited
+// When set, the two sprite blits accumulate into this instead of painting the canvas.
+static uint8_t *s_layTarget = nullptr;
+// What the layers are a picture of. A rebuild is needed when either hand has turned enough
+// to matter; the thresholds are the ones the caches above already use.
+static float s_layMinAng = 1e9f, s_layHrAng = 1e9f;
+static bool  s_layValid  = false;
+// A REBUILD SPREAD OVER FRAMES, because doing it in one go is a visible stop.
+//
+// A rebuild is ~470 ms and the minute hand goes stale every ~3.5 s, so the first version
+// stalled the sweep for half a second every three and a half: "every ~3.5 seconds it stops
+// then resumes". The threshold cannot simply be raised — it is bounded by the minute hand
+// visibly lagging, about a pixel at the tip — so the work is sliced instead. A band of rows
+// per frame, with the previous contents still standing in the rows not yet redone, so the
+// seam between them is the 0.35 degrees the tolerance already allows and it closes within a
+// second. The FIRST build is done whole, because there is nothing behind it to show.
+static int   s_layBuildY   = -1;      // next row to redo; <0 = not rebuilding
+static float s_layWantMin  = 0.0f;    // angles the in-progress rebuild is for
+static float s_layWantHr   = 0.0f;
+static const int LAY_BAND  = SCREEN_H / 8;   // ~58 rows, so ~60 ms a frame instead of 470
+// Set for one compose by the caller that knows the hands have not moved. compose_custom
+// then blits each layer at the exact point in the sequence its contents belong, instead of
+// running the four bilinear sprite passes. Anything else about the frame is unchanged.
+static bool  s_layUse    = false;
+
+// One source pixel into a layer, source-over, non-premultiplied.
+//
+// The canvas path can mix straight onto an opaque destination because there is always
+// something underneath. A layer starts empty, so alpha has to accumulate as well as colour:
+// two hands overlap near the hub and the second one must not erase the first's coverage.
+static inline void lay_put(uint8_t *lay, int dx, int dy, lv_color_t sc, uint8_t a) {
+    uint8_t *L = lay + ((size_t)dy * SCREEN_W + dx) * 3;
+    const uint8_t da = L[2];
+    if (!da) {                      // empty: the source is the answer
+        L[0] = (uint8_t)(sc.full & 0xFF);
+        L[1] = (uint8_t)(sc.full >> 8);
+        L[2] = a;
+        return;
+    }
+    const uint16_t outA = (uint16_t)(a + (uint16_t)da * (255 - a) / 255);
+    if (!outA) return;
+    lv_color_t dc; dc.full = (uint16_t)(L[0] | (L[1] << 8));
+    // The source's share of the result. lv_color_mix(c1, c2, w) is c1*w + c2*(255-w).
+    const uint8_t w = (uint8_t)((uint32_t)a * 255u / outA);
+    const lv_color_t mixed = lv_color_mix(sc, dc, w);
+    L[0] = (uint8_t)(mixed.full & 0xFF);
+    L[1] = (uint8_t)(mixed.full >> 8);
+    L[2] = (uint8_t)(outA > 255 ? 255 : outA);
+}
+
+// A finished layer onto the canvas: the same operation the glass pass does, over the same
+// clip, so a sweep frame pays only for its own rows.
+static void lay_blit(const uint8_t *lay) {
+    if (!lay || !s_buf) return;
+    for (int dy = s_clipY0; dy <= s_clipY1; ++dy) {
+        int lo = s_clipX0, hi = s_clipX1;
+        clip_row(dy, lo, hi);
+        if (hi < lo) continue;
+        const int base = dy * SCREEN_W;
+        for (int dx = lo; dx <= hi; ++dx) {
+            const uint8_t *L = lay + ((size_t)base + dx) * 3;
+            const uint8_t a = L[2];
+            if (!a) continue;
+            lv_color_t sc; sc.full = (uint16_t)(L[0] | (L[1] << 8));
+            s_buf[base + dx] = lv_color_mix(sc, s_buf[base + dx], a);
+        }
+    }
+}
+
+// Build both layers for the hand angles given. Forward-declared blits, called below.
+static void blend_shadow(const uint8_t *src, int sw, int sh, int pivotX, int pivotY,
+                         float cx, float cy, float angleDeg);
+static void blend_custom_hand(const uint8_t *src, int sw, int sh, int pivotX, int pivotY,
+                              float cx, float cy, float angleDeg, int blend);
+CustomSprite custom_hand(int kind);     // not static: defined elsewhere in the tree
+CustomSprite custom_shadow(int kind);
+
+static void layers_free() {
+    if (s_layShadow) { heap_caps_free(s_layShadow); s_layShadow = nullptr; }
+    if (s_layHand)   { heap_caps_free(s_layHand);   s_layHand   = nullptr; }
+    s_layValid = false;
+}
+
+// Both layers, for the minute and hour hands only, in the theme's own draw order.
+//
+// Deliberately NOT the second hand: it is the one piece that moves between frames of a
+// background burst, and it is cheap (a 32x107 shadow and a small hand) so it stays live.
+// Returns false and leaves s_layValid clear if the memory is not there, and every caller
+// then takes the ordinary path — slow, correct, and exactly what it did before.
+static bool layers_build_rows(float minAng, float hrAng, int y0, int y1);
+static bool layers_usable(float minAng, float hrAng);
+static bool layers_build(float minAng, float hrAng) {
+    if (!s_layShadow) s_layShadow = (uint8_t *)heap_caps_malloc((size_t)SCREEN_W * SCREEN_H * 3,
+                                                                MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!s_layHand)   s_layHand   = (uint8_t *)heap_caps_malloc((size_t)SCREEN_W * SCREEN_H * 3,
+                                                                MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!s_layShadow || !s_layHand) {
+#if defined(ESP_PLATFORM)
+        static bool told = false;
+        if (!told) {
+            told = true;
+            Serial.printf("[layers] no PSRAM for the hand layers (need 2 x %u KB, %u KB free) "
+                          "- animated backgrounds stay on the slow path\n",
+                          (unsigned)((size_t)SCREEN_W * SCREEN_H * 3 / 1024),
+                          (unsigned)(ESP.getFreePsram() / 1024));
+        }
+#endif
+        layers_free();
+        return false;
+    }
+    return layers_build_rows(minAng, hrAng, 0, SCREEN_H - 1);
+}
+
+// The rows [y0..y1] of both layers, for the given angles.
+static bool layers_build_rows(float minAng, float hrAng, int y0, int y1) {
+    if (!s_layShadow || !s_layHand) return false;
+    const theme_style::Clock &cs = theme_style::clock();
+    const float ang[5] = { hrAng, minAng, 0.0f, 0.0f, 0.0f };
+    if (y0 < 0) y0 = 0;
+    if (y1 > SCREEN_H - 1) y1 = SCREEN_H - 1;
+    if (y1 < y0) return false;
+    const size_t rowBytes = (size_t)SCREEN_W * 3;
+    const size_t off = (size_t)y0 * rowBytes, len = (size_t)(y1 - y0 + 1) * rowBytes;
+    memset(s_layShadow + off, 0, len);
+    memset(s_layHand   + off, 0, len);
+    // The clip is the band, and the full width of it: the layer is reused by frames whose
+    // clip is narrower, and anything left unpainted now would be a hole then.
+    const int cx0 = s_clipX0, cy0 = s_clipY0, cx1 = s_clipX1, cy1 = s_clipY1;
+    const int *rl = s_runLo, *rh = s_runHi;
+    clip_reset();
+    s_clipY0 = y0; s_clipY1 = y1;
+
+    if (cs.shadowOn) {
+        s_layTarget = s_layShadow;
+        for (int i = 0; i < cs.orderN; ++i) {
+            const int k = cs.order[i];
+            if (k != 0 && k != 1) continue;            // minute and hour only
+            if (!cs.hand[k].show) continue;
+            const theme_style::Hand &hd = cs.hand[k];
+            CustomSprite sh = custom_shadow(k);
+            if (sh.data) blend_shadow(sh.data, sh.w, sh.h, hd.pivotX, hd.pivotY,
+                                      (float)(hd.centerX + cs.shadowDX),
+                                      (float)(hd.centerY + cs.shadowDY), ang[k]);
+        }
+    }
+    s_layTarget = s_layHand;
+    for (int i = 0; i < cs.orderN; ++i) {
+        const int k = cs.order[i];
+        if (k != 0 && k != 1) continue;
+        if (!cs.hand[k].show) continue;
+        const theme_style::Hand &hd = cs.hand[k];
+        CustomSprite spr = custom_hand(k);
+        if (spr.data) blend_custom_hand(spr.data, spr.w, spr.h, hd.pivotX, hd.pivotY,
+                                        (float)hd.centerX, (float)hd.centerY, ang[k], hd.blend);
+    }
+    s_layTarget = nullptr;
+
+    s_clipX0 = cx0; s_clipY0 = cy0; s_clipX1 = cx1; s_clipY1 = cy1;
+    s_runLo = rl; s_runHi = rh;
+    return true;
+}
+
+// Keep a rebuild moving, or start one. Call once a frame.
+//
+// Returns whether there is anything worth blitting: after the first build there always is,
+// even mid-rebuild, which is the whole point of slicing it.
+static bool layers_tick(float minAng, float hrAng) {
+    if (!s_layShadow || !s_layHand) {
+        if (!layers_build(minAng, hrAng)) return false;   // allocates, or gives up for good
+        s_layMinAng = minAng; s_layHrAng = hrAng; s_layValid = true; s_layBuildY = -1;
+        return true;
+    }
+    if (s_layBuildY >= 0) {                                // a slice of the rebuild in flight
+        layers_build_rows(s_layWantMin, s_layWantHr, s_layBuildY, s_layBuildY + LAY_BAND - 1);
+        s_layBuildY += LAY_BAND;
+        if (s_layBuildY >= SCREEN_H) {                     // done: it is now a picture of those
+            s_layMinAng = s_layWantMin; s_layHrAng = s_layWantHr;
+            s_layValid = true; s_layBuildY = -1;
+        }
+        return s_layValid;
+    }
+    if (!layers_usable(minAng, hrAng)) {                   // gone stale: start slicing
+        s_layWantMin = minAng; s_layWantHr = hrAng;
+        s_layBuildY = 0;
+    }
+    return s_layValid;
+}
+
+// Are the layers still a picture of where the hands are now?
+//
+// Same question the dial caches already ask, and the same answer: hold until the hand's TIP
+// has travelled about a pixel. The minute hand buys roughly three seconds at this reach and
+// the hour hand forty, which is far longer than any background burst, so a burst rebuilds
+// them at most once.
+static bool layers_usable(float minAng, float hrAng) {
+    if (!s_layValid || !s_layShadow || !s_layHand) return false;
+    float dm = minAng - s_layMinAng; if (dm < 0) dm = -dm; if (dm > 180.0f) dm = 360.0f - dm;
+    float dh = hrAng  - s_layHrAng;  if (dh < 0) dh = -dh; if (dh > 180.0f) dh = 360.0f - dh;
+    return dm < 0.35f && dh < 0.35f;
+}
+
 // The run of dx, within one row, whose source coordinates land inside the sprite.
 //
 // Both rotating blits need this and only one of them had it. blend_custom_hand got the
@@ -897,6 +1127,7 @@ static void blend_shadow(const uint8_t *src, int sw, int sh, int pivotX, int piv
             const uint8_t a = p[2];
             if (a < 8) continue;                       // same floor the hand blit uses
             lv_color_t sc; sc.full = (uint16_t)(p[0] | (p[1] << 8));
+            if (s_layTarget) { lay_put(s_layTarget, dx, dy, sc, a); continue; }
             lv_color_t *dst = &s_buf[dy * SCREEN_W + dx];
             *dst = lv_color_mix(sc, *dst, a);
         }
@@ -1029,10 +1260,12 @@ static void blend_custom_hand(const uint8_t *src, int sw, int sh, int pivotX, in
             if (blend == 1) { rF = rF * dr / 255.0f; gF = gF * dg / 255.0f; bF = bF * db / 255.0f; }        // multiply
             else if (blend == 2) { rF = 255 - (255 - rF) * (255 - dr) / 255.0f; gF = 255 - (255 - gF) * (255 - dg) / 255.0f; bF = 255 - (255 - bF) * (255 - db) / 255.0f; } // screen
             lv_color_t sc = LV_COLOR_MAKE((uint8_t)rF, (uint8_t)gF, (uint8_t)bF);
-            *dst = lv_color_mix(sc, *dst, (lv_opa_t)lroundf(aF));
+            if (s_layTarget) lay_put(s_layTarget, dx, dy, sc, (uint8_t)lroundf(aF));
+            else             *dst = lv_color_mix(sc, *dst, (lv_opa_t)lroundf(aF));
         }
     }
 }
+
 
 // Composite the editor's exact pixels: plate (background) -> live text -> hand
 // sprites (rotated, in the editor's draw order/blend) -> overlay (hub, rim, glass).
@@ -1165,6 +1398,10 @@ static int bg_anim_frame() {
 // Start this theme's clock over. Called when a theme is applied, so the first play is one
 // full interval after the theme arrives rather than at some moment inherited from the last.
 void clock_view_reset_bg_anim() {
+    // A theme change replaces the hand art and its geometry, so whatever the layers hold is
+    // a picture of the previous design. This is the one hook every theme application runs
+    // through, which is why the reset lives here rather than beside the art loader.
+    layers_free();
     s_bgPlayStart = 0;
     s_bgLastPlay  = lv_tick_get();
     s_bgFrame     = 0;
@@ -1296,6 +1533,7 @@ static void compose_custom(const struct tm *ti, int stopKind, bool withOverlay) 
     // watch photographer makes with a diffuser, and it costs a second short loop.
     if (cs.shadowOn) {
         bool pastStopSh = false;
+        bool laidShadow = false;   // the cached pair goes down once, at the first of the two
         for (int i = 0; i < cs.orderN; ++i) {
             const int k = cs.order[i];
             // Shadows are ALL laid down before any hand, so the shadow of a hand this compose
@@ -1304,6 +1542,12 @@ static void compose_custom(const struct tm *ti, int stopKind, bool withOverlay) 
             if (stopKind >= 0 && k == stopKind) { pastStopSh = true; continue; }
             if (stopKind >= 0 && pastStopSh) continue;   // above the stop: drawn later
             if (k < 0 || k > 2) continue;              // statics do not cast; they are the face
+            // The cached pair, blitted where the first of them would have been drawn, so the
+            // sequence is byte-for-byte the one the slow path produces.
+            if (s_layUse && (k == 0 || k == 1)) {
+                if (!laidShadow) { laidShadow = true; lay_blit(s_layShadow); }
+                continue;
+            }
             const theme_style::Hand &hd = cs.hand[k];
             if (!hd.show) continue;
             CustomSprite sh = custom_shadow(k);
@@ -1343,6 +1587,7 @@ static void compose_custom(const struct tm *ti, int stopKind, bool withOverlay) 
         }
     }
     bool pastStop = false;
+    bool laidHand = false;   // likewise, once, at the first of minute/hour
     for (int i = 0; i < cs.orderN; ++i) {
         const int k = cs.order[i];
         if (k < 0 || k > 4) continue;
@@ -1353,6 +1598,10 @@ static void compose_custom(const struct tm *ti, int stopKind, bool withOverlay) 
         // themes."
         if (stopKind >= 0 && pastStop) continue;
         if (stopKind >= 0 && k == stopKind) { pastStop = true; continue; }
+        if (s_layUse && (k == 0 || k == 1)) {
+            if (!laidHand) { laidHand = true; lay_blit(s_layHand); }
+            continue;
+        }
         const theme_style::Hand &hd = cs.hand[k];
         if (!hd.show) continue;
         CustomSprite spr = custom_hand(k);
@@ -1381,7 +1630,52 @@ static void compose_custom(const struct tm *ti, int stopKind, bool withOverlay) 
     }
 }
 
-static void draw_custom(const struct tm *ti) { compose_custom(ti, -1, true); }
+// A full compose, with its phase breakdown, on whatever path asked for it.
+//
+// The breakdown already existed and was only reported from the sweep path's rebuild branch,
+// so a design with secondSweep off — which is every dial that does not ask to sweep — could
+// not be measured at all. That is the case an animated background is most expensive in,
+// because every frame of the animation is one of these, so it is the one that most needed a
+// number. Reported every eighth compose rather than every one: the line itself costs serial
+// time, and eight of these is several seconds of wall clock.
+// Both defined below, with the caches whose staleness rules they feed.
+static float minute_angle_now(const struct tm *ti);
+static float hour_angle_now(const struct tm *ti);
+
+static void draw_custom(const struct tm *ti) {
+    // THE FAST PATH FOR AN ANIMATED BACKGROUND.
+    //
+    // A full face costs 527 ms on this design and 472 of it is the hands, so a background
+    // that wants eight frames a second is asking for four seconds of work per second. The
+    // hands are not what changed: build them once and blit them.
+    //
+    // Only ever an optimisation. If the layers cannot be allocated, or either hand has
+    // turned far enough to matter, this falls through to exactly the compose it always did.
+    const float minAng = minute_angle_now(ti);
+    const float hrAng  = hour_angle_now(ti);
+    s_layUse = layers_tick(minAng, hrAng);
+#if defined(ESP_PLATFORM)
+    const uint32_t t0 = micros();
+    compose_custom(ti, -1, true);
+    const float took = (float)(micros() - t0) / 1000.0f;
+    static int   runs = 0;
+    static float sum  = 0.0f;
+    sum += took;
+    if (++runs >= 8) {
+        // `rest` is whatever is not plate, text or hands, and on this screen it is almost
+        // entirely the overlay: a full-screen alpha mix over 217,156 pixels.
+        const float avg = sum / runs;
+        Serial.printf("[compose] full face %.0f ms  -> plate %.0f  text %.0f  hands %.0f  rest %.0f\n",
+                      avg, s_phPlate / runs, s_phText / runs, s_phHands / runs,
+                      avg - (s_phPlate + s_phText + s_phHands) / runs);
+        runs = 0; sum = 0.0f;
+        s_phPlate = 0; s_phText = 0; s_phHands = 0; s_phRest = 0;
+    }
+#else
+    compose_custom(ti, -1, true);
+#endif
+    s_layUse = false;   // never leaks into the sweep's own partial composes
+}
 
 // ---- the smooth second hand -------------------------------------------------
 //
@@ -1417,6 +1711,96 @@ static uint32_t s_tickPeriod = 0;
 // degree, well under a pixel at the tip, and asking for more would spend the whole device on
 // motion nobody can see. 200 ms is the floor, for a design heavy enough that anything faster
 // would be a promise the renderer cannot keep.
+// THE HAND BEATS. It does not glide.
+//
+// Greg's observation, 2026-10-06: "28,800 beats per hour ... that is what most clocks run at
+// so a natural beat at that rate is probably what we should optimize for, or half of it."
+// beats-per-hour counts half-oscillations, so 28,800 is EIGHT a second, and the common rates
+// are 18,000 (five), 21,600 (six), 28,800 (eight) and 36,000 (ten).
+//
+// This screen was already half-committed to the idea. THEME_CAPS 57 is tickRate, and its own
+// note says "a mechanical watch beats at 2 or 4, and that faster beat IS the sweep of its
+// second hand" — but only the AUDIO ever used it. The hand itself chased a continuous
+// position at whatever rate the device could deliver, so every step was a slightly different
+// size and a slightly different length of time apart. That is what reads as jerky: not the
+// size of the steps, which at a 271 px reach are under two pixels, but their unevenness. A
+// real escapement is relentlessly regular, and regular is what the eye reads as smooth.
+//
+// So the hand is quantised to a beat and the frame is aimed at the beat boundary. Eight by
+// default, because that is the most common high-beat movement and the richest-looking; the
+// theme's own tickRate wins when it declares one, since a theme that ships recordings off a
+// 21,600 watch should move like one. And when the design is too expensive to hold eight, it
+// drops to four rather than slipping: 14,400 is also a real movement, so the degraded case
+// still looks like a watch instead of looking like a struggling one.
+static int sweep_beat() {
+    const theme_style::Clock &cs = theme_style::clock();
+    if (cs.tickRate >= 2) return cs.tickRate;       // the theme owns its own movement
+
+    // WHILE THE BACKGROUND IS MOVING, THE HAND KEEPS ITS TIME.
+    //
+    // Not a compromise — the measurement says the alternative does not work. A hand frame
+    // repaints the second hand's own box and costs about 13 ms. A background frame repaints
+    // all 217,156 pixels and costs about 200. A beat slot at eight a second is 125 ms. So
+    // every background frame overruns its slot and swallows the beat behind it: asking for
+    // eight against a 2 fps background measured SIX delivered, with 41% of the CPU still
+    // idle. Not a budget problem — one of the two things sharing this thread takes longer
+    // than the other's entire slot.
+    //
+    // Two beats in every eight arriving 75 ms late is worse than eight evenly spaced ones,
+    // because irregularity is what the eye catches and not rate. Greg, on seeing both:
+    // 4 fps background with a 4 beat hand was "a better experience" than 2 fps with a
+    // nominal 8, and he was right for a reason I had argued past — at equal rates the two
+    // coincide, every frame advances the background AND the hand, and nothing interrupts
+    // anything. At different rates they beat against each other.
+    //
+    // So while frames are running the hand takes the background's rate as its own. When the
+    // background is still there is nothing to collide with and it goes back to eight.
+    // IN PHASE WITH IT, not equal to it. A MULTIPLE of the background's rate.
+    //
+    // Taking the background's rate outright is wrong at the slow end: a 2 fps background
+    // would give a hand that moves twice a second, which is worse than anything this screen
+    // has done yet. What matters is that the two COINCIDE, and a multiple coincides just as
+    // well as equality does — at 2 fps background and 4 beats, every background change lands
+    // on a beat and the beats between it are free.
+    //
+    // Floor of four, because that is the slowest step this dial has been judged acceptable
+    // at, and four also keeps the slot at 250 ms, which is comfortably longer than the ~200
+    // ms a full-screen background frame costs. Eight would put the slot at 125 ms and the
+    // background frame would overrun it — measured, and the reason this function exists.
+    const theme_style::Clock::BgAnim &ba = cs.bgAnim;
+    if (ba.frames > 0 && (ba.loop || bg_anim_playing())) {
+        int f = ba.fps < 1 ? 1 : ba.fps;
+        if (f >= 4) return f;              // already fast enough; stay exactly on it
+        int beat = f;
+        while (beat < 4) beat += f;        // smallest multiple of f that reaches four
+        return beat;
+    }
+    // Two full frames of headroom, the same rule sweep_period() uses below.
+    if (s_sweepMs > 0.0f && s_sweepMs * 2.0f > 110.0f) return 4;   // 14,400 bph
+    return 8;                                                       // 28,800 bph
+}
+
+// The hand's position, snapped back to the beat it is in.
+static float beat_quantize(float secs) {
+    const int b = sweep_beat();
+    if (b <= 1) return secs;
+    const float q = floorf(secs * (float)b) / (float)b;
+    return q;
+}
+
+// Milliseconds until the next beat, so a step lands ON it rather than near it.
+static uint32_t beat_aim() {
+    const int b = sweep_beat();
+    if (b <= 1) return 1000;
+    struct timeval tv;
+    gettimeofday(&tv, nullptr);
+    const long  slotUs = 1000000L / b;
+    const long  intoUs = (long)tv.tv_usec % slotUs;
+    uint32_t ms = (uint32_t)((slotUs - intoUs) / 1000);
+    if (ms < 5) ms += (uint32_t)(slotUs / 1000);   // too close to chase; take the next one
+    return ms;
+}
+
 static uint32_t sweep_period() {
     // Twice the compositing, because LVGL then renders the invalidated box and pushes it over
     // QSPI, roughly as much again. Measured: 26 ms of work held 13 frames a second at a 70 ms
@@ -2023,12 +2407,31 @@ static void sweep_frame(float secs) {
             if (rwAbove && s_stepEase >= 0.0f) p_min = (float)ti.tm_min + s_stepEase;
             const float p_hr = (ti.tm_hour % 12) + p_min / 60.0f;
             const float above[5] = { p_hr * 30.0f, p_min * 6.0f, ang, 0.0f, 0.0f };
+            // THE CACHED PAIR, HERE, WHICH IS WHERE IT ACTUALLY EARNS ANYTHING.
+            //
+            // On a draw order that puts the second hand below the minute and hour — which is
+            // what sent me looking — s_under stops below the second hand and therefore holds
+            // NEITHER of the other two. They are redrawn from here on every sweep frame, and
+            // on the frame after any full rebuild the clip is the whole screen, so that is
+            // the 472 ms of bilinear sprite work the layer cache exists to remove. The first
+            // version of this wired it into draw_custom() only, which the sweep path never
+            // calls: correct, validated, and never once executed on a sweeping dial.
+            //
+            // Order is unchanged from what this loop already did. It draws shadow-then-hand
+            // per hand, so the second hand is already underneath the minute and hour shadows
+            // here; laying the shadow layer and then the hand layer keeps that.
+            const bool layered = layers_tick(above[1], above[0]);
+            if (layered) {
+                if (cs.shadowOn) lay_blit(s_layShadow);
+                lay_blit(s_layHand);
+            }
             bool past = false;
             for (int i = 0; i < cs.orderN; ++i) {
                 const int k = cs.order[i];
                 if (k < 0 || k > 4) continue;
                 if (k == 2) { past = true; continue; }
                 if (!past) continue;
+                if (layered && (k == 0 || k == 1)) continue;   // in the layers already
                 const theme_style::Hand &oh = cs.hand[k];
                 if (!oh.show) continue;
                 if (cs.shadowOn && k <= 2) {
@@ -2469,7 +2872,36 @@ static void tick_cb(lv_timer_t * /*t*/) {
             s_prevSecValid = true;
         }
         sweep_pad_for_shadow();
-        sweep_frame(railway_seconds(wall));
+        // Snapped to the beat (see sweep_beat): the hand holds a position for a whole beat
+        // and then moves, which is what an escapement does and what the eye reads as even.
+        sweep_frame(railway_seconds(beat_quantize(wall)));
+        // ...and the next frame is aimed AT the next beat, not merely scheduled soon. A step
+        // that is regular to the millisecond reads as smooth at eight a second; the same step
+        // arriving whenever the renderer happens to finish reads as a stutter, which is the
+        // whole of what "a beat jerky" was.
+        // THE HAND AND THE BACKGROUND ARE NOT ON THE SAME CLOCK, and they should not be.
+        //
+        // A watch's hand beats continuously while its wheels barely turn, and that is the
+        // right shape here for a reason of cost rather than taste: a hand frame repaints
+        // only the box the hand sweeps through, restored out of s_under, while a background
+        // frame repaints all 217,156 pixels and reloads the plate. One is tens of
+        // milliseconds, the other a couple of hundred. So the hand can and should be allowed
+        // to move more often than the picture behind it.
+        //
+        // The tick therefore runs at whichever of the two wants a frame SOONER, and the
+        // background advances only on the ticks where its own index has changed. Taking the
+        // sooner rather than letting the last writer win is the same lesson as the re-aim on
+        // the non-sweep path: this clobbered the bgAnim block's request for one build, and
+        // got away with it only because the theme happened to ask for four of each.
+        if (s_tick) {
+            uint32_t aim = beat_aim();
+            const theme_style::Clock::BgAnim &ba = theme_style::clock().bgAnim;
+            if (ba.frames > 0 && (ba.loop || bg_anim_playing())) {
+                const uint32_t need = 1000u / (uint32_t)(ba.fps < 1 ? 1 : ba.fps);
+                if (need < aim) aim = need;
+            }
+            if (aim != s_tickPeriod) { s_tickPeriod = aim; lv_timer_set_period(s_tick, aim); }
+        }
         return;
     }
     // The FACE still moves once a second even when the sound beats faster. A watch running at
@@ -2527,6 +2959,9 @@ static void tick_cb(lv_timer_t * /*t*/) {
 bool  clockview::faceHasTime() { struct tm ti; time_for_face(&ti); return !s_noTime; }
 float clockview::handSeconds(float wallSeconds) { return railway_seconds(wallSeconds); }
 float clockview::cacheMinutesAllowed() { return cache_minutes_allowed(); }
+// The movement the sweep is running, in beats a second. x3600 is the beats-per-hour a
+// watchmaker would quote: 8 is 28,800, 4 is 14,400.
+int   clockview::sweepBeat() { return sweep_beat(); }
 float clockview::hourCacheMinutes() { return hour_cache_minutes(); }
 float clockview::hourTipPixelsIn(float minutes) {
     const theme_style::Clock &cs = theme_style::clock();
@@ -2627,6 +3062,68 @@ static long sweep_vs_full(bool moveMinute, int *wx, int *wy) {
     Serial.printf("[sweep] %s: %ld pixels differ from a full compose, worst %d levels\n",
                   moveMinute ? "after a minute move" : "a sweep frame", count, worst);
     free(full);
+    return count;
+}
+
+// DOES THE LAYER CACHE DRAW THE SAME PICTURE? Answered in pixels, not by looking.
+//
+// A cache is only ever as good as its agreement with the thing it replaces, and "hands 0 ms"
+// in the phase breakdown is just as consistent with "the blit is nearly free because the
+// layers are mostly transparent" as it is with "the layers are empty and the hands are
+// missing". Those need telling apart by something other than an opinion about a photograph.
+//
+// Composes the face twice at the same instant — once with the layers refused, once with them
+// used — and reports how many of the 217,156 pixels differ and by how many 565 levels at
+// worst. Zero is the only good answer. A handful of pixels differing by one level would be
+// rounding in the source-over accumulation; thousands, or a large worst-case, means the
+// overlap maths is wrong, and the hub is where two hands overlap.
+long clockview::layerDiffersBy(int *worstOut, int *wx, int *wy) {
+    if (worstOut) *worstOut = -1;
+    if (wx) *wx = -1;
+    if (wy) *wy = -1;
+    if (!s_buf || !s_canvas || s_face != FACE_CUSTOM) return -1;
+    struct tm ti;
+    time_for_face(&ti);
+    const size_t bytes = (size_t)SCREEN_W * SCREEN_H * sizeof(lv_color_t);
+#if defined(ESP_PLATFORM)
+    lv_color_t *ref = (lv_color_t *)heap_caps_malloc(bytes, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+#else
+    lv_color_t *ref = (lv_color_t *)malloc(bytes);
+#endif
+    if (!ref) return -1;
+
+    // The slow path, as the authority.
+    clip_reset();
+    s_layUse = false;
+    compose_custom(&ti, -1, true);
+    memcpy(ref, s_buf, bytes);
+
+    // Then the same face through the layers.
+    // Built OUTRIGHT at these exact angles, not merely accepted as near enough. The
+    // tolerance that makes the cache worth having is up to 0.35 degrees of lag, about a
+    // pixel and a half at the minute hand's tip, and comparing a tolerated layer against a
+    // fresh compose measures that lag rather than whether the compositing is right. 3720
+    // pixels differing by up to 24 levels is what that looked like, and it was the lag.
+    const float minAng = minute_angle_now(&ti), hrAng = hour_angle_now(&ti);
+    const bool used = layers_build(minAng, hrAng);
+    if (used) { s_layMinAng = minAng; s_layHrAng = hrAng; s_layValid = true; s_layBuildY = -1; }
+    clip_reset();
+    s_layUse = used;
+    compose_custom(&ti, -1, true);
+    s_layUse = false;
+
+    long count = 0;
+    const int worst = worst_difference(ref, s_buf, &count, wx, wy);
+    if (worstOut) *worstOut = worst;
+#if defined(ESP_PLATFORM)
+    Serial.printf("[layers] %s: %ld of %ld pixels differ from a full compose, worst %d levels\n",
+                  used ? "in use" : "NOT USED (no memory, or the hands moved)",
+                  count, (long)((size_t)SCREEN_W * SCREEN_H), worst);
+    heap_caps_free(ref);
+#else
+    free(ref);
+#endif
+    if (!used) return -2;   // tell the caller the comparison was vacuous
     return count;
 }
 
@@ -2764,6 +3261,9 @@ void clockview::onEnter() {
 }
 
 void clockview::onExit() {
+    // 1.3 MB of hand layers, given back like every other screen's art. The Flight Tracker
+    // wants ~1.4 MB of its own on the way in and this is the budget it comes out of.
+    layers_free();
     custom_sprite_release();
     // The canvas and the rotation cache go too. The canvas object stays, pointing at
     // nothing until the next onEnter refills it: deleting and rebuilding an LVGL object

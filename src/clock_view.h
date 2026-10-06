@@ -3,6 +3,10 @@
 // A simple full-screen clock, living on its very own LVGL screen so it stays
 // completely independent of the radar UI. App two in the shell.
 namespace clockview {
+    // How many pixels the hand-layer cache draws differently from a full compose, and by
+    // how many 565 levels at worst. 0 is the only good answer; -2 means the layers were not
+    // in use, so the comparison proved nothing.
+    long layerDiffersBy(int *worstOut, int *wx, int *wy);
     void      init();      // build the clock screen; call once after display::begin()
     lv_obj_t* screen();    // the clock's LVGL screen (hand this to app_shell::add)
     // The art contract every screen on this device is supposed to keep, and this one did
@@ -64,6 +68,9 @@ namespace clockview {
     // on where the hands happen to be when the test runs, so a threshold on it passes at one
     // minute and fails at the next; the count does not move. The fault this guards against
     // was 9,916 pixels, and what is left is about twenty under the hand cap.
+    // Beats a second the sweeping hand is stepping at; x3600 for the beats-per-hour a
+    // watchmaker would quote (8 is 28,800, 4 is 14,400).
+    int       sweepBeat();
     long      sweepDiffersBy(int *x, int *y);
     float     railwayStopStart();
     // Which beat of the second a given instant falls in. Exposed so the self-test can hold the

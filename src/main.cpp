@@ -3135,6 +3135,26 @@ void setup() {
 
     // configuration web page (http://theorb.local/)
     g_web.on("/diag", []{ g_web.send(200, "text/plain", diag::text()); });
+    // Does the hand-layer cache draw the same picture as a full compose? In pixels.
+    //
+    // Over HTTP because the answer takes two full composes (about a second on a heavy
+    // design) and because "it looks right" is not a measurement — a layer that came out
+    // empty and a layer that is simply mostly transparent produce the same phase timing.
+    g_web.on("/layercheck", []{
+        int worst = -1, wx = -1, wy = -1;
+        const long differ = clockview::layerDiffersBy(&worst, &wx, &wy);
+        char b[220];
+        if (differ == -2)
+            snprintf(b, sizeof(b), "{\"ok\":false,\"why\":\"layers not in use\"}");
+        else if (differ < 0)
+            snprintf(b, sizeof(b), "{\"ok\":false,\"why\":\"not a custom face, or no memory\"}");
+        else
+            snprintf(b, sizeof(b),
+                     "{\"ok\":true,\"pixels_differing\":%ld,\"of\":%ld,\"worst_levels\":%d,"
+                     "\"worst_at\":[%d,%d]}",
+                     differ, (long)(466L * 466L), worst, wx, wy);
+        g_web.send(200, "application/json", b);
+    });
     // Per-task and heap-fragmentation detail, added for the 2026-08-22 investigation into
     // why ADS-B reads start timing out a minute or two into Flight Tracker. /health already
     // gives one internal-heap number; this is who is holding the rest of it, and how broken
@@ -3260,7 +3280,23 @@ void setup() {
                  // declares, bg_frames_baked is how many of them are actually in themeart.
                  // Unequal means the partition filled before the frames were reached and
                  // the dial is stuck on frame 0 — see custom_plate_frame().
-                 "\"bg_frames\":%d,\"bg_frames_baked\":%d,"
+                 // The theme's own answers, because three separate diagnoses in one session
+                 // went wrong through assuming them. Whether the dial sweeps decides which
+                 // compose path runs at all, and loop/fps/everySec decide how often a
+                 // background frame is asked for. All four are in clock_style.json, which
+                 // nothing on the device could report until now.
+                 "\"sweep\":%s,\"railway\":%s,\"beat_per_s\":%d,\"bph\":%d,"
+                 // NAMED SO THEY CANNOT BE MISREAD, which the first version was.
+                 //
+                 // bgAnim.frames counts the EXTRA, numbered files; the rotation is
+                 // `% (frames + 1)` and index 0 is the unnumbered clock_plate.png. So a
+                 // theme shipping twelve pictures declares eleven, and reporting the raw
+                 // field as "bg_frames" reads as one of them having gone missing. Report
+                 // what someone actually wants to know: how many pictures are in the loop
+                 // and how long the loop lasts.
+                 "\"bg_extra_frames\":%d,\"bg_extra_baked\":%d,"
+                 "\"bg_cycle_frames\":%d,\"bg_cycle_s\":%.2f,"
+                 "\"bg_fps\":%d,\"bg_loop\":%s,\"bg_every_s\":%d,"
                  "\"alloc_blocks\":%u,\"free_blocks\":%u,"
                  "\"lv_int\":%u,\"lv_allocs\":%u,\"lv_peak_int\":%u,"
                  "\"wifi_rssi\":%d,\"boot_reason\":\"%s\"}",
@@ -3273,7 +3309,16 @@ void setup() {
                  (unsigned)(ESP.getFreeHeap() / 1024),
                  (unsigned)(heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL) / 1024),
                  host_fps(), host_lvgl_load(), host_flush_load(), host_screens_per_s(),
+                 theme_style::clock().secondSweep   ? "true" : "false",
+                 theme_style::clock().secondRailway ? "true" : "false",
+                 clockview::sweepBeat(), clockview::sweepBeat() * 3600,
                  theme_style::clock().bgAnim.frames, host_bg_frames_baked(),
+                 theme_style::clock().bgAnim.frames + 1,
+                 (double)(theme_style::clock().bgAnim.frames + 1) /
+                     (double)(theme_style::clock().bgAnim.fps < 1 ? 1 : theme_style::clock().bgAnim.fps),
+                 theme_style::clock().bgAnim.fps,
+                 theme_style::clock().bgAnim.loop ? "true" : "false",
+                 theme_style::clock().bgAnim.everySec,
                  host_internal_alloc_blocks(), host_internal_free_blocks(),
                  (unsigned)orb_lv_live_int_bytes, (unsigned)orb_lv_live_int_count,
                  (unsigned)orb_lv_peak_int_bytes,
