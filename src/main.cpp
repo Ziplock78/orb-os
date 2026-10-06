@@ -1678,39 +1678,76 @@ static WebServer g_web(80);
 // meant to be there (CanadianAvenger, 2026-09-14). It is not gone, because its endpoints
 // are still what the Settings screen calls and Zion still uses the form to poke at a
 // device: it lives at /legacy, unadvertised.
+//
+// Streamed, not assembled. This built the whole page in an Arduino String with
+// reserve(2600).
+//
+// The fault, as observed on 2.16.63: that String came out of the ~320 KB INTERNAL heap,
+// which by the time a custom theme is up is fragmented into crumbs, and the page failed in
+// SILENCE — Arduino String reports an exhausted heap by quietly truncating, and send() then
+// posts the truncation as a 200. Confirmed by curl against a themed Orb: /health answered
+// and / did not, the only difference between them being that /health builds into a
+// 420-byte stack buffer and asks the heap for nothing. Measured at the time: 2.3 KB free
+// internal with a 628-byte largest block.
+//
+// 2.16.65 lowered the extmem threshold to 512, so a 2.6 KB String now lands in PSRAM and
+// the original would most likely survive. This stays, for two reasons that do not depend
+// on that number: a page assembled in a heap buffer costs memory proportional to the page
+// and this one costs none at all (the static halves stream straight out of flash, and the
+// largest allocation is a 200-byte stack row), and silent truncation remains the failure
+// mode if it ever is short. It is also how /install has always served its own page.
+//
+// The body now goes out in chunks straight from flash, so the largest internal block this
+// page needs is the ~200-byte row below rather than the whole document. Nothing here
+// allocates proportionally to the page any more.
+static const char ROOT_HEAD[] PROGMEM =
+    "<!DOCTYPE html><html><head><meta charset=utf-8>"
+    "<meta name=viewport content='width=device-width,initial-scale=1'>"
+    "<title>The Orb</title><style>"
+    "body{background:#f5f5f4;color:#2a2622;font-family:system-ui,-apple-system,sans-serif;margin:0 auto;padding:28px 20px;max-width:520px}"
+    "h1{font-size:26px;margin:0 0 4px;letter-spacing:-.02em}.sub{color:#7a7570;margin:0 0 22px}"
+    ".card{background:#fff;border:1px solid #e0e0df;border-radius:14px;padding:16px 18px;margin-bottom:14px}"
+    "dl{display:grid;grid-template-columns:auto 1fr;gap:6px 16px;margin:0;font-size:15px}dt{color:#7a7570}dd{margin:0}"
+    "a.b{display:block;padding:12px 14px;border:1px solid #e0e0df;border-radius:10px;color:#2a2622;text-decoration:none;margin-top:8px;font-weight:500}"
+    "a.b:hover{border-color:#a65e3f;color:#a65e3f}small{color:#7a7570;display:block;margin-top:14px;line-height:1.5}"
+    "</style></head><body>"
+    "<h1>The Orb</h1><p class=sub>This Orb, over your WiFi</p>"
+    "<div class=card><dl>";
+
+static const char ROOT_TAIL[] PROGMEM =
+    "</dl></div>"
+    "<div class=card>"
+    "<a class=b href='/install'>Install a theme file</a>"
+    // Upstream 2.16.64 guarded this link: with no OTA partition the page it points at
+    // 404s, so advertising it is a lie. Preserved here because this function moved into a
+    // PROGMEM literal in the same release — string-literal concatenation takes a #if
+    // perfectly well, so the guard survives the move intact.
+#if ORB_OTA_ENABLED
+    "<a class=b href='/update'>Update the firmware over WiFi</a>"
+#endif
+    "<a class=b href='/health'>Health readout</a>"
+    "</div>"
+    "<small>Everything else is set on the Orb itself, with the knob, under Settings: location, "
+    "units, range, brightness, when the screen dims, sound, WiFi. What the screens look like is "
+    "designed in Orb Studio and installed from there over the cable, or as a file through the "
+    "link above.</small>"
+    "</body></html>";
+
 static void handleRoot() {
-    String html;
-    html.reserve(2600);
-    html += "<!DOCTYPE html><html><head><meta charset=utf-8>"
-            "<meta name=viewport content='width=device-width,initial-scale=1'>"
-            "<title>The Orb</title><style>"
-            "body{background:#f5f5f4;color:#2a2622;font-family:system-ui,-apple-system,sans-serif;margin:0 auto;padding:28px 20px;max-width:520px}"
-            "h1{font-size:26px;margin:0 0 4px;letter-spacing:-.02em}.sub{color:#7a7570;margin:0 0 22px}"
-            ".card{background:#fff;border:1px solid #e0e0df;border-radius:14px;padding:16px 18px;margin-bottom:14px}"
-            "dl{display:grid;grid-template-columns:auto 1fr;gap:6px 16px;margin:0;font-size:15px}dt{color:#7a7570}dd{margin:0}"
-            "a.b{display:block;padding:12px 14px;border:1px solid #e0e0df;border-radius:10px;color:#2a2622;text-decoration:none;margin-top:8px;font-weight:500}"
-            "a.b:hover{border-color:#a65e3f;color:#a65e3f}small{color:#7a7570;display:block;margin-top:14px;line-height:1.5}"
-            "</style></head><body>"
-            "<h1>The Orb</h1><p class=sub>This Orb, over your WiFi</p>"
-            "<div class=card><dl>";
+    // CONTENT_LENGTH_UNKNOWN puts the reply in chunked transfer encoding, which is what
+    // lets the body leave in pieces without knowing the total up front.
+    g_web.setContentLength(CONTENT_LENGTH_UNKNOWN);
+    g_web.send(200, "text/html", "");
+    g_web.sendContent_P(ROOT_HEAD);
     char row[200];
     snprintf(row, sizeof(row), "<dt>Firmware</dt><dd>%s</dd><dt>Wearing</dt><dd>%s</dd><dt>Address</dt><dd>%s</dd>",
              FW_VERSION, theme_style::themeLabel(), WiFi.localIP().toString().c_str());
-    html += row;
-    html += "</dl></div>"
-            "<div class=card>"
-            "<a class=b href='/install'>Install a theme file</a>"
-#if ORB_OTA_ENABLED
-            "<a class=b href='/update'>Update the firmware over WiFi</a>"
-#endif
-            "<a class=b href='/health'>Health readout</a>"
-            "</div>"
-            "<small>Everything else is set on the Orb itself, with the knob, under Settings: location, "
-            "units, range, brightness, when the screen dims, sound, WiFi. What the screens look like is "
-            "designed in Orb Studio and installed from there over the cable, or as a file through the "
-            "link above.</small>"
-            "</body></html>";
-    g_web.send(200, "text/html", html);
+    // The (ptr, len) overloads throughout, never the String ones: sendContent(const char *)
+    // converts through an Arduino String, which is an internal-heap allocation and exactly
+    // what this page is being moved off.
+    g_web.sendContent(row, strlen(row));
+    g_web.sendContent_P(ROOT_TAIL);
+    g_web.sendContent("", 0);    // the zero-length chunk that ends a chunked body
 }
 
 static void handleLegacyConfig() {
@@ -1805,8 +1842,29 @@ static void handleLegacyConfig() {
         tzopts += o;
     }
     static const size_t BUFSZ = 10240;
-    static char *buf = (char *)ps_malloc(BUFSZ);   // PSRAM: keep this big page buffer off the scarce
-    if (!buf) return;                              //   internal heap (the contiguous RAM mbedTLS needs)
+    // PSRAM: keep this big page buffer off the scarce internal heap (the contiguous RAM
+    // mbedTLS needs).
+    //
+    // Retried, and loud when it fails. This was `static char *buf = ps_malloc(BUFSZ)`
+    // followed by `if (!buf) return;`, which is two faults in two lines. The bare return
+    // sent NO HTTP RESPONSE, so the browser sat there until its own timeout and the device
+    // looked wedged rather than short of memory. And `static` cached the failure: one
+    // unlucky allocation — a themed Orb mid-app-switch is the easy way to get one — meant
+    // this page never worked again until a reboot, however much PSRAM freed up afterwards.
+    // Allocate on each attempt until one succeeds, and otherwise SAY what was missing.
+    static char *buf = nullptr;
+    if (!buf) buf = (char *)ps_malloc(BUFSZ);
+    if (!buf) {
+        char why[192];
+        snprintf(why, sizeof(why),
+                 "out of memory for this page: wanted %u B of PSRAM, %u KB free, "
+                 "largest block %u KB", (unsigned)BUFSZ,
+                 (unsigned)(ESP.getFreePsram() / 1024),
+                 (unsigned)(heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM) / 1024));
+        Serial.printf("[web] /legacy: %s\n", why);
+        g_web.send(503, "text/plain", why);
+        return;
+    }
     snprintf(buf, BUFSZ,
         "<!DOCTYPE html><html><head><meta charset=utf-8>"
         "<meta name=viewport content='width=device-width,initial-scale=1'>"
