@@ -1427,6 +1427,10 @@ static uint32_t sweep_period() {
     return (uint32_t)ms;
 }
 
+// Defined below, beside the minute-move path it guards; declared here because the cache
+// BUILD (further up) is its first caller.
+static bool nomin_cache_usable();
+
 static lv_color_t *s_under = nullptr;
 // The dial with NO minute hand on it, and nothing above the minute hand either.
 //
@@ -1681,7 +1685,7 @@ static bool rebuild_under(const struct tm *ti) {
     // The lower cache first, from the same compose: stop below the minute hand, keep that,
     // then carry on up to the second hand for s_under. Two memcpys and one compose rather
     // than two composes.
-    if (s_noMin) {
+    if (s_noMin && nomin_cache_usable()) {
         compose_custom(ti, 1, false);
         memcpy(s_noMin, s_buf, (size_t)SCREEN_W * SCREEN_H * sizeof(lv_color_t));
         s_noMinHr = ti->tm_hour;
@@ -1701,6 +1705,44 @@ static bool rebuild_under(const struct tm *ti) {
     return true;
 }
 
+// Is the s_noMin cache safe to use on THIS design?
+//
+// No, when a MOVING hand sits below the minute hand in the draw order.
+//
+// s_noMin is built with stopKind=1, "everything below the minute hand", and the minute-move
+// path restores rows out of it. That is only sound while the things below the minute hand
+// hold still. With Steam Punk's order — [static1, static2, SECOND, minute, hour] — the
+// second hand is below the minute hand, so it gets composited INTO s_noMin at whatever
+// angle it happened to have when the cache was built, and every later minute move reprints
+// that stale hand. The sweep only ever wipes the box the hand is in NOW, so a copy left at
+// a different angle is never erased.
+//
+// Reported by Greg, 2026-10-06, and the symptoms name the mechanism exactly: a second
+// second hand, with a shadow of its own, absent at boot and appearing a little later (the
+// first minute move), fixed in one spot for ever (the cache is not rebuilt), on the
+// sub-dial, at a position that differs between reboots (wherever the hand was when the
+// cache happened to be built).
+//
+// s_under already handles any draw order — that was Zion's Beige dial, and the fix was to
+// stop the cache at the second hand and redraw everything above it per frame. s_noMin never
+// got the same treatment, because until this theme nothing put a moving hand underneath the
+// minute hand.
+//
+// This is the GUARD, not the cure: it declines the optimisation rather than risking a wrong
+// picture, so these designs fall back to the full rebuild on a minute move — correct, and
+// about every three seconds. The cure is to stop s_noMin below whichever moving hand comes
+// first in the order, and that is a change to the most intricate code on this screen, so it
+// wants hardware in front of it rather than being bundled in here.
+static bool nomin_cache_usable() {
+    const theme_style::Clock &cs = theme_style::clock();
+    if (!cs.hand[2].show) return true;          // no second hand to go stale
+    for (int i = 0; i < cs.orderN; ++i) {
+        if (cs.order[i] == 2) return false;     // second hand reached first: it is BELOW the minute
+        if (cs.order[i] == 1) return true;      // minute hand reached first: the usual case
+    }
+    return true;
+}
+
 // MOVE THE MINUTE HAND WITHOUT REBUILDING THE DIAL.
 //
 // The same trick the sweep uses on the second hand, applied one layer down. Restore only the
@@ -1715,6 +1757,7 @@ static bool rebuild_under(const struct tm *ti) {
 // is the whole safety story here: no cache, no sprite, no hand, nothing stale, just slower.
 static bool refresh_minute(const struct tm *ti, float ang) {
     if (!s_buf || !s_under || !s_noMin || !s_noMinValid) return false;
+    if (!nomin_cache_usable()) return false;   // a moving hand is below the minute: see above
     if (s_underFor != s_buf) return false;           // a cache of some previous canvas
     if (s_noMinHr != ti->tm_hour) return false;      // the hour hand moved; that is under us
     // ...and it moves BETWEEN hours too, which this used to miss entirely. See
@@ -2261,8 +2304,32 @@ static void tick_cb(lv_timer_t * /*t*/) {
         const int want = bg_anim_frame();
         if (want != s_bgFrame) {
             s_bgFrame  = want;
-            s_underMin = -1;      // makes the sweep path rebuild below
-            s_fullNext = true;    // and the frame after it repaint in full
+            // INVALIDATE BOTH CACHES, BY THE KEY EACH ONE ACTUALLY USES.
+            //
+            // s_underMin alone was not enough and the comment that used to sit here
+            // ("makes the sweep path rebuild below") was true when it was written and
+            // stopped being true later. s_underMin is the staleness key for a RAILWAY
+            // dial only — `ti.tm_min != s_underMin`. A dial that creeps, which is every
+            // sweeping design that is not a railway clock, is tested against s_underMins,
+            // a float holding minutes-with-fraction, and that was left alone. So on
+            // Steam Punk the frame index advanced and the cache holding the old background
+            // was never rebuilt: the picture only changed when the cache happened to be
+            // rebuilt for its OWN reason, the three-second minute creep, which picked up
+            // whatever frame was current by then.
+            //
+            // Greg, 2026-10-06: "no animation is playing, I occasionally will see a single
+            // frame change on the background but that's it" — which is this exactly, and is
+            // what a six-frame sequence looks like when five of the six invalidations are
+            // dropped on the floor.
+            //
+            // s_noMin needs it too. Its own comment already says it is "rebuilt only when
+            // something under the minute hand actually changes: the hour, the background
+            // frame, or the theme" — the background frame was in the list and not in the
+            // code, so a minute move would restore the previous frame's background.
+            s_underMin   = -1;        // railway dials
+            s_underMins  = -1.0f;     // ...and creeping ones, which is what was missing
+            s_noMinValid = false;     // s_noMin holds the background as well
+            s_fullNext   = true;      // and the frame after it repaints in full
         }
         // Tick fast enough for whichever of the two needs it more, never just the animation.
         //
@@ -2429,6 +2496,25 @@ static void tick_cb(lv_timer_t * /*t*/) {
         struct timeval tv; gettimeofday(&tv, nullptr);
         uint32_t ms = (uint32_t)((1000000 - tv.tv_usec) / 1000);
         if (ms < 20) ms += 1000;        // too close to chase; take the one after
+        // ...but never out-wait a background that is mid-play.
+        //
+        // This used to set the period unconditionally, and the bgAnim block at the top of
+        // this same tick had already set it to 1000/fps a few hundred lines earlier. The
+        // last writer won, so on EVERY non-sweeping dial the animation's rate was silently
+        // replaced by "once a second", whatever the theme asked for. A theme asking for
+        // eight frames a second got one, and since bg_anim_frame() derives the frame from
+        // elapsed time rather than from how many frames have been drawn, it then jumped
+        // eight places per draw: a six-frame loop sampled once a second looks like a
+        // flicker, or like nothing at all.
+        //
+        // Steam Punk does not hit this any more because it sweeps, and sweeping dials take
+        // the branch above. It cost a long evening to find on a dial that did not, so the
+        // two requests are reconciled here rather than left to ordering.
+        const theme_style::Clock::BgAnim &ba = theme_style::clock().bgAnim;
+        if (ba.frames > 0 && (ba.loop || bg_anim_playing())) {
+            const uint32_t need = 1000u / (uint32_t)(ba.fps < 1 ? 1 : ba.fps);
+            if (need < ms) ms = need;   // the sooner of the two deadlines
+        }
         lv_timer_set_period(s_tick, ms);
     }
 }
