@@ -135,15 +135,21 @@ bool bake_active_theme(bool force) {
         Serial.printf("[theme_art] '%s' already baked and unchanged — nothing to do\n", slug);
         return false;
     }
-    if (slug_baked(slug))
+    if (slug_baked(slug) && !force)
         Serial.printf("[theme_art] '%s' asset list changed (%08x -> %08x) — re-baking\n",
                       slug, (unsigned)baked_manifest(slug), (unsigned)want);
+    else if (slug_baked(slug))
+        // It did NOT change; it was asked for. The old line printed "changed (X -> X)" with
+        // the same fingerprint twice, which reads as a bug in the fingerprint.
+        Serial.printf("[theme_art] '%s' re-bake forced (asset list unchanged, %08x)\n",
+                      slug, (unsigned)want);
 
     Serial.printf("[theme_art] baking '%s' into flash (one time, this boot only)\n", slug);
     const uint32_t t0 = millis();
     if (!install_begin(slug, want, force)) { Serial.println("[theme_art] install_begin failed — staying on SD"); return false; }
 
     int baked = 0;
+    int missed = 0;   // planned, attempted, and did not make it into flash
     // Count what will actually be attempted so the on-screen progress has a real total.
     int totalPlanned = 0;
     size_t fontN = 0;
@@ -178,8 +184,46 @@ bool bake_active_theme(bool force) {
             ++baked;
             Serial.printf("[theme_art] baked %-22s %u KB (font)\n",
                           FONT_ASSETS[i], (unsigned)(len / 1024));
-        }
+        } else ++missed;
         theme_sd::free(buf);
+    }
+
+    // THE ANIMATION FRAMES GO FIRST, ahead of the plates, and that ordering is the fix for
+    // a fault that bit three times in one evening.
+    //
+    // Every asset in ASSETS below degrades gracefully: if it does not fit, the screen reads
+    // it off the SD card instead and is merely slower. A frame does not. There is no SD
+    // fallback for frames by design — the comment in custom_plate_frame says why — so a
+    // frame that loses the race does not get slower, it ceases to exist, and the theme's
+    // animation silently stops working. Baking them last made them the first thing sacrificed
+    // whenever the partition was tight, which is exactly whenever a second theme is resident.
+    //
+    // Observed: a theme declaring eleven frames came back with one baked, three separate
+    // times, each time after an ordinary install. "Is this a bake issue again??" is the
+    // correct question to have been asked three times, and the answer was yes three times.
+    //
+    // So the thing with no fallback is served before the things that have one.
+    for (int fN = 1; fN <= animFrames; ++fN) {
+        snprintf(frameName, sizeof(frameName), "clock_plate_%02d.png", fN);
+        if (!theme_style::hasAsset(frameName)) continue;
+        if (s_progress) s_progress(frameName, ++attempted, totalPlanned);
+        char path[80];
+        snprintf(path, sizeof(path), "/themes/%s/%s", slug, frameName);
+        size_t pngLen = 0;
+        uint8_t *pngBuf = theme_sd::read_whole(path, pngLen, SD_ASSET_MAX_BYTES);
+        if (!pngBuf) continue;
+        uint8_t *raw = nullptr;
+        int w = 0, h = 0;
+        const bool ok = decode_png(pngBuf, pngLen, false, raw, w, h);
+        theme_sd::free(pngBuf);
+        if (!ok) { Serial.printf("[theme_art] %s: decode failed, leaving on SD\n", frameName); continue; }
+        const size_t bytes = (size_t)w * h * 2;
+        if (install_asset(slug, frameName, w, h, FMT_RGB565, raw, bytes)) {
+            ++baked;
+            Serial.printf("[theme_art] baked %-22s %dx%d %u KB (frame)\n",
+                          frameName, w, h, (unsigned)(bytes / 1024));
+        } else ++missed;
+        heap_caps_free(raw);
     }
 
     for (size_t i = 0; i < ASSET_N; ++i) {
@@ -207,37 +251,41 @@ bool bake_active_theme(bool force) {
             ++baked;
             Serial.printf("[theme_art] baked %-22s %dx%d %u KB\n",
                           ASSETS[i].name, w, h, (unsigned)(bytes / 1024));
-        }
+        } else ++missed;   // it will read off the card instead, but try for room first
         heap_caps_free(raw);
     }
 
-    // The moving background's frames. Same conversion as the plate above, which they are:
-    // opaque RGB565 at the full size of the dial. Nothing else about them is special, and
-    // skipping any one of them costs only that frame, so a theme whose last frame will not
-    // fit still plays the ones that did.
-    for (int fN = 1; fN <= animFrames; ++fN) {
-        snprintf(frameName, sizeof(frameName), "clock_plate_%02d.png", fN);
-        if (!theme_style::hasAsset(frameName)) continue;
-        if (s_progress) s_progress(frameName, ++attempted, totalPlanned);
-        char path[80];
-        snprintf(path, sizeof(path), "/themes/%s/%s", slug, frameName);
-        size_t pngLen = 0;
-        uint8_t *pngBuf = theme_sd::read_whole(path, pngLen, SD_ASSET_MAX_BYTES);
-        if (!pngBuf) continue;
-        uint8_t *raw = nullptr;
-        int w = 0, h = 0;
-        const bool ok = decode_png(pngBuf, pngLen, false, raw, w, h);
-        theme_sd::free(pngBuf);
-        if (!ok) { Serial.printf("[theme_art] %s: decode failed, leaving on SD\n", frameName); continue; }
-        const size_t bytes = (size_t)w * h * 2;
-        if (install_asset(slug, frameName, w, h, FMT_RGB565, raw, bytes)) {
-            ++baked;
-            Serial.printf("[theme_art] baked %-22s %dx%d %u KB (frame)\n",
-                          frameName, w, h, (unsigned)(bytes / 1024));
-        }
-        heap_caps_free(raw);
-    }
+    // The moving background's frames. Same conversion as the plates: opaque RGB565 at the
+    // full size of the dial.
+    //
+    // Skipping one does NOT cost only that frame, which is what the note here used to claim.
+    // bg_anim_frame() steps through 0..frames by time, so a hole in the middle shows the
+    // still plate for that step and the loop reads as broken rather than shorter. That is
+    // why these are baked before the plates now and why a shortfall retries.
 
+    // ANYTHING LEFT BEHIND? TRY AGAIN WITH THE WHOLE PARTITION.
+    //
+    // install_begin keeps every OTHER theme's baked art, which is right when there is room
+    // and ruinous when there is not: nothing reclaims a theme nobody is wearing, so the
+    // partition only ever fills, and the active theme quietly loses whatever did not fit.
+    // The automatic clean slate in install_begin only fires once the remainder is already
+    // under FULL_THEME_BYTES, which is far too late to help the theme being installed.
+    //
+    // So: if a planned asset was attempted and did not make it, and we were being polite to
+    // the other themes, stop being polite and do it again. Costs a second pass of about a
+    // minute, only on the install where it is actually needed, and it happens at boot where
+    // there is PSRAM to decode with. The alternative is what happened three times tonight —
+    // an ordinary install leaving the animation broken with nothing said.
+    if (missed > 0 && !force) {
+        Serial.printf("[theme_art] %d asset(s) did not fit alongside the other themes "
+                      "— re-baking with the whole partition\n", missed);
+        // NOT committed first. The index was already erased by install_begin, so nothing is
+        // published yet, and the retry erases it again and starts from zero. Committing a
+        // half-baked theme here would publish a manifest that says "this theme is baked"
+        // over a set of assets with holes in it, which is the state a power cut must not be
+        // able to leave behind.
+        return bake_active_theme(true);   // force: forget the others, take the whole partition
+    }
     if (!baked) { Serial.println("[theme_art] nothing baked"); return false; }
     if (!install_commit()) { Serial.println("[theme_art] commit failed — staying on SD"); return false; }
     Serial.printf("[theme_art] baked %d asset(s) in %u ms — subsequent shows are free\n",

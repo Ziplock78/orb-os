@@ -179,7 +179,6 @@ static volatile bool         g_radarViewActive = false;
 static volatile uint32_t     g_lastFeedOkMs = 0;                     // millis() of the last good poll (HUD staleness)
 
 static volatile uint32_t     g_rebootAtMs = 0;
-static uint32_t g_rebakeAtMs = 0;   // /rebake: forced full art re-bake, run from loop()
 // Files written by the browser install page this session. Was a static local inside the
 // upload handler; /installed needs to read it to report the count and reset it for the
 // next install, so it lives out here now.
@@ -2752,7 +2751,18 @@ void setup() {
         if (done == 0 && !name) update_ui::bake_begin(total);
         else update_ui::bake_progress(name, done, total);
     });
-    theme_art::bake_active_theme();
+    {
+        // A /rebake asked for from the web page, carried across the restart. Cleared before
+        // the bake rather than after, so a bake that panics cannot wedge the device in a
+        // re-bake loop.
+        Preferences rp;
+        rp.begin("capsuleradar", false);
+        const bool forced = rp.getBool("rebake", false);
+        if (forced) rp.putBool("rebake", false);
+        rp.end();
+        if (forced) Serial.println("[theme_art] /rebake: honouring the request from before the restart");
+        theme_art::bake_active_theme(forced);
+    }
     ui_splash_show();          // the theme's title card, clean, with the install behind it
     update_ui::bake_done();    // no-op on an ordinary boot
     // After the bake and after lv_init(): the font loader reads the freshly baked fonts,
@@ -3143,7 +3153,7 @@ void setup() {
     g_web.on("/taskmem", []{
         multi_heap_info_t hi;
         heap_caps_get_info(&hi, MALLOC_CAP_INTERNAL);
-        char b[640];
+        char b[900];   // the theme-config fields pushed it past 640
         snprintf(b, sizeof(b),
             "{\"internal\":{\"free_bytes\":%u,\"largest_free_block\":%u,"
             "\"free_blocks\":%u,\"allocated_blocks\":%u,\"total_blocks\":%u},"
@@ -3175,11 +3185,62 @@ void setup() {
     // POST, not GET: it erases every baked asset on the device and takes a minute of
     // decoding, so a link preview or a crawler must not be able to set it off.
     g_web.on("/rebake", HTTP_POST, []{
-        Serial.println("[theme_art] /rebake: forced full re-bake requested");
+        Serial.println("[theme_art] /rebake: requested; will run at the next boot");
+        {   // Remembered, not done now. See the note in loop().
+            Preferences p;
+            p.begin("capsuleradar", false);
+            p.putBool("rebake", true);
+            p.end();
+        }
         g_web.send(200, "text/plain",
-                   "re-baking the active theme with the whole partition; "
-                   "this takes a minute and the Orb restarts when it is done");
-        g_rebakeAtMs = millis() + 300;   // after the reply has left (see loop())
+                   "the Orb will restart and re-bake the active theme during boot; "
+                   "give it a minute, then check bg_frames_baked in /health");
+        g_rebootAtMs = millis() + 400;
+    });
+    // What the active theme actually HAS, declares, and got baked — the three-way comparison
+    // that tools/read-orb-bundle.py does for a .orb file, for a theme already on the card.
+    //
+    // Needed because a theme pushed straight from Orb Studio over the cable leaves no bundle
+    // behind to inspect, and the bake skips a declared asset in SILENCE when the file is not
+    // readable. "frames: 8 declared, 0 baked, 8.5 MB free" is not explicable from the device
+    // without this: it could be a missing file, an undeclared one, or a decode that failed.
+    //
+    // declared = theme.json's asset list said so (nothing undeclared is ever baked).
+    // baked    = it is in themeart now, which is the only place frames are read from.
+    g_web.on("/themefiles", []{
+        const char *slug = theme_select::activeSlug();
+        char dir[64];
+        snprintf(dir, sizeof(dir), "/themes/%s", slug);
+        g_web.setContentLength(CONTENT_LENGTH_UNKNOWN);
+        g_web.send(200, "text/plain", "");
+        char line[160];
+        snprintf(line, sizeof(line), "slug %s\n%-28s %9s  declared  baked\n", slug, "file", "bytes");
+        g_web.sendContent(line, strlen(line));
+        File d = SD.open(dir);
+        if (!d || !d.isDirectory()) {
+            const char *err = "(cannot open the theme directory)\n";
+            g_web.sendContent(err, strlen(err));
+            g_web.sendContent("", 0);
+            return;
+        }
+        int n = 0;
+        for (File f = d.openNextFile(); f; f = d.openNextFile()) {
+            const char *nm = f.name();
+            const int slash = (int)strlen(nm);
+            const char *leaf = nm;
+            for (int i = slash - 1; i >= 0; --i) if (nm[i] == '/') { leaf = nm + i + 1; break; }
+            snprintf(line, sizeof(line), "%-28s %9lu  %-8s  %s\n", leaf,
+                     (unsigned long)f.size(),
+                     theme_style::hasAsset(leaf) ? "yes" : "NO",
+                     theme_art::has(slug, leaf)  ? "yes" : "NO");
+            g_web.sendContent(line, strlen(line));
+            f.close();
+            ++n;
+        }
+        d.close();
+        snprintf(line, sizeof(line), "%d file(s)\n", n);
+        g_web.sendContent(line, strlen(line));
+        g_web.sendContent("", 0);
     });
     g_web.on("/reboot", []{
         g_web.send(200, "text/plain", "rebooting");
@@ -3457,18 +3518,18 @@ void loop() {
     if (theme_pull::active()) theme_pull::step();
     serial_wifi_join_tick();   // a join asked for over the cable; a no-op otherwise
 
-    // Forced re-bake, from loop() rather than the request handler: it reads the SD card,
-    // which only this task may touch (docs/memory.md), and it runs for a minute.
-    if (g_rebakeAtMs && (int32_t)(millis() - g_rebakeAtMs) >= 0) {
-        g_rebakeAtMs = 0;
-        // The on-screen progress comes for free: the set_progress hook registered in setup()
-        // is still live, so the bake drives update_ui::bake_begin/bake_progress itself.
-        theme_art::bake_active_theme(true /*force: forget other themes, ignore fingerprint*/);
-        update_ui::bake_done();
-        Serial.println("[theme_art] /rebake done — restarting");
-        delay(200);
-        ESP.restart();
-    }
+    // THE FORCED RE-BAKE IS NOT DONE HERE, and the first version of it was.
+    //
+    // Baking decodes PNGs, and decode_png wants 424-651 KB of PSRAM for its output on top of
+    // the ~355 KB it takes to read the file. At boot there is 7902 KB free and every asset
+    // fits. From loop() the live screen is holding its art — canvas, rotation cache, hand
+    // layers — and the measurement that caught this was 545 KB free: the fonts baked, being
+    // raw copies that decode nothing, and every plate and every animation frame either
+    // failed to decode or could not even be read. The endpoint "succeeded" and left the
+    // device with FEWER frames baked than before it ran.
+    //
+    // So /rebake records the request and restarts, and setup() does the work where the
+    // memory is. See the Preferences flag read there.
 
     // scheduled reboot after a fresh WiFi config (see setSaveConfigCallback)
     if (g_rebootAtMs && (int32_t)(millis() - g_rebootAtMs) >= 0) { delay(50); ESP.restart(); }
