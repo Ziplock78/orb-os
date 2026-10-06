@@ -36,3 +36,11 @@ tools/hands/
 # Watch-script runtime state
 orb_watch.log
 orb_watch.pid
+
+# Theme bundles and their expansions.
+#
+# .orb files are Orb Studio build output, and themes/unpacked/ is derived from them by
+# tools/read-orb-bundle.py's sibling unpacker — neither is source. Five bundles plus their
+# contents is ~26 MB of PNG and PCM that would otherwise land in a commit via `git add .`.
+themes/*.orb
+themes/unpacked/
