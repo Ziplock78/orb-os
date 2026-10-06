@@ -1,4 +1,6 @@
 #include "wx_radar.h"
+// snprintf. Same story as aircraft.h: transitive on macOS, explicit everywhere else.
+#include <stdio.h>
 #include <mutex>
 #include <stdlib.h>
 #include <string.h>

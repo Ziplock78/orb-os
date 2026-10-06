@@ -28,6 +28,10 @@ static uint32_t millis() {
 #endif
 #include <stdio.h>
 #include <string.h>
+// The ranged-for over a braced list further down (`for (lv_obj_t **slot : { &a, &b, &c })`)
+// needs this by the standard. libc++ hands it over transitively, so a macOS build never
+// noticed; GCC does not, so the simulator has never compiled on Linux.
+#include <initializer_list>
 #include <math.h>
 
 // The Intel screen: a title, a handful of headlines, and how old they are.

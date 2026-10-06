@@ -9,6 +9,9 @@
   using String = std::string;
 #endif
 #include <stdint.h>
+// NAN, used in the member initialisers below. Pulled in transitively by libc++ on
+// macOS, not by libstdc++, so the simulator has never compiled on Linux without it.
+#include <math.h>
 
 struct Aircraft {
     String   hex;            // ICAO 24-bit id (stable key)
