@@ -58,7 +58,13 @@ const uint8_t *find_active(const char *assetName, Format wantFmt, int &w, int &h
 // Start an install run for one theme. Entries belonging to OTHER themes are kept, so a
 // second theme can be baked alongside the first and switching between them is free. Falls
 // back to wiping everything when too little contiguous room is left.
-bool install_begin(const char *slug, uint32_t manifestFingerprint);
+// forgetOthers drops EVERY other theme's baked entries instead of keeping them, giving this
+// bake the whole partition. Needed because nothing else ever reclaims the space: entries are
+// only dropped for the slug being re-baked, so art belonging to a theme the owner deleted
+// from the card sits in flash for ever, and the automatic clean-slate below only fires once
+// the remainder has already fallen under FULL_THEME_BYTES. A rich theme that does not fit
+// alongside a stale one loses whatever is baked LAST, which is the animation frames.
+bool install_begin(const char *slug, uint32_t manifestFingerprint, bool forgetOthers = false);
 // Append one baked asset. `data` is raw pixels, already in `fmt` layout.
 bool install_asset(const char *slug, const char *assetName,
                    int w, int h, Format fmt, const uint8_t *data, size_t len);
@@ -93,7 +99,10 @@ bool slug_baked(const char *slug);
 // already baked, i.e. right after a theme push, inside the reboot the user is already
 // waiting through. No-op once done, and a failure anywhere just leaves that asset on the
 // SD path. Returns true if anything was baked.
-bool bake_active_theme();
+// force: bake even when the fingerprint says nothing changed, and give the bake the whole
+// partition (see install_begin's forgetOthers). This is the "it did not all fit, try again
+// with room" path, exposed as /rebake.
+bool bake_active_theme(bool force = false);
 
 // Progress hook for the bake, called from the same task that runs it. First call is
 // (nullptr, 0, total) meaning "starting"; then (assetName, done, total) per asset. Set by

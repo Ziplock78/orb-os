@@ -187,6 +187,24 @@ const uint16_t *custom_plate_frame(int index) {
         if (const uint8_t *p = theme_art::find_active(name, theme_art::FMT_RGB565, w, h)) {
             s_frames[index] = (const uint16_t *)p;
         }
+#if defined(ESP_PLATFORM)
+        // SAY SO. A frame that did not bake is the single most consequential silent failure
+        // on an animated theme: the background holds on frame nought for ever and nothing,
+        // anywhere, mentions it. The bake itself does log "does not fit", but that happened
+        // on some earlier boot whose log is long gone, and `?orb`/-/health had no way to ask.
+        //
+        // Steam Punk, 2026-10-06: six 466x466 plates at 424 KB each against a themeart
+        // partition reporting 252 KB free. The frames are baked LAST, after the fonts and
+        // every standard asset, so when the partition fills they are exactly what gets
+        // dropped — and the owner sees a still picture with no explanation.
+        //
+        // Once per frame index, not per call: this runs inside the compose.
+        else {
+            Serial.printf("[bg_anim] %s is NOT baked into themeart — the background cannot "
+                          "animate past frame 0 (no SD fallback for frames by design). "
+                          "Free space in the partition and re-bake.\n", name);
+        }
+#endif
 #if !defined(ESP_PLATFORM)
         // The desktop simulator has no flash partition to bake into, so it reads the frames
         // the way it reads every other asset, out of sim/sdcard/themes/<slug>/. Deliberately

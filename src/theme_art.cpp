@@ -187,7 +187,7 @@ size_t space_free() {
     return space_total() - used;
 }
 
-bool install_begin(const char *slug, uint32_t manifestFingerprint) {
+bool install_begin(const char *slug, uint32_t manifestFingerprint, bool forgetOthers) {
     if (!s_part || !slug || !slug[0]) return false;
     s_insSlug = slug;
     s_insManifest = manifestFingerprint;
@@ -196,7 +196,8 @@ bool install_begin(const char *slug, uint32_t manifestFingerprint) {
     // ~3.8 MB, so two can live here at once and switching between them costs nothing;
     // wiping on every bake would make each switch pay the full conversion again.
     uint32_t kept = 0, end = 0;
-    for (uint32_t i = 0; i < s_hdr.count; ++i) {
+    const uint32_t scan = forgetOthers ? 0 : s_hdr.count;   // forget everything, or keep the rest
+    for (uint32_t i = 0; i < scan; ++i) {
         if (strncmp(s_index[i].slug, slug, sizeof(s_index[i].slug)) == 0) continue;  // replacing this one
         if (kept != i) s_index[kept] = s_index[i];
         const uint32_t e = (s_index[kept].offset - INDEX_BYTES)
@@ -208,6 +209,9 @@ bool install_begin(const char *slug, uint32_t manifestFingerprint) {
     // No compaction: a re-bake of an existing theme orphans its old blobs rather than
     // moving everything down. Rather than grow a moving GC, fall back to a clean slate
     // when the remainder no longer fits a full theme. Predictable, and rare at 9.6 MB.
+    if (forgetOthers)
+        Serial.println("[theme_art] forced re-bake: forgetting every other theme's art, "
+                       "the whole partition is this theme's");
     if (space_total() - end < FULL_THEME_BYTES) {
         Serial.printf("[theme_art] only %u KB left after keeping %u entries — wiping all themes\n",
                       (unsigned)((space_total() - end) / 1024), (unsigned)kept);
@@ -319,7 +323,7 @@ bool find_blob(const char *, const char *, const uint8_t *&, size_t &) { return 
 const uint8_t *find_active(const char *, Format, int &, int &) { return nullptr; }
 bool owns(const void *) { return false; }
 bool slug_baked(const char *) { return false; }
-bool install_begin(const char *, uint32_t) { return false; }
+bool install_begin(const char *, uint32_t, bool) { return false; }
 bool install_asset(const char *, const char *, int, int, Format, const uint8_t *, size_t) { return false; }
 bool install_commit() { return false; }
 uint32_t baked_manifest(const char *) { return 0; }

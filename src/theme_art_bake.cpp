@@ -122,7 +122,7 @@ bool decode_png(const uint8_t *png, size_t len, bool alpha,
 
 void set_progress(void (*cb)(const char *, int, int)) { s_progress = cb; }
 
-bool bake_active_theme() {
+bool bake_active_theme(bool force) {
     const char *slug = theme_select::activeSlug();
     if (!slug || !slug[0]) return false;
     if (!space_total()) return false;              // no partition on this layout
@@ -131,7 +131,7 @@ bool bake_active_theme() {
     // removing one would leave the old pixels cached: the cache would quietly drift from
     // the theme and only a firmware VERSION bump would ever resync it.
     const uint32_t want = theme_style::assetsFingerprint();
-    if (slug_baked(slug) && baked_manifest(slug) == want && want != 0) {
+    if (!force && slug_baked(slug) && baked_manifest(slug) == want && want != 0) {
         Serial.printf("[theme_art] '%s' already baked and unchanged — nothing to do\n", slug);
         return false;
     }
@@ -141,7 +141,7 @@ bool bake_active_theme() {
 
     Serial.printf("[theme_art] baking '%s' into flash (one time, this boot only)\n", slug);
     const uint32_t t0 = millis();
-    if (!install_begin(slug, want)) { Serial.println("[theme_art] install_begin failed — staying on SD"); return false; }
+    if (!install_begin(slug, want, force)) { Serial.println("[theme_art] install_begin failed — staying on SD"); return false; }
 
     int baked = 0;
     // Count what will actually be attempted so the on-screen progress has a real total.
@@ -250,7 +250,7 @@ bool bake_active_theme() {
 #else
 
 namespace theme_art {
-bool bake_active_theme() { return false; }
+bool bake_active_theme(bool) { return false; }
 void set_progress(void (*)(const char *, int, int)) {}
 } // namespace theme_art
 

@@ -179,6 +179,7 @@ static volatile bool         g_radarViewActive = false;
 static volatile uint32_t     g_lastFeedOkMs = 0;                     // millis() of the last good poll (HUD staleness)
 
 static volatile uint32_t     g_rebootAtMs = 0;
+static uint32_t g_rebakeAtMs = 0;   // /rebake: forced full art re-bake, run from loop()
 // /theme?slug=... — applied from loop() rather than the request handler, because
 // theme_select::set() reboots and would cut the HTTP reply off mid-flight.
 static String                g_pendingSlug;
@@ -3153,6 +3154,25 @@ void setup() {
     // ledger prints) otherwise means physically unplugging the device, and the serial
     // port cannot be held open during a flash anyway. Deliberately delayed so the HTTP
     // response reaches the caller first, same pattern as the settings handlers above.
+    // Force a clean re-bake of the active theme's art, then restart into it.
+    //
+    // Why this has to exist: baked art is only ever dropped for the slug being re-baked, so
+    // a theme the owner deleted from the card keeps its flash for ever, and the automatic
+    // clean slate in install_begin() only fires once the remainder is already under 4 MB.
+    // A rich theme arriving next to a stale one therefore loses whatever bakes LAST — and
+    // what bakes last is the background animation frames, which have no SD fallback at all.
+    // Measured on Steam Punk, 2026-10-06: partition 97.4% full, 252 KB free against 424 KB
+    // per frame, the hand shadows falling back to SD and the frames simply absent.
+    //
+    // POST, not GET: it erases every baked asset on the device and takes a minute of
+    // decoding, so a link preview or a crawler must not be able to set it off.
+    g_web.on("/rebake", HTTP_POST, []{
+        Serial.println("[theme_art] /rebake: forced full re-bake requested");
+        g_web.send(200, "text/plain",
+                   "re-baking the active theme with the whole partition; "
+                   "this takes a minute and the Orb restarts when it is done");
+        g_rebakeAtMs = millis() + 300;   // after the reply has left (see loop())
+    });
     g_web.on("/reboot", []{
         g_web.send(200, "text/plain", "rebooting");
         update_ui::rebooting();     // no-op unless the update overlay is up
@@ -3421,6 +3441,19 @@ void loop() {
     // costs are frames of a screen nobody is looking at.
     if (theme_pull::active()) theme_pull::step();
     serial_wifi_join_tick();   // a join asked for over the cable; a no-op otherwise
+
+    // Forced re-bake, from loop() rather than the request handler: it reads the SD card,
+    // which only this task may touch (docs/memory.md), and it runs for a minute.
+    if (g_rebakeAtMs && (int32_t)(millis() - g_rebakeAtMs) >= 0) {
+        g_rebakeAtMs = 0;
+        // The on-screen progress comes for free: the set_progress hook registered in setup()
+        // is still live, so the bake drives update_ui::bake_begin/bake_progress itself.
+        theme_art::bake_active_theme(true /*force: forget other themes, ignore fingerprint*/);
+        update_ui::bake_done();
+        Serial.println("[theme_art] /rebake done — restarting");
+        delay(200);
+        ESP.restart();
+    }
 
     // scheduled reboot after a fresh WiFi config (see setSaveConfigCallback)
     if (g_rebootAtMs && (int32_t)(millis() - g_rebootAtMs) >= 0) { delay(50); ESP.restart(); }
