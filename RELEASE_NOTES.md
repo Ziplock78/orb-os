@@ -18,6 +18,25 @@ Rules for a section, all of them learned from what reads badly on that card:
 
 ---
 
+## 2.17.00
+
+- The Orb stops running out of memory. This is what sits behind the theme sends that stop
+  part way, the install page that will not load, the page at theorb.local that stops
+  answering, and the feeds that go quiet after a long uptime. Diagnosed by Greg Takacs,
+  measured and fixed first by Techtobi83
+- The second hand sweeps evenly instead of jerking its way around the dial, and on a
+  ticking clock the minute hand no longer appears in two pieces or pushes the second hand
+  out of step. Found and fixed by Greg Takacs
+- A theme with a long name finds its own artwork, so a freshly installed theme no longer
+  comes up missing its background with the hands off center. Reported by biker_trash_1340
+- Animated backgrounds keep animating and hold every frame for the same length of time,
+  and the radar sweep moves evenly
+
+This is a new baseline: everything since the last published version, in one release.
+Merged by CanadianAvenger, with most of the firmware work by Greg Takacs.
+
+---
+
 ## 2.16.71
 
 - The second hand on a sweeping clock no longer jerks its way around the dial. Its
