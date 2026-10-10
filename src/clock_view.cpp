@@ -1161,6 +1161,18 @@ static bool layers_usable(float minAng, float hrAng) {
     return dm < 0.35f && dh < 0.35f;
 }
 
+static bool sweep_layers_usable(const theme_style::Clock &cs) {
+    int hour = -1, minute = -1, second = -1;
+    for (int i = 0; i < cs.orderN; ++i) {
+        if (cs.order[i] == 0) hour = i;
+        if (cs.order[i] == 1) minute = i;
+        if (cs.order[i] == 2) second = i;
+    }
+    return second >= 0 && hour > second && minute > second &&
+           (hour == minute + 1 || minute == hour + 1) &&
+           cs.hand[0].blend == 0 && cs.hand[1].blend == 0;
+}
+
 // The run of dx, within one row, whose source coordinates land inside the sprite.
 //
 // Both rotating blits need this and only one of them had it. blend_custom_hand got the
@@ -2737,27 +2749,31 @@ static void sweep_frame(float secs) {
             // version of this wired it into draw_custom() only, which the sweep path never
             // calls: correct, validated, and never once executed on a sweeping dial.
             //
-            // Order is unchanged from what this loop already did. It draws shadow-then-hand
-            // per hand, so the second hand is already underneath the minute and hour shadows
-            // here; laying the shadow layer and then the hand layer keeps that.
+            // Reuse the pair only for adjacent, normally blended hands above seconds,
+            // inserting it at the first hand's position so static layers keep their order.
             // A sweep frame is by definition a fast frame — the beat it is stepping at is
             // at least a beat a second, and the aim will not schedule one any slower than
             // that — so the rebuild this starts is driven INLINE, a band per sweep frame:
             // eight bands across eight tens-of-milliseconds frames, the seam between them
             // the sub-pixel fraction of a degree the tolerance already covers. This is
             // the arrangement the 2.16.71 hardware run verified, unchanged.
-            const bool layered = layers_tick(above[1], above[0], true);
-            if (layered) {
-                if (cs.shadowOn) lay_blit(s_layShadow);
-                lay_blit(s_layHand);
-            }
+            const bool layered = sweep_layers_usable(cs) &&
+                                 layers_tick(above[1], above[0], true);
+            bool laidPair = false;
             bool past = false;
             for (int i = 0; i < cs.orderN; ++i) {
                 const int k = cs.order[i];
                 if (k < 0 || k > 4) continue;
                 if (k == 2) { past = true; continue; }
                 if (!past) continue;
-                if (layered && (k == 0 || k == 1)) continue;   // in the layers already
+                if (layered && (k == 0 || k == 1)) {
+                    if (!laidPair) {
+                        if (cs.shadowOn) lay_blit(s_layShadow);
+                        lay_blit(s_layHand);
+                        laidPair = true;
+                    }
+                    continue;
+                }
                 const theme_style::Hand &oh = cs.hand[k];
                 if (!oh.show) continue;
                 if (cs.shadowOn && k <= 2) {
