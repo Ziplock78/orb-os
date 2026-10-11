@@ -18,6 +18,18 @@ Rules for a section, all of them learned from what reads badly on that card:
 
 ---
 
+## 2.17.01
+
+- Fix cached clock-hand stacking in src/clock_view.cpp. The sweep renderer previously 
+  composited the combined hour/minute layers immediately above the second hand, even 
+  when a hand was already present below seconds in the restored cache or a static layer 
+  required a different stacking position. Restrict pair reuse to adjacent, normally blended 
+  hour/minute hands above seconds, and insert the pair once at the first hand's position in the 
+  theme order. Use the existing individual rendering path for all other orders and blend modes, 
+  retaining upstream's inline layer-rebuild scheduling.
+
+---
+
 ## 2.17.00
 
 - The Orb stops running out of memory. This is what sits behind the theme sends that stop
