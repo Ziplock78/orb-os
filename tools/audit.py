@@ -163,7 +163,12 @@ print("\n=== 4. Does the simulator stand in for the device? ===")
 print("    The simulator registered the weather app with its own entry hook and skipped the")
 print("    artwork step, so a plate the device decodes was never decoded there.\n")
 
-main_cpp = fw_src.get("main.cpp", "")
+# The device's top level is main.cpp plus the orb_*.cpp files it was split into (stage 1
+# of REWRITE_PLAN.md). Reading main.cpp alone would go blind to the entry hooks below,
+# which now live in orb_apps.cpp, and report "ok" for a simulator that skipped them.
+DEVICE_TOP = ("main.cpp", "orb_state.cpp", "orb_net_task.cpp", "orb_storage.cpp",
+              "orb_location.cpp", "orb_wifi.cpp", "orb_web.cpp", "orb_apps.cpp", "orb_stats.cpp")
+main_cpp = "".join(fw_src.get(k, "") for k in DEVICE_TOP)
 sim_cpp = fw_src.get("sim_main.cpp", "")
 main_apps = re.findall(r"app_shell::add\(([^,]+),\s*theme_style::names\(\)\.(\w+)", main_cpp)
 sim_apps = re.findall(r"app_shell::add\(([^,]+),\s*(?:theme_style::names\(\)\.)?(\w+)", sim_cpp)
