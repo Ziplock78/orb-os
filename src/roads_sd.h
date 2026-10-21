@@ -2,12 +2,12 @@
 // Worldwide roads, read from a microSD card instead of baked into flash — the
 // only way "major roads near wherever this particular device actually is"
 // can work for every customer, each in a different real-world location,
-// without a live network fetch on the device. See tools/gen_road_tiles.py
-// for how tiles are generated (OpenStreetMap via Overpass, same
-// simplify-and-encode pipeline as coastline_data.h/roads_data.h) and
-// docs/roads-sd-card.md (if present) for the SD card layout.
+// with missing cells generated automatically by roads_download.cpp.
+// See docs/roads-sd-card.md for generation and the SD card layout.
 //
-// Fixed worldwide grid, ROAD_TILE_GRID_DEG per cell, file
+// Initial quarter-degree q{floor(lat*4)}_{floor(lon*4)}_{m|t}.bin cells, followed
+// by full-degree d{latFloor}_{lonFloor}_{m|t}.bin background coverage.
+// The original complete one-degree grid is also supported:
 // "/roads/r{latFloor}_{lonFloor}.bin" (binary, not a C header — read directly
 // off the card, no text parsing on-device). Whichever tile(s) cover the
 // current home location (plus its immediate neighbors, so a home near a tile
@@ -33,6 +33,10 @@ namespace roads_sd {
 // PSRAM enough that a mid-session ~76KB block can fail ("PSRAM tight") — grabbing
 // it at boot avoids that. Harmless on a device with no card.
 void init();
+
+// UI-thread cache invalidation after a completed tile is published.
+unsigned revision();
+void tiles_changed();
 
 // Re-derive the cached screen-space lines for this home/range — call only
 // when either changes (mirrors coastline_project()). Loads whichever tile(s)

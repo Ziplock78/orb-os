@@ -56,6 +56,8 @@ void buildWeatherSweep(void *lv_parent);    // pass lv_obj_t*
 
 // Rebuild the aircraft layer from the latest snapshot. Call at poll cadence.
 void update(const std::vector<Aircraft>& aircraft, const RadarSettings& s);
+// Brief map-download progress, updated by the host on the UI thread.
+void setRoadStatus(const char *message);
 
 // Nearest aircraft to (x,y) within a tap radius -> snapshot index, or -1.
 int  hitTest(int x, int y);

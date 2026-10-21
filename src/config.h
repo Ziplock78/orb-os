@@ -7,7 +7,14 @@
 // "1.4.2", said "up to date", and left an Orb missing everything in that list. THEME_CAPS
 // exists because this stopped moving; it covers theme settings and nothing else, so a new
 // command or a deleted screen is invisible to it. Move this too.
-#define FW_VERSION "2.18.00"   // shown on the web config page + Stats screen
+#define FW_VERSION "2.18.14"   // shown on the web config page + Stats screen
+
+// On-device road generation. Override for a private Overpass instance if needed.
+#ifndef ROAD_OVERPASS_URL
+// The stock SDK enables TLS 1.2, not TLS 1.3. overpass-api.de rejected TLS 1.2
+// in compatibility probes; this mirror accepts it. Keep HTTPS for the map request.
+#define ROAD_OVERPASS_URL "https://maps.mail.ru/osm/tools/overpass/api/interpreter"
+#endif
 // Edit pins below: replace every -1 with the value from the Waveshare factory demo
 // (see docs/HARDWARE.md and docs/SETUP.md). Do NOT guess them.
 

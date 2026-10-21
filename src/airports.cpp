@@ -43,28 +43,30 @@ void airports_draw(lv_draw_ctx_t *ctx, lv_color_t color, lv_opa_t opa) {
 
     lv_draw_arc_dsc_t ring;
     lv_draw_arc_dsc_init(&ring);
-    ring.color = color; ring.width = 2; ring.opa = opa;
+    ring.color = color; ring.width = 4; ring.opa = opa;
 
-    lv_draw_rect_dsc_t dot;
-    lv_draw_rect_dsc_init(&dot);
-    dot.bg_color = color; dot.bg_opa = opa; dot.radius = LV_RADIUS_CIRCLE;
+    lv_draw_line_dsc_t crosshair;
+    lv_draw_line_dsc_init(&crosshair);
+    crosshair.color = color; crosshair.width = 2; crosshair.opa = opa;
 
     lv_draw_label_dsc_t lbl;
     lv_draw_label_dsc_init(&lbl);
     lbl.color = color; lbl.opa = opa; lbl.font = &lv_font_montserrat_12;
 
     for (const Apt &ap : s_apts) {
-        if (ap.large) {
-            lv_draw_arc(ctx, &ring, &ap.pos, 3, 0, 360);                    // small hollow ring
-            if (ap.iata[0]) {
-                lv_area_t la = { (lv_coord_t)(ap.pos.x + 5), (lv_coord_t)(ap.pos.y - 7),
-                                 (lv_coord_t)(ap.pos.x + 44), (lv_coord_t)(ap.pos.y + 7) };
-                lv_draw_label(ctx, &lbl, &la, ap.iata, NULL);
-            }
-        } else {
-            lv_area_t d = { (lv_coord_t)(ap.pos.x - 1), (lv_coord_t)(ap.pos.y - 1),
-                            (lv_coord_t)(ap.pos.x + 1), (lv_coord_t)(ap.pos.y + 1) };
-            lv_draw_rect(ctx, &dot, &d);                                    // faint dot
+        // A hollow 16px circle with crosshair arms extending 12px from the centre.
+        // Use it for every airport, including medium fields.
+        lv_draw_arc(ctx, &ring, &ap.pos, 8, 0, 360);
+        lv_point_t left  = { (lv_coord_t)(ap.pos.x - 12), ap.pos.y };
+        lv_point_t right = { (lv_coord_t)(ap.pos.x + 12), ap.pos.y };
+        lv_point_t top   = { ap.pos.x, (lv_coord_t)(ap.pos.y - 12) };
+        lv_point_t bottom = { ap.pos.x, (lv_coord_t)(ap.pos.y + 12) };
+        lv_draw_line(ctx, &crosshair, &left, &right);
+        lv_draw_line(ctx, &crosshair, &top, &bottom);
+        if (ap.iata[0]) {
+            lv_area_t la = { (lv_coord_t)(ap.pos.x + 16), (lv_coord_t)(ap.pos.y - 7),
+                             (lv_coord_t)(ap.pos.x + 55), (lv_coord_t)(ap.pos.y + 7) };
+            lv_draw_label(ctx, &lbl, &la, ap.iata, NULL);
         }
     }
 }

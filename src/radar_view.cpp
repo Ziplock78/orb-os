@@ -12,6 +12,7 @@
 #include "geo.h"
 #include "coastline.h"
 #include "roads_sd.h"
+#include "map_snapshot.h"
 #include "airports.h"
 #include "text_tokens.h"   // shared {token} expansion, see radar_fmt()
 #include "route.h"           // route_request()/route_get() — {from}/{to} tokens in a custom text banner
@@ -275,6 +276,7 @@ static void radar_exit_select();             // -> default view (deselect + rele
 void noteSelectionDetailArrived();
 static float       s_lastRangeKm = 0.0f;     // current scope range, for the range banner (radar_range_fmt)
 static lv_obj_t   *s_feedWarn   = nullptr;   // "the feed is down, not your Orb" banner
+static lv_obj_t   *s_roadStatus = nullptr;
 static lv_obj_t   *s_loadTicker = nullptr;   // live elapsed-seconds line under the loading message
 static lv_obj_t   *s_textCanvas = nullptr;   // callsign/stats/route banners (curved+glow capable), a Launch Kit push
 // The selection card: a plate under those banners, parked on the far side of the scope
@@ -2066,6 +2068,15 @@ void init(void *lv_parent) {
     lv_obj_set_style_text_line_space(s_feedWarn, 3, 0);
     show(s_feedWarn, false);
 
+    s_roadStatus = make_label(parent, "", &lv_font_montserrat_14,
+                             lv_color_white(), LV_ALIGN_TOP_MID, 0, 50);
+    lv_obj_set_style_bg_color(s_roadStatus, lv_color_black(), 0);
+    lv_obj_set_style_bg_opa(s_roadStatus, LV_OPA_70, 0);
+    lv_obj_set_style_radius(s_roadStatus, 6, 0);
+    lv_obj_set_style_pad_all(s_roadStatus, 5, 0);
+    lv_obj_set_style_text_align(s_roadStatus, LV_TEXT_ALIGN_CENTER, 0);
+    show(s_roadStatus, false);
+
     s_themeLabel = make_label(parent, "", &lv_font_montserrat_20, lv_color_white(), LV_ALIGN_TOP_MID, 0, 92);
     lv_obj_set_style_bg_color(s_themeLabel, lv_color_black(), 0);
     lv_obj_set_style_bg_opa(s_themeLabel, LV_OPA_90, 0);
@@ -2213,17 +2224,21 @@ static bool         s_flatTook[3] = { false, false, false };   // static1, stati
 // flattened background, and the live layer is hidden. Zion's three-section architecture
 // assumes the map is "etched in"; this makes that assumption true.
 static lv_img_dsc_t *s_mapSnap  = nullptr;
+static MapSnapshot  s_mapSnapshot;
 static bool          s_mapBaked = false;
 static bool          s_ringsBaked = false;   // the etching went into the flat plate, so hide the live object
 
 static void take_map_snapshot() {
     if (!s_gridLayer || !customStyled()) return;
+    const uint32_t started = lv_tick_get();
+    Serial.printf("[radar] map snapshot begin\n");
     // The layer must be visible while it renders: snapshot drives the object's own draw
     // events, and a hidden object draws nothing, which would etch an empty map.
     show(s_gridLayer, true);
     lv_obj_update_layout(s_gridLayer);
-    if (s_mapSnap) { lv_snapshot_free(s_mapSnap); s_mapSnap = nullptr; }
-    s_mapSnap = lv_snapshot_take(s_gridLayer, LV_IMG_CF_TRUE_COLOR_ALPHA);
+    s_mapSnapshot.take(s_gridLayer);
+    s_mapSnap = s_mapSnapshot.image();
+    Serial.printf("[radar] map snapshot %lums\n", (unsigned long)(lv_tick_get() - started));
     if (!s_mapSnap) { Serial.println("[radar] map snapshot failed; live layer stays"); return; }
 
     // Punch the exclusion zones out of the etched map.
@@ -2280,6 +2295,9 @@ static void rebuild_flat_background() {
 
     const lv_img_dsc_t *plate = radar_custom_plate();
     if (!plate) return;   // nothing opaque to build on; leave the live stack alone
+    // If the new snapshot/bake is unavailable, live roads must start over the
+    // original plate, rather than the previous map still etched into the canvas.
+    lv_img_set_src(s_plateImg, plate);
 
     // Which layers sit below the first moving one.
     const int *order = nullptr;
@@ -2508,9 +2526,20 @@ void refreshCustomStyle() {
     // reads the finished state rather than trying to predict it, and it hides only
     // what it has actually absorbed, so a failure here degrades to the live stack
     // rather than to a missing layer.
+    // The snapshot contains the theme's map switches, colours, widths and exclusion
+    // zones. Refresh it too, even when home/range (and thus the vectors) did not move.
+    take_map_snapshot();
     rebuild_flat_background();
     apply_grid_visibility();
     applyRadarLayerOrder();
+}
+
+void setRoadStatus(const char *message) {
+    if (!s_roadStatus) return;
+    if (!message) message = "";
+    if (strcmp(lv_label_get_text(s_roadStatus), message)) lv_label_set_text(s_roadStatus, message);
+    show(s_roadStatus, message[0] != 0);
+    if (message[0]) lv_obj_move_foreground(s_roadStatus);
 }
 
 void update(const std::vector<Aircraft> &aircraft, const RadarSettings &s) {
@@ -2524,8 +2553,11 @@ void update(const std::vector<Aircraft> &aircraft, const RadarSettings &s) {
     // Reproject the coastline only when the scope geometry actually changes (home
     // moved or range zoomed) — never per frame. Then repaint the static chrome layer.
     static double s_coLat = 1e9, s_coLon = 1e9; static float s_coRange = -1.0f;
-    if (s.homeLat != s_coLat || s.homeLon != s_coLon || s.rangeKm != s_coRange) {
+    static unsigned s_roadRevision = 0;
+    const bool geometryChanged = s.homeLat != s_coLat || s.homeLon != s_coLon || s.rangeKm != s_coRange;
+    if (geometryChanged || s_roadRevision != roads_sd::revision()) {
         const bool firstFix = (s_coRange < 0.0f);
+        s_roadRevision = roads_sd::revision();
         s_coLat = s.homeLat; s_coLon = s.homeLon; s_coRange = s.rangeKm;
         coastline_project(s.homeLat, s.homeLon, s.rangeKm, s_cx, s_cy, R);
         airports_project(s.homeLat, s.homeLon, s.rangeKm, s_cx, s_cy, R);
@@ -2537,10 +2569,13 @@ void update(const std::vector<Aircraft> &aircraft, const RadarSettings &s) {
         // and buys back the per-frame re-vectoring the rest of the time.
         if (customStyled()) {
             take_map_snapshot();
+            const uint32_t flattenStarted = lv_tick_get();
+            Serial.printf("[radar] map flatten begin\n");
             rebuild_flat_background();
+            Serial.printf("[radar] map flatten %lums\n", (unsigned long)(lv_tick_get() - flattenStarted));
             apply_grid_visibility();
         }
-        if (!firstFix) {
+        if (!firstFix && geometryChanged) {
             // Scope scale/center changed: old trails were plotted at the previous
             // projection and would be wrong now — drop them and clear the flow layer.
             s_trails.clear();

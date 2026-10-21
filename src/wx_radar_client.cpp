@@ -71,6 +71,7 @@ static uint16_t   *s_roadPolyLen  = nullptr;
 static size_t       s_roadPolyCount = 0;
 static double        s_roadLat = 1000.0, s_roadLon = 1000.0;   // last-projected center
 static int           s_roadTier = -1;                          // last-projected zoom tier
+static unsigned      s_roadRevision = 0;
 
 // Frame list cached at slot 0 of each refresh, reused for the rest of the loop's slots so
 // the RainViewer index JSON is fetched once per cycle, not once per frame. Holds the last
@@ -341,7 +342,8 @@ void wx_map_prepare(double lat, double lon, int tier) {
     const theme_style::Weather &wx = theme_style::weather();
     if (!wx.roadsEnabled && !wx.coastEnabled) return;
     if (tier < 0 || tier > 1) return;
-    if (lat == s_roadLat && lon == s_roadLon && tier == s_roadTier) return;   // already built
+    if (lat == s_roadLat && lon == s_roadLon && tier == s_roadTier &&
+        s_roadRevision == roads_sd::revision()) return;   // already built
 
     if (!s_roadMask  && wx.roadsEnabled) s_roadMask  = (uint8_t *)heap_caps_malloc(ROAD_MASK_BYTES, MALLOC_CAP_SPIRAM);
     if (!s_coastMask && wx.coastEnabled) s_coastMask = (uint8_t *)heap_caps_malloc(ROAD_MASK_BYTES, MALLOC_CAP_SPIRAM);
@@ -388,7 +390,10 @@ void wx_map_prepare(double lat, double lon, int tier) {
 
     heap_caps_free(s_roadPts);     s_roadPts = nullptr;
     heap_caps_free(s_roadPolyLen); s_roadPolyLen = nullptr;
-    if (ok || !s_roadMask) { s_roadLat = lat; s_roadLon = lon; s_roadTier = tier; }
+    if (ok || !s_roadMask) {
+        s_roadLat = lat; s_roadLon = lon; s_roadTier = tier;
+        s_roadRevision = roads_sd::revision();
+    }
     Serial.printf("[wxradar] map built in %lums (UI thread)\n", (unsigned long)(millis() - t0));
 }
 
