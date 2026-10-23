@@ -2,9 +2,9 @@
 #include "knob_help.h"
 #include "wind_notice.h"
 #include "update_ui.h"
-#include <lvgl.h>       // lv_tick_get — a millisecond clock both targets have
+#include <lvgl.h>       // lv_tick_get â€” a millisecond clock both targets have
 #if defined(ESP_PLATFORM)
-#include "display.h"   // markInput — input-to-glass timing
+#include "display.h"   // markInput â€” input-to-glass timing
 #endif
 #include "app_shell.h"
 #include "knob.h"
@@ -34,92 +34,42 @@
 // back rather than the tuning being fudged.
 namespace {
 
-// How long after a leftward detent a rightward one still counts as the same gesture. Short
-// enough that a deliberate reversal has to be quick; long enough to be performable. Tuned
-// on hardware, not derived — if this needs to move, this is the number.
-// Measured, not guessed. 320 was a guess and it was wrong by half.
-//
-// Nine rocks captured off the real knob on 2026-08-26, gap between the last left detent and
-// the first right one:
-//
-//     96, 150, 624, 624, 625, 654, 655, 644, 625 ms
-//
-// The two fast ones are what a deliberate, already-failed-once attempt looks like. The
-// natural motion is the cluster at 620-660, every one of which the old 320 window threw
-// away, which is exactly the reported "works sometimes". 800 clears the cluster with about
-// 20% of headroom and is still far short of anything a person would call a pause.
-//
-// The cost of being generous is small and bounded: while the switcher is up this check is
-// skipped entirely, so a false positive can only happen INSIDE an app, and of the apps that
-// read a turn at all the worst outcome is that scrolling Intel back and forth opens the
-// menu. If that ever becomes the complaint, this number is the dial, and the measurement is
-// still in the firmware to re-run it.
-//
-// 800 was not enough either, and the reason is worth writing down because it will happen
-// again to whoever measures this next. The 620-660 cluster was captured while the gesture
-// was FAILING, and a person whose rock has just been ignored rocks the next one harder and
-// faster. Measured again once it worked, on an unrelated errand, the same hand produced:
-//
-//     1096, 95, 1045, 5196 ms
-//
-// A natural rock is around a second; the fast ones are retries. Measuring a gesture at the
-// moment it is broken measures the frustration, not the gesture. 1400 covers the natural
-// motion and still rejects the 5196, which was a change of mind rather than a rock.
-//
-// This is also what "it works on Aviator but not on Steam Punk" turned out to be. Nothing
-// in this path knows what theme is loaded: the detection is in the knob ISR and the
-// dispatch is here. The rocks on that day were simply slower than the window.
-// Back to 800 alongside the run-length rule in knob.cpp, which is the change that actually
-// mattered. Widening this to 1400 without it made ordinary browsing open the menu, because
-// any left-then-right counted however far the left half had run. The two together are the
-// gesture: a SHORT turn back, then forward, reasonably promptly.
-// knob.cpp decides the quickness now (ROCK_QUICK_MS, 250 ms); this window only has to be
-// no tighter than that, and it is the same number so the two cannot disagree.
+// A quick reversal opens the menu immediately, regardless of travel on either side.
+// Keep the driver's timing window as a final check on the recorded reversal.
 constexpr uint32_t ROCK_WINDOW_MS = 250;
-
-// THE SETTLE. A reversal is not yet a rock; it is a rock if the hand STOPS. After the
-// reversal detent the router waits this long, holding the detents back from the app, and
-// then looks at what followed: nothing, or one more detent, and it was a flick, so the
-// menu opens; more than that and it was a scroll that changed direction, so the held
-// detents go to the app as if nothing had happened. Zion, browsing headlines: "it's very
-// easy to accidentally go into the main menu when you're just scrolling back and forth."
-// The cost is this delay before the menu appears, which is below what a hand notices.
-constexpr uint32_t ROCK_SETTLE_MS = 160;
-constexpr int32_t  ROCK_BACK_MAX  = 2;    // detents allowed on the reversed side, the reversal itself included
-
-// The reversal this router has already acted on, so one gesture cannot fire twice. Stored
-// as the timestamp rather than a flag: a second rock produces a new one, so it fires again
-// with nothing to arm or reset.
 uint32_t s_firedAt = 0;
-// Detents held back while a reversal settles; delivered if it turns out not to be a rock.
-int32_t  s_held = 0;
 
-enum Rock { ROCK_NONE, ROCK_PENDING, ROCK_FIRE, ROCK_REJECT };
+// Absorb only the immediate gesture tail. The deadline is fixed when the menu
+// opens: movement cannot extend it, and expiry needs no input-free dispatch.
+// Once it expires every detent belongs to navigation, including slow turns.
+constexpr uint32_t ROCK_TAIL_MS = 350;
+bool s_drainingRock = false;
+uint32_t s_rockOpenedMs = 0;
 
-Rock rock_state() {
-    const uint32_t at = knob::lastRockMs();
-    if (at == 0) return ROCK_NONE;                   // no reversal has ever happened
-    if (at == s_firedAt) return ROCK_NONE;           // already acted on this one
-    if (knob::lastRockGapMs() > ROCK_WINDOW_MS) {    // a reversal, but an unhurried one
-        s_firedAt = at;                              // consumed, so it cannot fire later
-        return ROCK_NONE;
-    }
-    const int32_t after = knob::detentCount() - knob::lastRockDetent();
-    const int32_t back  = (after < 0 ? -after : after) + 1;   // the reversal detent counts
-    if (back > ROCK_BACK_MAX) { s_firedAt = at; return ROCK_REJECT; }
-    if ((uint32_t)(lv_tick_get() - at) < ROCK_SETTLE_MS) return ROCK_PENDING;
-    s_firedAt = at;
-    return ROCK_FIRE;
+void open_from_rock() {
+    s_drainingRock = true;
+    s_rockOpenedMs = lv_tick_get();
+    app_shell::openSwitcher();
 }
 
-bool rock_pending() { return rock_state() == ROCK_PENDING; }
+bool drain_rock_tail() {
+    if (!s_drainingRock) return false;
+    if ((uint32_t)(lv_tick_get() - s_rockOpenedMs) >= ROCK_TAIL_MS) {
+        s_drainingRock = false;
+    }
+    return s_drainingRock;
+}
+
+bool take_rock() {
+    const uint32_t at = knob::lastRockMs();
+    if (at == 0 || at == s_firedAt) return false;
+    s_firedAt = at;
+    return knob::lastRockGapMs() <= ROCK_WINDOW_MS;
+}
 
 }  // namespace
 
-// A reversal that is settling needs a poll with no new input to finish settling. main.cpp
-// and the simulator call this every pass; it is a no-op unless a reversal is in flight.
 void input_router::tick() {
-    if (rock_pending()) return;                 // still inside the settle: nothing to decide
     if (knob::lastRockMs() != 0 && knob::lastRockMs() != s_firedAt) dispatch(0, false);
 }
 
@@ -166,23 +116,19 @@ void input_router::dispatch(int delta, bool pressed) {
     // free to keep meaning "open the app menu" here as everywhere else. Without that, a
     // theme could strand somebody on a screen that will not take no for an answer, which is
     // the thing CUT-05 exists to forbid.
-    // The reversal, settled or not. While it settles the detents are held; when it turns
-    // out to be a scroll they are let through with this poll's, and when it is a rock they
-    // are dropped, because the detents that MADE the gesture are not input to the app.
-    const Rock rock = rock_state();
-    if (rock == ROCK_PENDING) { s_held += delta; delta = 0; }
-    else if (rock == ROCK_REJECT) { delta += s_held; s_held = 0; }
-    else if (rock == ROCK_FIRE) { s_held = 0; }
+    bool rock = take_rock();
+    if (drain_rock_tail()) {
+        delta = 0;
+        rock = false;
+    }
 
     if (wind_notice::showing()) {
-        if (rock == ROCK_FIRE) { app_shell::openSwitcher(); return; }
+        if (rock) { open_from_rock(); return; }
         if (delta != 0) wind_notice::turn(delta);
         return;
     }
 
-    // The switcher owns everything while it is up: turning cycles apps, pressing commits.
-    // Leaving it is the 2 s settle or a press, never the gesture, so a rock performed while
-    // browsing just cycles two apps and lands back where it started.
+    // The switcher owns input while open. Reversals here only browse apps.
     if (app_shell::browsing()) {
         if (delta != 0) app_shell::browseTurn(delta);
         if (pressed)    app_shell::browsePress();
@@ -195,28 +141,14 @@ void input_router::dispatch(int delta, bool pressed) {
     //
     // The rock works EVERYWHERE, captured screens included. Reversed 2026-09-11.
     //
-    // It was switched off for any screen that had captured the knob, on the reasoning that
-    // Settings scrolls a list with it and scrolling back and forth is an ordinary thing to do
-    // there, so a rock would throw you out mid-read. Two things have changed since that was
-    // written.
-    //
-    // The detector no longer accepts a scroll. knob.cpp's run-length rule means only a flick
-    // of one or two detents followed by a reversal within 45-900 ms qualifies; a list scrolled
-    // three detents and corrected by one is not a rock and never was going to be. What is
-    // left is a single overshoot corrected within a second, which is narrow, and Zion has
-    // chosen it over the alternative.
-    //
-    // The alternative was the Orb contradicting itself. The hint it shows on a press that has
-    // nowhere to go says "To activate the main menu from any app, rock the knob", and Settings
-    // was the one screen where that sentence was false. Zion: "if anywhere in the settings
-    // menu, if you want to get out of it, go back to the main menu, you should be able to do
-    // the rock motion." One gesture, one meaning, every screen.
+    // Tick count is deliberately unrestricted: a quick turn back in either direction
+    // means the same thing on every app, including Settings.
     //
     // Safe to allow: load() sets the captured flag from the app being entered and runs the
     // outgoing app's exit hook on every real switch, so a screen rocked out of leaves neither
     // its capture nor its state behind.
-    if (rock == ROCK_FIRE) {
-        app_shell::openSwitcher();
+    if (rock) {
+        open_from_rock();
         return;
     }
 

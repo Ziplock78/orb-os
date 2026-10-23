@@ -156,5 +156,7 @@ void setLargeText(bool on);                       // accessibility: bigger glyph
 // radar_sprite_release() to free the decoded PSRAM while some other app is on
 // screen, so this re-decode-on-entry keeps the image objects' src valid.
 void refreshCustomStyle();
+void refreshMap(const RadarSettings &settings); // revisions/style visibility, no aircraft update
+void setRoadStatus(const char *message); // transient download/cache progress; empty hides
 
 } // namespace radar

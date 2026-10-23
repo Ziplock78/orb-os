@@ -1,4 +1,9 @@
 #include "roads_sd.h"
+#include "road_vector.h"
+#include "config.h"
+#ifdef ARDUINO
+#include "theme_sd.h"
+#endif
 #include "coastline.h"   // geo_project_polylines_flat() — the shared projection/clip math
 #include <math.h>
 #include <string.h>
@@ -85,8 +90,16 @@ struct Sink {
 // deadlocking the card. The timeout means it can never become a place to hang.
 #ifdef ARDUINO
 SemaphoreHandle_t s_lock = nullptr;
-bool lock()   { if (!s_lock) return true; return xSemaphoreTake(s_lock, pdMS_TO_TICKS(250)) == pdTRUE; }
-void unlock() { if (s_lock) xSemaphoreGive(s_lock); }
+bool lock() {
+    // fopen can abort inside newlib if it cannot allocate its internal locks.
+    // Keep the previous projection and retry after transient memory pressure.
+    if(heap_caps_get_free_size(MALLOC_CAP_INTERNAL|MALLOC_CAP_8BIT)<8192 ||
+       heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL|MALLOC_CAP_8BIT)<2048)return false;
+    if(!theme_sd::try_lock())return false;
+    if(s_lock&&xSemaphoreTake(s_lock,0)!=pdTRUE){theme_sd::unlock();return false;}
+    return true;
+}
+void unlock() { if (s_lock) xSemaphoreGive(s_lock); theme_sd::unlock(); }
 #else
 bool lock()   { return true; }   // the simulator projects from one thread
 void unlock() {}
@@ -98,6 +111,9 @@ uint16_t   *s_tPolyLen = nullptr;   // current tile's polyLen[] table (PSRAM)
 int16_t    *s_tPts     = nullptr;   // one polyline's raw lat/lon pairs (PSRAM)
 size_t      s_numPts = 0;
 size_t      s_numPolys = 0;
+unsigned s_revision=0;
+bool s_cacheClearing=false;
+uint32_t s_vectorSource=road_vector::source_id(ROAD_VECTOR_URL);
 
 bool ensure_buffers() {
     if (!s_pts)      s_pts      = (lv_point_t *)psram_alloc(MAX_PTS * sizeof(lv_point_t));
@@ -158,6 +174,15 @@ bool read_exact(TileFile &h, uint8_t *dst, size_t n) {
 } // namespace
 
 namespace roads_sd {
+unsigned revision() { return s_revision; }
+void published() { ++s_revision; }
+void set_cache_clearing(bool clearing) {
+    if(s_cacheClearing==clearing)return;
+    s_cacheClearing=clearing;s_numPts=s_numPolys=0;++s_revision;
+}
+void set_vector_source(uint32_t source) {
+    if(source!=s_vectorSource) { s_vectorSource=source;++s_revision; }
+}
 
 #ifndef ARDUINO
 void set_root(const char *root) { s_simRoot = root; }
@@ -226,7 +251,7 @@ static void stream_tile(const char *path, double homeLat, double homeLon,
 // coastline_project() — never touches SD/disk per-frame.
 // The home tile plus its eight neighbours, so a location near a tile edge does not show a
 // hard cutoff. Most neighbours simply are not on the card and th_open() skips them.
-static void walk_tiles(double homeLat, double homeLon, double rangeKm,
+static void walk_legacy_tiles(double homeLat, double homeLon, double rangeKm,
                        float cx, float cy, float rOuterPx, Sink &out) {
     const long latFloor = tile_floor(homeLat, ROAD_TILE_GRID_DEG);
     const long lonFloor = tile_floor(homeLon, ROAD_TILE_GRID_DEG);
@@ -242,18 +267,66 @@ static void walk_tiles(double homeLat, double homeLon, double rangeKm,
     }
 }
 
-void project(double homeLat, double homeLon, double rangeKm,
+// Versioned tile-local coordinates bypass the old 1/180 degree quantization.
+// Validate the complete file before adding any strokes, then stream its segments.
+static bool vector_tile(road_vector::Tile t,double lat,double lon,double range,
+                        float cx,float cy,float radius,Sink &out) {
+    char path[96];road_vector::path(path,sizeof(path),t,s_vectorSource);
+    TileFile h;if(!th_open(path,h))return false;
+    uint8_t header[road_vector::HEADER];
+    if(!read_exact(h,header,sizeof(header))) { th_close(h);return false; }
+    const uint32_t count=road_vector::u32(header+20);
+    const size_t size=road_vector::HEADER+size_t(count)*8;
+    if(!road_vector::cache_header(header,size,t,s_vectorSource)) { th_close(h);return false; }
+    uint8_t chunk[512];uint32_t crc=~0u;size_t left=size-road_vector::HEADER;
+    while(left) {
+        size_t n=std::min(left,sizeof(chunk));
+        if(!read_exact(h,chunk,n)) { th_close(h);return false; }
+        crc=road_vector::crc_update(crc,chunk,n);
+        for(size_t i=0;i<n;i+=2) if((unsigned(chunk[i])|(unsigned(chunk[i+1])<<8))>road_vector::EXTENT) { th_close(h);return false; }
+        left-=n;
+    }
+    if(~crc!=road_vector::u32(header+28)||th_read(h,chunk,1)!=0) { th_close(h);return false; }
+    th_close(h);if(!th_open(path,h))return false;
+    if(!read_exact(h,header,sizeof(header))) { th_close(h);return false; }
+    size_t buffered=0,position=0;
+    for(uint32_t i=0;i<count;++i) {
+        if(position==buffered) {
+            buffered=std::min(sizeof(chunk),size_t(count-i)*8);position=0;
+            if(!read_exact(h,chunk,buffered))break;
+        }
+        const uint8_t *p=chunk+position;position+=8;
+        if(out.numPts+2>out.maxPts||out.numPolys==out.maxPolys)break;
+        double x0,y0,x1,y1;
+        road_vector::project(t,uint16_t(p[0]|p[1]<<8),uint16_t(p[2]|p[3]<<8),lat,lon,range,radius,x0,y0);
+        road_vector::project(t,uint16_t(p[4]|p[5]<<8),uint16_t(p[6]|p[7]<<8),lat,lon,range,radius,x1,y1);
+        if(!road_vector::clip_circle(x0,y0,x1,y1,radius))continue;
+        lv_point_t a={(lv_coord_t)lround(cx+x0),(lv_coord_t)lround(cy+y0)};
+        lv_point_t b={(lv_coord_t)lround(cx+x1),(lv_coord_t)lround(cy+y1)};
+        if(a.x==b.x&&a.y==b.y)continue;
+        out.pts[out.numPts++]=a;out.pts[out.numPts++]=b;out.polyLen[out.numPolys++]=2;
+    }
+    th_close(h);return true; // valid empty tiles also supersede legacy coverage
+}
+static void walk_tiles(double lat,double lon,double range,float cx,float cy,float radius,Sink &out) {
+    road_vector::Tile tiles[road_vector::MAX_TILES];
+    size_t n=road_vector::plan(lat,lon,range,tiles);bool found=false;
+    for(size_t i=0;i<n;++i) found=vector_tile(tiles[i],lat,lon,range,cx,cy,radius,out)||found;
+    if(!found) walk_legacy_tiles(lat,lon,range,cx,cy,radius,out);
+}
+
+bool project(double homeLat, double homeLon, double rangeKm,
             float cx, float cy, float rOuterPx) {
-    s_numPts = 0;
-    s_numPolys = 0;
-    if (rangeKm <= 0) return;
-    if (!ensure_buffers()) return;   // PSRAM tight — draw nothing, never crash
-    if (!lock()) return;             // the other task is mid-read — keep the empty cache
+    if(s_cacheClearing){s_numPts=s_numPolys=0;return true;}
+    if (rangeKm <= 0) {s_numPts=s_numPolys=0;return true;}
+    if (!ensure_buffers()) return false;
+    if (!lock()) return false;       // retain old projection and retry next update
     Sink out { s_pts, s_polyLen, MAX_PTS, MAX_POLYS };
     walk_tiles(homeLat, homeLon, rangeKm, cx, cy, rOuterPx, out);
     unlock();
     s_numPts   = out.numPts;
     s_numPolys = out.numPolys;
+    return true;
 }
 
 // The same worldwide roads, projected into buffers the CALLER owns, for a screen with its
@@ -273,6 +346,7 @@ size_t project_flat(double lat, double lon, double rangeKm,
                     lv_point_t *outPts, size_t maxPts,
                     uint16_t *outPolyLen, size_t maxPolys, bool &ok) {
     ok = false;
+    if(s_cacheClearing){ok=true;return 0;}
     if (rangeKm <= 0 || !outPts || !outPolyLen || !maxPts || !maxPolys) return 0;
     if (!ensure_buffers()) return 0;
     if (!lock()) return 0;

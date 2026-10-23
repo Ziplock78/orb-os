@@ -38,8 +38,16 @@ sim" mean "it behaves right on the Orb". Do not add knob behaviour anywhere else
 **`src/app_shell.cpp` is the channel changer.** It holds an ordered, wrapping list of
 full-screen apps (one LVGL screen each):
 
-- Turn: cycle apps. The first turn opens an app-switcher overlay on the current app,
-  further turns move through the list, a push commits into the shown app.
+- Jig: turn either way, then reverse within 250 ms to open the app switcher. Neither
+  movement has a tick limit, and no stop or settle is required. Reversals under 45 ms
+  are rejected as encoder bounce. This works in every app, including Settings.
+  After opening, the immediate gesture tail is swallowed for a fixed 350 ms.
+  Turning does not extend this deadline, and it expires without an input-free
+  dispatch. Afterward every tick navigates one item, including the first slow tick
+  or a direction change. There is no extra two-tick confirmation. Continued
+  movement beyond the brief guard counts as navigation.
+- Turn: scroll within the current app, or cycle apps while the switcher is open.
+  A push commits into the shown app.
 - Push: run the current app's `onPress` handler.
 - An app can **capture** the knob (Settings does this), so turning scrolls inside the
   app instead of switching apps. It holds the knob until it releases it.

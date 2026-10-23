@@ -77,6 +77,11 @@ It reads the same theme folders from `sim/sdcard/themes/`, makes the same networ
 
 ## Configuration
 
+**Settings → Location** shows the saved city and state/region above the current
+coordinates, including while offline. Long names scroll. The label comes from
+the matching city-search or automatic-location entry in Recent cities; manually
+entered coordinates without a matching saved place show coordinates alone.
+
 `http://theorb.local/` on the same WiFi, or the device's IP, for centre point, range, brightness, sound, WiFi reset and an over-the-air firmware upload. Settings live in NVS under the `capsuleradar` namespace, which keeps its old name deliberately: renaming it would make every existing Orb look factory reset.
 
 ## Repo layout

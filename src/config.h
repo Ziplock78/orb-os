@@ -1,4 +1,7 @@
 #pragma once
+#ifndef ORB_COMPANION
+#define ORB_COMPANION 0
+#endif
 // The Orb OS — build & user configuration.
 
 // Bump this whenever a build goes out that a device could be BEHIND. That is not only
@@ -7,7 +10,10 @@
 // "1.4.2", said "up to date", and left an Orb missing everything in that list. THEME_CAPS
 // exists because this stopped moving; it covers theme settings and nothing else, so a new
 // command or a deleted screen is invisible to it. Move this too.
-#define FW_VERSION "2.18.00"   // shown on the web config page + Stats screen
+#define FW_VERSION "2.18.00"   // road settings page matches the main configuration page
+#ifndef ROAD_VECTOR_URL
+#define ROAD_VECTOR_URL "https://tiles.openfreemap.org/planet/latest/{z}/{x}/{y}.pbf"
+#endif
 // Edit pins below: replace every -1 with the value from the Waveshare factory demo
 // (see docs/HARDWARE.md and docs/SETUP.md). Do NOT guess them.
 

@@ -31,3 +31,12 @@ renaming, and says nothing about what a derived work may be called; what it
 requires is that the copyright notice travels with the software, which it
 does. The lineage is recorded here precisely BECAUSE the name no longer
 carries it.
+
+Vector road maps
+----------------
+
+The optional vector road-map client uses OpenFreeMap (https://openfreemap.org/)
+as its default tile provider. Map data: (c) OpenStreetMap contributors,
+https://www.openstreetmap.org/copyright . Road classification follows the
+OpenMapTiles schema, (c) OpenMapTiles, https://openmaptiles.org/ . These data
+and schema attributions are separate from the firmware's MIT license.

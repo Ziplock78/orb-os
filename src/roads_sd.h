@@ -33,13 +33,17 @@ namespace roads_sd {
 // PSRAM enough that a mid-session ~76KB block can fail ("PSRAM tight") — grabbing
 // it at boot avoids that. Harmless on a device with no card.
 void init();
+unsigned revision();
+void published();                     // completed validated vector tile
+void set_vector_source(uint32_t source);
+void set_cache_clearing(bool clearing); // hide RAM geometry and defer SD reads during deletion
 
 // Re-derive the cached screen-space lines for this home/range — call only
 // when either changes (mirrors coastline_project()). Loads whichever tile(s)
 // are needed off the card; if the card's missing or the tile doesn't exist
 // yet, this just leaves the cache empty (roads_sd_draw() then draws nothing —
 // no error state, the scope just doesn't have roads there yet).
-void project(double homeLat, double homeLon, double rangeKm,
+bool project(double homeLat, double homeLon, double rangeKm,
             float cx, float cy, float rOuterPx);
 
 // The same roads projected into buffers the CALLER owns, for a screen drawing at its own

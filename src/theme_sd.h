@@ -32,6 +32,7 @@ void free(uint8_t *buf);
 // whole driver: the rarer readers (roads, spycam, the link's transfers) still rely on running
 // where they always have.
 void lock();
+bool try_lock();  // UI work must defer while streaming audio owns the card
 void unlock();
 
 } // namespace theme_sd

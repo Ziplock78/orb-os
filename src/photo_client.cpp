@@ -39,6 +39,7 @@ static bool http_get(const char *url, uint8_t **out, size_t *outLen, size_t maxL
     *out = nullptr; *outLen = 0;
     WiFiClientSecure cli;
     cli.setInsecure();
+    cli.setHandshakeTimeout(5);
     HTTPClient http;
     http.setReuse(false);
     http.setConnectTimeout(3000);    // keep short: this runs on the feed task, a slow photo
@@ -48,48 +49,32 @@ static bool http_get(const char *url, uint8_t **out, size_t *outLen, size_t maxL
     const int code = http.GET();
     if (code != 200) { Serial.printf("[photo]   HTTP %d\n", code); http.end(); return false; }
 
-    const int len = http.getSize();                  // >0 = Content-Length; -1 = chunked/unknown
-    uint8_t *buf = nullptr;
-    size_t got = 0;
-
-    if (len > 0) {
-        // Known length: stream the body straight into a PSRAM buffer.
-        const size_t cap = ((size_t)len <= maxLen) ? (size_t)len : maxLen;
-        buf = (uint8_t *)heap_caps_malloc(cap, MALLOC_CAP_SPIRAM);
-        if (!buf) { http.end(); return false; }
-        WiFiClient *stream = http.getStreamPtr();
-        uint32_t last = millis();
-        while (got < cap && (millis() - last) < 9000) {
-            const size_t avail = stream->available();
-            if (avail) {
-                const size_t want = (cap - got < avail) ? (cap - got) : avail;
-                const int r = stream->readBytes(buf + got, want);
-                if (r > 0) { got += r; last = millis(); }
-            } else if (!http.connected()) {
-                break;
-            } else {
-                delay(5);
-            }
-            if (got >= cap) break;
+    // HTTPClient decodes chunked responses into a bounded PSRAM sink. Never build
+    // an unbounded String or pass a truncated JPEG to the decoder.
+    const int len = http.getSize();
+    if (len > (int)maxLen) { http.end(); return false; }
+    const size_t cap = len > 0 ? (size_t)len : maxLen;
+    uint8_t *buf = (uint8_t *)heap_caps_malloc(cap, MALLOC_CAP_SPIRAM);
+    if (!buf) { http.end(); return false; }
+    struct Sink : Stream {
+        uint8_t *data; size_t cap, used = 0;
+        Sink(uint8_t *p, size_t n) : data(p), cap(n) {}
+        size_t write(uint8_t b) override { return write(&b, 1); }
+        size_t write(const uint8_t *p, size_t n) override {
+            if (n > cap - used) return 0;
+            memcpy(data + used, p, n); used += n; return n;
         }
-    } else {
-        // Chunked / unknown length: getStreamPtr() does NOT undo chunked transfer
-        // encoding, so the raw body would contain chunk-size markers and corrupt the
-        // parse. getString() performs the chunk decode. planespotters serves its JSON
-        // chunked over HTTP/1.1 (Cloudflare), and that JSON is small, so the transient
-        // String on the internal heap is cheap. (Image thumbnails carry Content-Length
-        // and take the branch above, so a big binary never lands here.)
-        String body = http.getString();
-        got = body.length();
-        if (got > maxLen) got = maxLen;
-        if (got > 0) {
-            buf = (uint8_t *)heap_caps_malloc(got, MALLOC_CAP_SPIRAM);
-            if (buf) memcpy(buf, body.c_str(), got);
-            else got = 0;
-        }
-    }
+        int available() override { return 0; }
+        int read() override { return -1; }
+        int peek() override { return -1; }
+        void flush() override {}
+    } sink(buf, cap);
+    const int received = http.writeToStream(&sink);
+    const size_t got = sink.used;
     http.end();
-    if (got == 0) { if (buf) heap_caps_free(buf); return false; }
+    if (received < 0 || !got || (len > 0 && got != (size_t)len)) {
+        heap_caps_free(buf); return false;
+    }
     *out = buf; *outLen = got;
     return true;
 }
@@ -102,36 +87,70 @@ struct PsramAlloc : ArduinoJson::Allocator {
 };
 static PsramAlloc s_jsonPsram;
 
-bool photo_fetch(const char *hex) {
-    if (!hex || !hex[0] || WiFi.status() != WL_CONNECTED) { photo_commit(0, 0, hex, ""); return false; }
+static void strip_html(const char *in, char *out, size_t n) {
+    size_t o = 0; bool tag = false;
+    for (size_t i = 0; in && in[i] && o + 1 < n; ++i) {
+        if (in[i] == '<') { tag = true; continue; }
+        if (in[i] == '>') { tag = false; continue; }
+        if (tag) continue;
+        if (strncmp(in + i, "&amp;", 5) == 0) { out[o++] = '&'; i += 4; continue; }
+        if (strncmp(in + i, "&quot;", 6) == 0) { out[o++] = '"'; i += 5; continue; }
+        if ((unsigned char)in[i] < 0x80) out[o++] = in[i];
+    }
+    out[o] = 0;
+}
 
-    // Memory guard: a photo fetch needs a TLS handshake + JPEG decode. If the largest
-    // contiguous internal block is tight, skip it (degrade gracefully, never crash).
-    if (heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL) < 28000) {
-        Serial.println("[photo] low memory, skipping");
-        photo_commit(0, 0, hex, "");
-        return false;
+static bool generic_photo_lookup(const char *type, char *imgUrl, size_t un,
+                                 char *credit, size_t cn) {
+    if (!type || !type[0]) return false;
+    char designator[12]; size_t dn = 0;
+    for (const char *p = type; *p && dn + 1 < sizeof(designator); ++p) {
+        if ((*p >= 'A' && *p <= 'Z') || (*p >= '0' && *p <= '9')) designator[dn++] = *p;
+        else if (*p >= 'a' && *p <= 'z') designator[dn++] = (char)(*p - 'a' + 'A');
+    }
+    designator[dn] = 0;
+    if (!designator[0]) return false;
+    char url[512];
+    snprintf(url, sizeof(url),
+             "https://commons.wikimedia.org/w/api.php?action=query&generator=search&gsrsearch=%s%%20aircraft%%20filetype%%3Abitmap"
+             "&gsrnamespace=6&gsrlimit=3&prop=imageinfo&iiprop=url%%7Cextmetadata%%7Cmime&iiextmetadatafilter=Artist%%7CLicenseShortName&iiurlwidth=400&format=json",
+             designator);
+    uint8_t *buf = nullptr; size_t len = 0;
+    if (!http_get(url, &buf, &len, 16384)) {
+        delay(150);
+        if (!http_get(url, &buf, &len, 16384)) return false;
     }
 
-    // 1) planespotters lookup (JSON)
-    char url[128];
-    snprintf(url, sizeof(url), "https://api.planespotters.net/pub/photos/hex/%s", hex);
-    uint8_t *jbuf = nullptr; size_t jlen = 0;
-    if (!http_get(url, &jbuf, &jlen, 8192)) { Serial.printf("[photo] %s: planespotters request failed\n", hex); photo_commit(0, 0, hex, ""); return false; }
-
-    JsonDocument filter(&s_jsonPsram);
-    filter["photos"][0]["thumbnail_large"]["src"] = true;
-    filter["photos"][0]["photographer"] = true;
     JsonDocument doc(&s_jsonPsram);
-    const DeserializationError err = deserializeJson(doc, jbuf, jlen, DeserializationOption::Filter(filter));
-    heap_caps_free(jbuf);
-    if (err) { Serial.printf("[photo] %s: json err %s\n", hex, err.c_str()); photo_commit(0, 0, hex, ""); return false; }
+    const DeserializationError err = deserializeJson(doc, buf, len);
+    heap_caps_free(buf);
+    if (err) return false;
 
-    const char *imgUrl = doc["photos"][0]["thumbnail_large"]["src"] | "";
-    char credit[40];
-    snprintf(credit, sizeof(credit), "%s", (const char *)(doc["photos"][0]["photographer"] | ""));
-    if (!imgUrl[0]) { Serial.printf("[photo] %s: no photo available\n", hex); photo_commit(0, 0, hex, ""); return false; }
+    JsonObjectConst pages = doc["query"]["pages"].as<JsonObjectConst>();
+    JsonObjectConst best;
+    int bestIndex = 1000000;
+    for (JsonPairConst kv : pages) {
+        JsonObjectConst page = kv.value().as<JsonObjectConst>();
+        JsonObjectConst info = page["imageinfo"][0].as<JsonObjectConst>();
+        const char *mime = info["mime"] | "";
+        const char *thumb = info["thumburl"] | "";
+        const int index = page["index"] | bestIndex;
+        if (strncmp(mime, "image/", 6) == 0 && thumb[0] && index < bestIndex) {
+            best = info; bestIndex = index;
+        }
+    }
+    if (best.isNull()) return false;
+    snprintf(imgUrl, un, "%s", (const char *)(best["thumburl"] | ""));
+    char artist[80];
+    strip_html(best["extmetadata"]["Artist"]["value"] | "Wikimedia Commons",
+               artist, sizeof(artist));
+    const char *license = best["extmetadata"]["LicenseShortName"]["value"] | "Commons license";
+    snprintf(credit, cn, "Generic %s / Wikimedia Commons / %s / %s", designator, artist, license);
+    Serial.printf("[photo] %s: using generic image from Wikimedia Commons\n", designator);
+    return true;
+}
 
+static bool download_photo(const char *imgUrl) {
     // 2) download the JPEG thumbnail.
     // planespotters serves *progressive* JPEGs, which TJpgDec cannot decode. Route the
     // image through the weserv.nl image proxy, which re-encodes to baseline JPEG and
@@ -140,21 +159,28 @@ bool photo_fetch(const char *hex) {
     if      (strncmp(bare, "https://", 8) == 0) bare += 8;
     else if (strncmp(bare, "http://",  7) == 0) bare += 7;
     int canvasW = 232, canvasH = 156;
-    photo_buffer(&canvasW, &canvasH);                 // resize to fit the canvas (preserve aspect)
-    char proxUrl[256];
-    snprintf(proxUrl, sizeof(proxUrl),
-             "https://images.weserv.nl/?url=%s&w=%d&h=%d&fit=inside&output=jpg", bare, canvasW, canvasH);
+    if (!photo_buffer(&canvasW, &canvasH)) { return false; }
+    // Encode the entire nested URL, including Commons paths containing spaces or '&'.
+    String proxUrl = "https://images.weserv.nl/?url=";
+    static const char digits[] = "0123456789ABCDEF";
+    for (const unsigned char *p = (const unsigned char *)bare; *p; ++p) {
+        if ((*p >= 'a' && *p <= 'z') || (*p >= 'A' && *p <= 'Z') ||
+            (*p >= '0' && *p <= '9') || *p == '-' || *p == '_' || *p == '.' || *p == '~') proxUrl += (char)*p;
+        else { proxUrl += '%'; proxUrl += digits[*p >> 4]; proxUrl += digits[*p & 15]; }
+    }
+    proxUrl += "&w=" + String(canvasW) + "&h=" + String(canvasH) + "&fit=inside&output=jpg";
 
     uint8_t *img = nullptr; size_t ilen = 0;
-    if (!http_get(proxUrl, &img, &ilen, 65536)) { Serial.printf("[photo] %s: image download failed\n", hex); photo_commit(0, 0, hex, ""); return false; }
+    if (!http_get(proxUrl.c_str(), &img, &ilen, 65536)) { return false; }
 
     // 3) decode into the shared PSRAM buffer, scaled to fit
     int maxW = 0, maxH = 0;
     lv_color_t *dst = photo_buffer(&maxW, &maxH);
+    if (!dst) { heap_caps_free(img); return false; }
     uint16_t jw = 0, jh = 0;
     if (TJpgDec.getJpgSize(&jw, &jh, img, ilen) != JDR_OK || jw == 0 || jh == 0) {
-        Serial.printf("[photo] %s: getJpgSize failed\n", hex);
-        heap_caps_free(img); photo_commit(0, 0, hex, ""); return false;
+        Serial.println("[photo] JPEG header decode failed");
+        heap_caps_free(img); return false;
     }
     uint8_t scale = 1;
     while ((jw / scale) > (uint16_t)maxW || (jh / scale) > (uint16_t)maxH) { scale <<= 1; if (scale >= 8) break; }
@@ -169,8 +195,46 @@ bool photo_fetch(const char *hex) {
     const JRESULT jr = TJpgDec.drawJpg(0, 0, img, ilen);
     heap_caps_free(img);
 
-    if (jr != JDR_OK) { photo_commit(0, 0, hex, ""); return false; }
+    if (jr != JDR_OK) { return false; }
+    return true;
+}
+
+bool photo_fetch(const char *hex, const char *type) {
+    if (!hex || !hex[0] || WiFi.status() != WL_CONNECTED) { photo_commit(0, 0, hex, ""); return false; }
+
+    // Memory guard: a photo fetch needs a TLS handshake + JPEG decode. If the largest
+    // internal block or PSRAM is tight, skip it. TLS now uses the PSRAM allocator.
+    if (heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL) < 8000 ||
+        heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM) < 100000) {
+        Serial.println("[photo] low memory, skipping");
+        photo_commit(0, 0, hex, "");
+        return false;
+    }
+
+
+    char url[128], imgUrl[1024] = "", credit[192] = "";
+    snprintf(url, sizeof(url), "https://api.planespotters.net/pub/photos/hex/%s", hex);
+    uint8_t *jbuf = nullptr; size_t jlen = 0;
+    if (http_get(url, &jbuf, &jlen, 8192)) {
+        JsonDocument filter(&s_jsonPsram);
+        filter["photos"][0]["thumbnail_large"]["src"] = true;
+        filter["photos"][0]["photographer"] = true;
+        JsonDocument doc(&s_jsonPsram);
+        const auto err = deserializeJson(doc, jbuf, jlen, DeserializationOption::Filter(filter));
+        heap_caps_free(jbuf);
+        if (!err) {
+            snprintf(imgUrl, sizeof(imgUrl), "%s", (const char *)(doc["photos"][0]["thumbnail_large"]["src"] | ""));
+            snprintf(credit, sizeof(credit), "%s", (const char *)(doc["photos"][0]["photographer"] | ""));
+        }
+    }
+    bool ready = imgUrl[0] && download_photo(imgUrl);
+    if (!ready) {
+        Serial.printf("[photo] %s: trying generic type %s\n", hex, type ? type : "");
+        imgUrl[0] = 0;
+        ready = generic_photo_lookup(type, imgUrl, sizeof(imgUrl), credit, sizeof(credit)) && download_photo(imgUrl);
+    }
+    if (!ready) { photo_commit(0, 0, hex, ""); return false; }
     photo_commit(s_dstW, s_dstH, hex, credit);
-    Serial.printf("[photo] %s: %dx%d (scale 1/%d) by %s\n", hex, s_dstW, s_dstH, scale, credit);
+    Serial.printf("[photo] %s: %dx%d by %s\n", hex, s_dstW, s_dstH, credit);
     return true;
 }

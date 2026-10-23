@@ -8,6 +8,7 @@
 #include <vector>
 #include <map>
 #include "config.h"
+#include "companion.h"
 #include "aircraft.h"
 #include "geo.h"
 #include "adsb_client.h"
@@ -52,6 +53,7 @@
 #include "diag_log.h"                // RTC-memory event ring buffer, survives a reboot
 #include "sdcard.h"                  // microSD (TF) slot, SPI mode
 #include "roads_sd.h"                // worldwide roads read off the SD card
+#include "road_vector_download.h"
 #include "clock_view.h"              // clock app (app two)
 #include "weather_view.h"           // animated weather-radar app (knob channel)
 #include "settings_view.h"          // settings app (menu; captures the knob)
@@ -84,6 +86,7 @@
 #include <esp_system.h>             // esp_reset_reason() for /health
 #include <SD.h>                     // /sdput: write theme files straight to the microSD
 #include <esp_heap_caps.h>          // largest-free-block metric (heap health)
+#include <mbedtls/platform.h>
 #include <esp_wifi.h>               // WiFi driver control (reset must survive the reboot)
 #include <nvs.h>                    // erase the driver's "nvs.net80211" namespace (WiFi reset)
 
@@ -578,8 +581,9 @@ static void adsb_task(void*) {
             char wantCall[12];
             if (route_pending(wantCall, sizeof(wantCall))) {
                 char from[40] = "", to[40] = "";
-                if (route_cache_get(wantCall, from, sizeof(from), to, sizeof(to))) {
-                    route_store(wantCall, from, to);                       // NVS hit, no network
+                uint32_t routeRemainingMs = 0;
+                if (route_cache_get(wantCall, from, sizeof(from), to, sizeof(to), &routeRemainingMs)) {
+                    route_store(wantCall, from, to, routeRemainingMs);      // preserve original expiry
                     Serial.printf("[route] %s (cache): '%s' -> '%s'\n", wantCall, from, to);
                 } else if (route_fetch(wantCall, from, sizeof(from), to, sizeof(to))) {
                     route_store(wantCall, from, to);
@@ -590,8 +594,8 @@ static void adsb_task(void*) {
                     Serial.printf("[route] %s: no route\n", wantCall);
                 }
             }
-            char wantHex[10];
-            if (photo_pending(wantHex, sizeof(wantHex))) photo_fetch(wantHex);
+            char wantHex[10], wantType[12];
+            if (photo_pending(wantHex, sizeof(wantHex), wantType, sizeof(wantType))) photo_fetch(wantHex, wantType);
         }
         vTaskDelay(pdMS_TO_TICKS(250));
     }
@@ -785,8 +789,12 @@ static void onRangeChange(float km) {
     g_adsb.setMinDistKm(deadZoneKm());   // px-based zone, so a new range means a new km threshold
     g_requeryKm = queryRadiusKm();
     g_requery = true;
-    radar::update(g_snap, g_settings);   // instant visual zoom from the last snapshot
-    ui_on_data_updated();
+    // Settings owns the screen here. Reproject when radar becomes visible,
+    // using the existing catch-up path rather than reopening map files now.
+    if (g_radarViewActive) {
+        radar::update(g_snap, g_settings);
+        ui_on_data_updated();
+    }
 }
 
 // Settings > Range hooks (declared extern in settings_view.cpp).
@@ -1724,6 +1732,7 @@ static const char ROOT_TAIL[] PROGMEM =
     "</dl></div>"
     "<div class=card>"
     "<a class=b href='/install'>Install a theme file</a>"
+    "<a class=b href='/roads'>Road maps and cache</a>"
     // Upstream 2.16.64 guarded this link: with no OTA partition the page it points at
     // 404s, so advertising it is a lie. Preserved here because this function moved into a
     // PROGMEM literal in the same release — string-literal concatenation takes a #if
@@ -1939,6 +1948,7 @@ static void handleLegacyConfig() {
         "<div class=card><div class=t>Network</div>"
         "<p style='color:#9affc8;font-size:13px;margin:0 0 4px'>Forget the saved WiFi and reopen the setup portal.</p>"
         "<form method=POST action=/wifi><button class=w>Reset WiFi</button></form></div>"
+        "<p class=ft><a href=/roads style='color:#9affc8'>Road maps and attribution</a></p>"
         // The "Firmware update" link only exists when there is an OTA partition to write
         // into; otherwise it would advertise a page that 404s.
 #if ORB_OTA_ENABLED
@@ -2747,6 +2757,7 @@ void setup() {
     tls_memory_begin();  // before WiFi/tasks: TLS allocations explicitly use PSRAM
 
     psram_mark("boot start");
+    road_vector_download::prepareWorker();
     sdcard::begin();
     psram_mark("after sdcard");
 
@@ -2939,6 +2950,9 @@ void setup() {
     app_shell::add(tickerview::screen(), theme_style::names().ticker,
                    tickerview::onPress, tickerview::onTurn, false,
                    tickerview::onEnter, tickerview::onExit, !theme_style::apps().ticker);  // turn steps the watchlist; onEnter takes the strip canvas only when the design curves it
+#endif
+#if ORB_COMPANION
+    companion::registerPrinter();
 #endif
     // Settings is built the first time somebody opens it, not here. It was the single
     // largest holder of internal RAM on the device — 909 LVGL allocations and ~24 KB,
@@ -3176,25 +3190,9 @@ void setup() {
     // just sit unused. That memory goes to the Weather Radar animation frames instead.
     g_ac_mutex = xSemaphoreCreateMutex();
     psram_mark("before adsb task");
-    xTaskCreatePinnedToCore(adsb_task, "adsb", 7168, nullptr, 1, &g_adsbTaskHandle, 0);
-    // 7168, not 6144. 6144 was tried and MEASURED: under a real fetch the high-water mark
-    // fell to 1,012 bytes of headroom, which is not a margin, it is a fuse. A FreeRTOS stack
-    // overflow is a hard crash and this task runs unattended for weeks. So the saving here is
-    // 1 KB rather than 2; the real memory came from audio (reserving 4 KB to use 0.8) and
-    // from keeping allocations off internal RAM in the first place.
-    //
-    // Measured on the device (uxTaskGetStackHighWaterMark over multi-minute soaks, the feed
-    // both succeeding and failing): peak usage ~5.3 KB. Was 16 KB, then 8 KB, now 6 KB.
-    //
-    // A task stack is INTERNAL RAM, which is the resource this device actually runs out of:
-    // a clean boot leaves about 9.5 KB free, and a TCP connect plus an HTTP request needs
-    // more than that at peak. Every kilobyte reserved and never touched here is a kilobyte
-    // the network cannot have. 6144 keeps ~800 B over the observed peak, and the high-water
-    // mark is printed every 15 s in [memdbg] so the margin is watched rather than assumed.
-    // The old comment here said "TLS needs a big stack"; that stopped being true when the
-    // TLS fallback was disabled above, and even the plain-HTTP path never came close to
-    // justifying the size. 8 KB keeps roughly double the observed peak as margin and returns
-    // 8 KB of internal RAM, which is the exact resource the feed is starved for.
+    xTaskCreatePinnedToCore(adsb_task, "adsb", 10240, nullptr, 1, &g_adsbTaskHandle, 0);
+    // Direct TLS needs more stack than the former gateway-only HTTP path.
+    // Keep 10 KB and watch the high-water mark in the memory diagnostics.
 
     // configuration web page (http://theorb.local/)
     g_web.on("/diag", []{ g_web.send(200, "text/plain", diag::text()); });
@@ -3519,6 +3517,7 @@ void setup() {
         g_web.send(200, "application/json", b);
     });
     g_web.on("/sdput", HTTP_POST, handleSdPutDone, handleSdPutUpload);   // Launch Kit pushes theme files here
+    road_vector_download::begin(g_web);
     // "I am done sending." Without it the install overlay has no way to tell the end of a
     // transfer from the death of one — see update_ui::installed().
     g_web.on("/installed", HTTP_POST, []{
@@ -3666,7 +3665,7 @@ void loop() {
                                app_shell::name(), app_shell::browsing(), app_shell::captured());
         input_router::dispatch((int)kd, pressed);           // same 3-mode routing the sim uses
     }
-    input_router::tick();                                    // a settling rock, resolved without new input
+    input_router::tick();                                    // catches a jig even with zero net movement
 
     lpT[1] = micros();
     display::loop();                // drive LVGL (render dirty areas + run timers)
@@ -3694,6 +3693,22 @@ void loop() {
     // ever touched from this task. The update panel is up throughout, so the frames this
     // costs are frames of a screen nobody is looking at.
     if (theme_pull::active()) theme_pull::step();
+    road_vector_download::step(g_settings.homeLat,g_settings.homeLon,g_settings.rangeKm,
+                              g_locationSet && theme_style::radar().mapRoadsOn,
+                              theme_pull::active() || orb_link::transferActive() || (bool)g_sdUpFile);
+    static uint32_t roadStatusAt=0;
+    if(int32_t(millis()-roadStatusAt)>=0) {
+        roadStatusAt=millis()+500;
+        char message[144]={};
+        if(g_locationSet&&theme_style::radar().mapRoadsOn)
+            road_vector_download::progressText(message,sizeof(message));
+        radar::setRoadStatus(message);
+    }
+    if(g_radarViewActive && g_locationSet && !theme_pull::active() && !orb_link::transferActive())
+        radar::refreshMap(g_settings);
+#if ORB_COMPANION
+    companion::poll();
+#endif
     serial_wifi_join_tick();   // a join asked for over the cable; a no-op otherwise
 
     // THE FORCED RE-BAKE IS NOT DONE HERE, and the first version of it was.

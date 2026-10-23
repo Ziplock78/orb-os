@@ -34,6 +34,7 @@
 // True when the clock has really been set (NTP or the RTC). `ti` is filled either way,
 // so a caller that wants the seconds running on an unset clock still gets them.
 inline bool orb_local_time(struct tm *ti) {
+    *ti = {};  // keep the fallback deterministic if conversion fails
     const time_t now = time(nullptr);
     const bool read = localtime_r(&now, ti) != nullptr;
 #if !defined(ARDUINO)

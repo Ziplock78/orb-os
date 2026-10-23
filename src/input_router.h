@@ -12,6 +12,6 @@ namespace input_router {
     // delta: net detents since last poll (>0 = turned right/CW, <0 = left/CCW).
     // pressed: true if the knob was pushed since last poll.
     void dispatch(int delta, bool pressed);
-    // Every loop pass. Finishes a rock that is still settling when no new input arrives.
+    // Every loop pass. Handles reversals even when their net detent delta is zero.
     void tick();
 }

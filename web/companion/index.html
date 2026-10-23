@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>Orb + PrintSphere · Installer</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <main>
+    <header><span class="orb" aria-hidden="true"></span><span>ORB COMPANION</span><a href="https://github.com/Lerxtwood/orb-os">GitHub ↗</a></header>
+    <section class="intro">
+      <p class="eyebrow">ONE DEVICE. TWO FIRMWARES.</p>
+      <h1>Your Orb.<br><span>Now with PrintSphere.</span></h1>
+      <p class="lead">Keep your clocks, flight tracking, settings and themes.<br class="desktop"> Switch to your printer with a turn and a press.</p>
+      <div class="chips"><span>ESP32-S3</span><span>1.75″ AMOLED</span><span>16 MB flash</span></div>
+    </section>
+    <section class="installer" aria-labelledby="install-title">
+      <div class="section-title"><span class="step">01</span><h2 id="install-title">Install or update</h2><span class="usb">USB CONNECTION</span></div>
+      <p>Connect your device with a data cable. Close Orb Studio and serial monitors, then choose a release below.</p>
+      <label for="release">Firmware release</label>
+      <select id="release" disabled><option>Loading releases…</option></select>
+      <p id="release-note" class="note">Both firmwares are included in each release.</p>
+      <div class="buttons"><button id="connect" disabled>Connect device</button><button id="disconnect" class="secondary" hidden>Disconnect</button></div>
+      <p id="status" role="status" aria-live="polite">Loading available GitHub releases…</p>
+      <div id="ready" hidden>
+        <p id="plan"></p>
+        <div id="cache-option" hidden>
+          <label class="check-option"><input id="rebuild-cache" type="checkbox" aria-describedby="cache-note"> Rebuild theme cache</label>
+          <p id="cache-note" class="note">Clear cached artwork and rebuild it from your SD-card theme files on the next boot. Keep the SD card inserted. Saved settings and theme files are kept; the first boot may take longer.</p>
+        </div>
+        <button id="install" disabled>Install both firmwares</button>
+      </div>
+      <progress id="progress" max="100" value="0" aria-label="Installation progress" hidden></progress>
+      <details><summary>Connection details</summary><pre id="log" aria-label="Connection log"></pre></details>
+      <p id="support" class="note">Use Chrome or Edge on a desktop computer. Keep the cable connected until installation finishes.</p>
+    </section>
+    <section class="after" aria-labelledby="after-title">
+      <div class="section-title"><span class="step">02</span><h2 id="after-title">Make yourself at home</h2></div>
+      <div class="cards"><article><h3>Orb stays familiar</h3><p>Your web configuration and Orb Studio theme uploads work as before while Orb is running.</p></article><article><h3>Printer, one press away</h3><p>Choose <strong>Printer</strong> in Orb and press to open PrintSphere. Jig the dial in PrintSphere, then press <strong>Return to Orb</strong>. The first release, v2.16.26, uses an Orb touch button.</p></article></div>
+      <p class="note">Standalone Orb migration keeps saved settings and SD themes. The artwork cache becomes 4.5 MB; select Rebuild theme cache if your current cache will not fit. No firmware backup is created. Other firmware layouts are not modified.</p>
+    </section>
+    <footer><span>Built for your Orb.</span><a href="https://github.com/Lerxtwood/orb-os/releases">Release notes & downloads ↗</a></footer>
+  </main>
+  <script src="https://cdn.jsdelivr.net/npm/spark-md5@3.0.2/spark-md5.min.js"></script>
+  <script type="module" src="installer.mjs"></script>
+</body>
+</html>

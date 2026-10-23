@@ -44,8 +44,7 @@ void ensure() {
     lv_obj_set_width(body, 340);
     lv_label_set_text(body,
                       "To activate the main menu from any app, "
-                      "\"rock\" the knob by quickly turning the "
-                      "knob left and then right");
+                      "quickly turn the knob one way and then back");
     lv_obj_set_style_text_color(body, lv_color_white(), 0);
     lv_obj_set_style_text_font(body, &lv_font_montserrat_20, 0);
     lv_obj_set_style_text_align(body, LV_TEXT_ALIGN_CENTER, 0);

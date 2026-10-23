@@ -3,8 +3,8 @@
 // What the knob does, said once, at the moment somebody asks.
 //
 // The Orb has one control and three gestures, and exactly one of them is guessable. Turning
-// is obvious. Pushing is obvious enough to try. The ROCK, a short turn back and then
-// forward, is the only way to reach the app menu, and nothing about a knob suggests it.
+// is obvious. Pushing is obvious enough to try. The ROCK, a quick turn in either direction
+// and then back, is the only way to reach the app menu, and nothing about a knob suggests it.
 //
 // A person who has just built one lands on the clock and presses the knob, because that is
 // what you do with a button. On the clock that press has always done nothing at all: the

@@ -9,6 +9,73 @@
 #include <Preferences.h>
 #include <string.h>
 #include <time.h>   // route-cache TTL
+#include <esp_heap_caps.h>
+#include "flightaware_route.h"
+
+// Direct FlightAware lookup; successful results use Orb's existing NVS cache.
+static constexpr bool DIRECT_FLIGHTAWARE_POC = true;
+
+static bool flightaware_fetch(const char* callsign, char* from, size_t fn, char* to, size_t tn) {
+    char cs[12] = {};
+    size_t n = 0;
+    for (const char* p = callsign; p && *p; ++p) {
+        if (*p == ' ') continue;
+        const char c = toupper(static_cast<unsigned char>(*p));
+        if (!isalnum(static_cast<unsigned char>(c)) || n + 1 >= sizeof(cs)) return false;
+        cs[n++] = c;
+    }
+    if (!n || WiFi.status() != WL_CONNECTED) return false;
+    Serial.printf("[route-fa] %s begin: internal=%u largest=%u stack=%u\n", cs,
+        (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT),
+        (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT),
+        (unsigned)uxTaskGetStackHighWaterMark(nullptr));
+    WiFiClientSecure client;
+    // Match Capsule-Radar's transport for this experiment. No credentials sent.
+    // Certificate authentication must be added before promoting this to release.
+    client.setInsecure();
+    client.setHandshakeTimeout(5);
+    HTTPClient http;
+    http.setReuse(false);
+    http.useHTTP10(true);  // raw stream has no HTTP chunk framing
+    http.setConnectTimeout(3000);
+    http.setTimeout(5000);
+    char url[128];
+    snprintf(url, sizeof(url), "https://www.flightaware.com/live/flight/%s", cs);
+    if (!http.begin(client, url)) return false;
+    http.setUserAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36");
+    http.addHeader("Accept", "text/html");
+    http.addHeader("Accept-Encoding", "identity");
+    http.addHeader("Accept-Language", "en-US,en;q=0.9");
+    const uint32_t started = millis();
+    const int code = http.GET();
+    if (code < 0) {
+        char error[96] = {};
+        const int tlsError = client.lastError(error, sizeof(error));
+        Serial.printf("[route-fa] TLS error=%d: %s\n", tlsError, error);
+    }
+    Serial.printf("[route-fa] HTTP=%d after %u ms (%s)\n", code, (unsigned)(millis()-started),
+                  code < 0 ? HTTPClient::errorToString(code).c_str() : "connected");
+    FlightAwareRoute route;
+    size_t bytes = 0;
+    if (code == 200) {
+        auto* stream = http.getStreamPtr();
+        const uint32_t bodyStart = millis();
+        while (bytes < 25600 && millis() - bodyStart < 2500 && !route.complete()) {
+            if (stream->available()) {
+                const int c = stream->read();
+                if (c >= 0) { route.feed(static_cast<char>(c)); ++bytes; }
+            } else if (!http.connected()) break;
+            else delay(1);
+        }
+    }
+    http.end();
+    Serial.printf("[route-fa] bytes=%u route=%s -> %s elapsed=%u ms\n",
+        (unsigned)bytes, route.from, route.to, (unsigned)(millis()-started));
+    if (!route.complete()) return false;
+    snprintf(from, fn, "%s", route.from);
+    snprintf(to, tn, "%s", route.to);
+    return true;
+}
 
 #define ROUTE_CACHE_MAX 200   // wrap the cache before it can crowd NVS
 
@@ -20,7 +87,8 @@ static void route_key(const char *callsign, char *out, size_t on) {
     out[j] = 0;
 }
 
-#define ROUTE_FMT_VER 2   // bump to invalidate cached routes when the label format changes
+#define ROUTE_FMT_VER 3   // invalidate the old gateway routes
+static constexpr uint32_t ROUTE_CACHE_TTL_S = 15 * 60;
 
 void route_cache_begin() {
     Preferences p;
@@ -29,7 +97,8 @@ void route_cache_begin() {
     p.end();
 }
 
-bool route_cache_get(const char *callsign, char *from, size_t fn, char *to, size_t tn) {
+bool route_cache_get(const char *callsign, char *from, size_t fn, char *to, size_t tn,
+                     uint32_t *remainingMs) {
     if (fn) from[0] = 0;
     if (tn) to[0] = 0;
     if (!callsign || !callsign[0]) return false;
@@ -48,13 +117,17 @@ bool route_cache_get(const char *callsign, char *from, size_t fn, char *to, size
     const int b2 = rest.indexOf('|');
     if (b2 < 0) return false;
     const uint32_t now = (uint32_t)time(nullptr);    // expire stale routes (reused callsigns)
-    if (now > 1700000000UL && ts > 1700000000UL && (now - ts) > 86400UL) return false;  // 24 h TTL
+    if (now <= 1700000000UL || ts <= 1700000000UL || now < ts || now - ts >= ROUTE_CACHE_TTL_S)
+        return false;
     snprintf(from, fn, "%s", rest.substring(0, b2).c_str());
     snprintf(to, tn, "%s", rest.substring(b2 + 1).c_str());
-    return true;
+    if (remainingMs) *remainingMs = (ROUTE_CACHE_TTL_S - (now - ts)) * 1000;
+    return from[0] && to[0];
 }
 
 void route_cache_put(const char *callsign, const char *from, const char *to) {
+    const uint32_t now = (uint32_t)time(nullptr);
+    if (now <= 1700000000UL || !from || !from[0] || !to || !to[0]) return;
     if (!callsign || !callsign[0]) return;
     char key[12];
     route_key(callsign, key, sizeof(key));
@@ -62,9 +135,12 @@ void route_cache_put(const char *callsign, const char *from, const char *to) {
     Preferences p;
     if (!p.begin("routes", false)) return;
     int n = p.getInt("__n", 0);
-    if (n >= ROUTE_CACHE_MAX) { p.clear(); n = 0; }   // wrap to bound NVS usage
-    String v = String((uint32_t)time(nullptr)) + "|" + String(from ? from : "") + "|" + String(to ? to : "");
-    if (p.putString(key, v) > 0) p.putInt("__n", n + 1);
+    bool exists = p.isKey(key);
+    if (!exists && n >= ROUTE_CACHE_MAX) {
+        p.clear(); p.putUChar("__v", ROUTE_FMT_VER); n = 0;
+    }
+    String v = String(now) + "|" + String(from) + "|" + String(to);
+    if (p.putString(key, v) > 0 && !exists) p.putInt("__n", n + 1);
     p.end();
 }
 
@@ -75,6 +151,7 @@ bool route_fetch(const char *callsign, char *from, size_t fn, char *to, size_t t
     if (fn) from[0] = 0;
     if (tn) to[0] = 0;
     if (!callsign || !callsign[0] || WiFi.status() != WL_CONNECTED) return false;
+    if (DIRECT_FLIGHTAWARE_POC) return flightaware_fetch(callsign, from, fn, to, tn);
 
     // strip spaces from the callsign
     char cs[12];

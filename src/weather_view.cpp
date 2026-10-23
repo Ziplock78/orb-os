@@ -298,7 +298,8 @@ void weatherview::init() {
     lv_obj_align(s_stamp, LV_ALIGN_CENTER, 0, 150);
 
     lv_obj_t *attrib = lv_label_create(s_screen);
-    lv_label_set_text(attrib, "RainViewer");
+    lv_label_set_text(attrib, "RainViewer\n(c) OpenStreetMap contributors\n(c) OpenMapTiles");
+    lv_obj_set_style_text_align(attrib,LV_TEXT_ALIGN_CENTER,0);
     lv_obj_set_style_text_color(attrib, lv_color_hex(0x555B62), 0);
     lv_obj_set_style_text_font(attrib, &lv_font_montserrat_12, 0);
     lv_obj_align(attrib, LV_ALIGN_CENTER, 0, 178);

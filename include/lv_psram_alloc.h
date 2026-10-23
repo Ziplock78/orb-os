@@ -35,31 +35,11 @@
 // dead with 70 KB free but a 17 KB largest block. Too low and LVGL's per-draw scratch sits
 // behind the slower external bus. Measure before moving it; see the boot log's
 // heap/largest numbers on any [adsb] or [weather] line.
-// 2 KB, measured 2026-08-23. This sat at 16 KB, and the comment above ends "Measure before
-// moving it" — so it was measured, on the device, by printing INTERNAL free at every boot
-// milestone (the [intram] lines) instead of only PSRAM, which is all anything here had ever
-// reported. The scarce pool was invisible.
-//
-// What 16 KB was costing, per boot:
-//                        internal free   largest block   feed
-//     16384 (before)          19 KB          7.1 KB      0 of 14 polls
-//      2048 (now)             67 KB         31.7 KB     14 of 15 polls
-//      1024 (also tried)      75 KB         31.7 KB     no better where it counts
-//
-// Display and radar alone were holding 137 KB of internal RAM in 641 small allocations,
-// every one of them under the old threshold and so kept in the pool the network stack needs.
-// A TCP connect plus an HTTP request could not fit in what was left, which is why the feed
-// died in a different-looking way every time and why two days of fixes downstream of it kept
-// helping a little and never holding.
-//
-// 1024 frees more total but does NOT raise the largest contiguous block, which is the number
-// that decides whether a connection can be made, so it buys nothing here and pushes more of
-// LVGL's per-draw scratch behind the slow bus for free. 2048 is the knee.
-//
-// Frame rate did not regress: 9 fps measured, against a sweep timer deliberately paced at
-// 100 ms (10 fps ceiling). The scratch buffers that matter are still internal.
+// Direct FlightAware testing: 256 bytes keeps roughly 25 KB of internal RAM
+// free with Steam Punk loaded. TLS buffers use a separate PSRAM allocator;
+// the display draw buffer remains in internal DMA RAM. Radar measured 10-13 FPS.
 #ifndef ORB_LV_BIG_ALLOC
-#define ORB_LV_BIG_ALLOC (2 * 1024)
+#define ORB_LV_BIG_ALLOC 256
 #endif
 
 // --- what this allocator is holding, and where ------------------------------------
@@ -179,9 +159,18 @@ static inline void orb_lv_note_free(void *p) {
 static const uint32_t orb_lv_zero_bucket[ORB_LV_NBUCKETS] = { 0 };
 #endif  // ORB_LV_STATS
 
+// Leave internal headroom for newlib file locks and TCP while Settings builds
+// its many small objects. Waiting until internal malloc fails is too late:
+// newlib aborts rather than returning an error when its lock allocation fails.
+#define ORB_LV_INTERNAL_RESERVE (16u * 1024u)
+static inline int orb_lv_prefer_external(size_t size) {
+    const size_t available = heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    return size >= ORB_LV_BIG_ALLOC || available < ORB_LV_INTERNAL_RESERVE ||
+           size > available - ORB_LV_INTERNAL_RESERVE;
+}
 static inline void *orb_lv_malloc(size_t size) {
     void *p;
-    if (size >= ORB_LV_BIG_ALLOC) {
+    if (orb_lv_prefer_external(size)) {
         p = heap_caps_malloc(size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
         if (!p) {
             p = heap_caps_malloc(size, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
@@ -209,7 +198,7 @@ static inline void *orb_lv_realloc(void *p, size_t size) {
     // pointer cannot be asked how big it was.
     orb_lv_note_free(p);
     void *q;
-    if (size >= ORB_LV_BIG_ALLOC) {
+    if (orb_lv_prefer_external(size)) {
         q = heap_caps_realloc(p, size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
         if (!q) q = heap_caps_realloc(p, size, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
     } else {

@@ -305,12 +305,13 @@ static void refresh_card(void) {
     }
 
     // aircraft photo (planespotters), shown above the card when one is available
-    if (in.hex[0]) photo_request(in.hex);
-    int pw = 0, ph = 0; char pcred[40];
-    if (s_photo && in.hex[0] && photo_get(in.hex, &pw, &ph, pcred, sizeof(pcred)) && pw > 0 && ph > 0) {
-        int mw, mh;
-        lv_color_t *pbuf = photo_buffer(&mw, &mh);
-        lv_canvas_set_buffer(s_photo, pbuf, pw, ph, LV_IMG_CF_TRUE_COLOR);
+    if (in.hex[0]) photo_request(in.hex, in.type);
+    // LVGL owns a stable display copy, never the network decoder's scratch buffer.
+    static lv_color_t *displayPixels = nullptr;
+    if (s_photo && !displayPixels) displayPixels = (lv_color_t *)lv_mem_alloc(232 * 156 * sizeof(lv_color_t));
+    int pw = 0, ph = 0; char pcred[192];
+    if (s_photo && in.hex[0] && photo_copy(in.hex, displayPixels, 232 * 156, &pw, &ph, pcred, sizeof(pcred)) && pw > 0 && ph > 0) {
+        lv_canvas_set_buffer(s_photo, displayPixels, pw, ph, LV_IMG_CF_TRUE_COLOR);
         lv_obj_set_size(s_photo, pw, ph);
         lv_obj_align(s_photo, LV_ALIGN_CENTER, 0, -28 - ph / 2);   // sit lower: fill the band down to the card
         lv_obj_clear_flag(s_photo, LV_OBJ_FLAG_HIDDEN);

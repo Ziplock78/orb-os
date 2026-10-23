@@ -100,7 +100,7 @@ void repaint() {
     // here: Studio steps by size + 4 (16 px), this steps by the font's line height + 4
     // (19 px). menu_text hit exactly this and settled it by having Studio send an explicit
     // lineStep; these lines have no such field yet.
-    const char *credits[] = { "Aircraft: adsb.lol / adsb.fi", "Map data: OpenStreetMap" };
+    const char *credits[] = { "Aircraft: adsb.lol / adsb.fi", "Maps: OpenStreetMap / OpenMapTiles" };
     theme_style::SplashText second = sp.credits;
     second.y += (int)lv_font_get_line_height(splash_font(sp.credits.size)) + 4;
     one_line(sp.credits, credits[0]);

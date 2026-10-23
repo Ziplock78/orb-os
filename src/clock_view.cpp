@@ -4,7 +4,7 @@
 //   DIGITAL  — big hand-drawn 24-hour readout (seven-segment style) + the date.
 //
 // Time comes from the system clock (RTC-seeded, NTP-synced; see main.cpp). TZ is
-// applied at boot, so getLocalTime() returns local time.
+// applied at boot, so localtime_r() returns local time.
 #include "clock_view.h"
 #include "display.h"      // orb_screen_covered(): do not redraw under a cover
 #include "theme_audio.h"  // the theme's tick bank

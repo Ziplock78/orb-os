@@ -21,6 +21,7 @@ static SemaphoreHandle_t lock_handle() {
     return s_lock;
 }
 void lock()   { if (SemaphoreHandle_t h = lock_handle()) xSemaphoreTake(h, portMAX_DELAY); }
+bool try_lock() { SemaphoreHandle_t h=lock_handle(); return h && xSemaphoreTake(h,0)==pdTRUE; }
 void unlock() { if (s_lock) xSemaphoreGive(s_lock); }
 
 // Releases the card lock however the function leaves, which is six different ways. Taking it

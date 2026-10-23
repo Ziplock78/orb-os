@@ -1,0 +1,11 @@
+# Orb settings and themeart start at their original addresses.
+# Dedicated PrintSphere NVS prevents its recovery/reset code touching Orb settings.
+# Name, Type, SubType, Offset, Size, Flags
+nvs,      data, nvs,      0x9000,   0x5000,
+otadata,  data, ota,      0xE000,   0x2000,
+ota_0,    app,  ota_0,    0x10000,  0x640000,
+themeart, data, 0x40,     0x650000, 0x480000,
+ota_1,    app,  ota_1,    0xAD0000, 0x400000,
+ps_nvs,   data, nvs,      0xED0000, 0x80000,
+sounds,   data, littlefs, 0xF50000, 0xA0000,
+coredump, data, coredump, 0xFF0000, 0x10000,

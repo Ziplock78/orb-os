@@ -4,21 +4,70 @@
 #include <string.h>
 #include <stdio.h>
 #include <mutex>
+#include <chrono>
+#include <new>
+#ifdef ARDUINO
+#include <esp_heap_caps.h>
+#endif
 
 static std::mutex s_m;
 static char s_want[12]     = "";   // callsign the UI asked about
-static char s_doneCall[12] = "";   // callsign the stored result belongs to
-static char s_from[40]     = "";
-static char s_to[40]       = "";
+struct RouteEntry {
+    char call[12] = {}, from[40] = {}, to[40] = {};
+    uint64_t expiresMs = 0, used = 0;
+};
+static constexpr size_t ROUTE_MEMORY_ENTRIES = 16;
+static uint64_t s_used = 0;
+static size_t s_capacity = ROUTE_MEMORY_ENTRIES;
+// Accessed only with s_m held. Keep this small working set off the scarce
+// internal heap; an allocation failure still permits one cached route.
+static RouteEntry *route_entries() {
+#ifdef ARDUINO
+    static RouteEntry fallback;
+    static RouteEntry *entries = [] {
+        auto *p = static_cast<RouteEntry *>(heap_caps_calloc(
+            ROUTE_MEMORY_ENTRIES, sizeof(RouteEntry), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+        if (!p) { s_capacity = 1; return &fallback; }
+        for (size_t i = 0; i < ROUTE_MEMORY_ENTRIES; ++i) new (p + i) RouteEntry{};
+        return p;
+    }();
+#else
+    static RouteEntry entries[ROUTE_MEMORY_ENTRIES];
+#endif
+    return entries;
+}
+
+static void route_key(const char *call, char *out, size_t size) {
+    size_t n = 0;
+    for (const char *p = call; p && *p && n + 1 < size; ++p) {
+        if (*p == ' ') continue;
+        out[n++] = *p >= 'a' && *p <= 'z' ? *p - 'a' + 'A' : *p;
+    }
+    out[n] = 0;
+}
+static uint64_t route_now_ms() {
+    return std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+}
+
+static RouteEntry *route_find(const char *call) {
+    char key[12]; route_key(call, key, sizeof(key));
+    if (!key[0]) return nullptr;
+    auto *entries = route_entries();
+    const uint64_t now = route_now_ms();
+    for (size_t i = 0; i < s_capacity; ++i)
+        if (!strcmp(entries[i].call, key) && now < entries[i].expiresMs) return &entries[i];
+    return nullptr;
+}
 
 void route_request(const char *callsign) {
     std::lock_guard<std::mutex> g(s_m);
-    snprintf(s_want, sizeof(s_want), "%s", callsign ? callsign : "");
+    route_key(callsign, s_want, sizeof(s_want));
 }
 
 bool route_pending(char *callOut, size_t n) {
     std::lock_guard<std::mutex> g(s_m);
-    if (s_want[0] && strcmp(s_want, s_doneCall) != 0) {
+    if (s_want[0] && !route_find(s_want)) {
         snprintf(callOut, n, "%s", s_want);
         return true;
     }
@@ -59,18 +108,37 @@ static void ascii_fold(const char *in, char *out, size_t n) {
     out[o] = 0;
 }
 
-void route_store(const char *callsign, const char *from, const char *to) {
+void route_store(const char *callsign, const char *from, const char *to, uint32_t ttlMs) {
     std::lock_guard<std::mutex> g(s_m);
-    snprintf(s_doneCall, sizeof(s_doneCall), "%s", callsign ? callsign : "");
-    ascii_fold(from, s_from, sizeof(s_from));
-    ascii_fold(to,   s_to,   sizeof(s_to));
+    char key[12]; route_key(callsign, key, sizeof(key));
+    if (!key[0]) return;
+    auto *entries = route_entries();
+    RouteEntry *entry = nullptr;
+    const uint64_t now = route_now_ms();
+    for (size_t i = 0; i < s_capacity; ++i) {
+        if (!strcmp(entries[i].call, key)) { entry = &entries[i]; break; }
+    }
+    if (!entry) {
+        entry = &entries[0];
+        for (size_t i = 0; i < s_capacity; ++i) {
+            if (now >= entries[i].expiresMs) { entry = &entries[i]; break; }
+            if (entries[i].used < entry->used) entry = &entries[i];
+        }
+    }
+    snprintf(entry->call, sizeof(entry->call), "%s", key);
+    ascii_fold(from, entry->from, sizeof(entry->from));
+    ascii_fold(to, entry->to, sizeof(entry->to));
+    // Do not retry an unavailable route on every frame, or retain it forever.
+    entry->expiresMs = now + (entry->from[0] && entry->to[0] ? ttlMs : DETAIL_CACHE_MISS_TTL_MS);
+    entry->used = ++s_used;
 }
 
 bool route_get(const char *callsign, char *from, size_t fn, char *to, size_t tn) {
     std::lock_guard<std::mutex> g(s_m);
-    if (callsign && s_doneCall[0] && strcmp(callsign, s_doneCall) == 0) {
-        snprintf(from, fn, "%s", s_from);
-        snprintf(to, tn, "%s", s_to);
+    if (auto *entry = route_find(callsign)) {
+        snprintf(from, fn, "%s", entry->from);
+        snprintf(to, tn, "%s", entry->to);
+        entry->used = ++s_used;
         return true;
     }
     return false;

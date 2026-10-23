@@ -1099,13 +1099,10 @@ int main(int argc, char **argv) {
         }
         printf("[selftest] boot app: %s (idx %d)\n", app_shell::name(), app_shell::index());
         auto press = [&]() { simknob::injectPress(true, SDL_GetTicks()); simknob::injectPress(false, SDL_GetTicks()); pump(); };
-        // A rock is a quick reversal and then a STOP: the second detent has to arrive inside
-        // ROCK_QUICK_MS of the first, and the router only opens the menu once nothing more
-        // has arrived for ROCK_SETTLE_MS (input_router.cpp). The delays are those two rules.
+        // A quick reversal opens the menu immediately, in either direction.
         auto rock  = [&]() {
             simknob::injectTurn(-1); pump();
             SDL_Delay(60); simknob::injectTurn(+1); pump();
-            SDL_Delay(200); input_router::tick(); pump();
         };
         // Everything in this block happens in the space of a few milliseconds, which is not
         // how a knob is used: a leftward turn from one test phase would still be inside the
@@ -1129,16 +1126,18 @@ int main(int argc, char **argv) {
         printf("[selftest] rock: browsing=%d (expect 1 = switcher opened)\n", app_shell::browsing());
         printf("[selftest] rock opens the menu: %s\n", (plainTurnStayed && rockOpened) ? "PASS" : "FAIL");
 
-        // Right-then-left must NOT open it. Requiring one order is what keeps ordinary
-        // direction changes from being read as the gesture.
-        if (app_shell::browsing()) press();          // commit out of the switcher first
-        // A scroll that changes direction is NOT a rock: down three, up one, however quick.
+        // A large right-then-left movement also opens it, with no settle required.
+        if (app_shell::browsing()) press();
         settle();
-        simknob::injectTurn(+3); pump();
-        SDL_Delay(60); simknob::injectTurn(-1); pump();
-        SDL_Delay(200); input_router::tick(); pump();
-        printf("[selftest] scroll reversal: browsing=%d (expect 0 = a scroll, not a rock)\n", app_shell::browsing());
-        printf("[selftest] a scroll reversal is not a rock: %s\n", !app_shell::browsing() ? "PASS" : "FAIL");
+        simknob::injectTurn(+12); pump();
+        SDL_Delay(60); simknob::injectTurn(-20); pump();
+        printf("[selftest] large right-left jig: %s\n", app_shell::browsing() ? "PASS" : "FAIL");
+        if (app_shell::browsing()) press();
+        settle();
+        simknob::injectTurn(-20); pump();
+        SDL_Delay(60); simknob::injectTurn(+12); pump();
+        printf("[selftest] large left-right jig: %s\n", app_shell::browsing() ? "PASS" : "FAIL");
+        if (app_shell::browsing()) press();
         // And an unhurried reversal is not one either: down one, a moment, up one.
         settle();
         simknob::injectTurn(-1); pump();
@@ -1150,7 +1149,9 @@ int main(int argc, char **argv) {
         // Browsing: turns cycle apps, a press commits.
         settle();
         rock(); pump();
+        settle(); // Finish draining the jig before deliberately browsing.
         const int browseStart = app_shell::index();
+        simknob::injectTurn(+1); pump(); // First tick is absorbed by the entry filter.
         simknob::injectTurn(+1); pump();
         simknob::injectTurn(+1); pump();
         printf("[selftest] browsing turns: %s (idx %d, browsing=%d)\n", app_shell::name(), app_shell::index(), app_shell::browsing());

@@ -12,8 +12,10 @@
 #include "geo.h"
 #include "coastline.h"
 #include "roads_sd.h"
+#include "map_snapshot.h"
 #include "airports.h"
 #include "text_tokens.h"   // shared {token} expansion, see radar_fmt()
+#include "photo.h"
 #include "route.h"           // route_request()/route_get() — {from}/{to} tokens in a custom text banner
 #include "custom_radar.h"    // CUSTOM_HAS_RADAR / CUSTOM_RTEXT{1,2,3}_* / CUSTOM_HAS_RADAR_STYLE / CUSTOM_SWEEP_*, CUSTOM_BLIP_*, CUSTOM_SEL_*, CUSTOM_OFFRANGE_*, CUSTOM_CENTER_* — a Launch Kit push's selection banners + visual styling
 #include "radar_sprite.h"    // radar_custom_plate()/radar_custom_overlay()/radar_custom_blip_icon() — the editor's baked background+rings+crosshair / CRT+glass / aircraft-icon layers
@@ -202,6 +204,7 @@ static const char *THEME_NAMES[THEME_COUNT] = { "ORB", "MILITARY", "AVIATOR" };
 // The sweep starts turning and then visibly stops for a few seconds, which reads as a
 // crash rather than as loading. So say what is happening.
 static lv_obj_t   *s_loading         = nullptr;
+static lv_obj_t   *s_roadStatus      = nullptr;
 static bool        s_loadingPending  = false;   // shown, waiting for the first update()
 static uint32_t    s_loadStartMs     = 0;       // lv_tick_get() when loading began, for the elapsed-time line
 static int         s_loadShownSec    = -1;      // last elapsed-second value painted, so a still-frozen number is never redrawn as "live"
@@ -259,6 +262,8 @@ static std::string s_selHex;
 // input, drops back to the default view. See knobPress()/knobTurn()/knobEnter().
 static bool        s_selectMode    = false;
 static uint32_t    s_selActivityMs = 0;      // lv_tick_get() of the last knob input in selection mode
+static bool        s_selectionRoutePending = false;
+static char        s_selectionRouteCall[12] = "";
 // How long a selected aircraft stays selected without input.
 //
 // Was 5000, which was never long enough to read the card even when it worked. The route
@@ -285,6 +290,46 @@ static lv_obj_t   *s_textCanvas = nullptr;   // callsign/stats/route banners (cu
 static lv_obj_t   *s_cardObj  = nullptr;     // the drawn (vector) card
 static lv_obj_t   *s_cardImg  = nullptr;     // the image card
 static lv_color_t *s_textBuf    = nullptr;
+static bool s_canvasActive = false; // large radar canvases belong to the active view
+static lv_obj_t *s_photoPanel = nullptr, *s_photoCanvas = nullptr, *s_photoStatus = nullptr;
+static lv_color_t *s_photoPixels = nullptr;
+static char s_photoHex[10] = "";
+static bool s_photoShown = false;
+static uint32_t s_photoStarted = 0;
+
+static void close_photo() {
+    if (s_photoPanel) lv_obj_del(s_photoPanel); // detach image before freeing its pixels
+    s_photoPanel = s_photoCanvas = s_photoStatus = nullptr;
+    if (s_photoPixels) heap_caps_free(s_photoPixels);
+    s_photoPixels = nullptr;
+    s_photoHex[0] = 0;
+    s_selActivityMs = lv_tick_get();
+}
+
+static void refresh_photo() {
+    if (!s_photoPanel) return;
+    // Theme layers can be reordered while the feed updates; keep the photo above them.
+    if (lv_obj_get_index(s_photoPanel) + 1 < lv_obj_get_child_cnt(s_parent))
+        lv_obj_move_foreground(s_photoPanel);
+    if (s_photoShown) return;
+    int w = 0, h = 0; char credit[192];
+    if (photo_copy(s_photoHex, s_photoPixels, 232 * 156, &w, &h, credit, sizeof(credit))) {
+        lv_canvas_set_buffer(s_photoCanvas, s_photoPixels, w, h, LV_IMG_CF_TRUE_COLOR);
+        lv_obj_align(s_photoCanvas, LV_ALIGN_CENTER, 0, -14);
+        lv_obj_clear_flag(s_photoCanvas, LV_OBJ_FLAG_HIDDEN);
+        if (strncmp(credit, "Generic ", 8) == 0) lv_label_set_text(s_photoStatus, credit);
+        else lv_label_set_text_fmt(s_photoStatus, "Photo: %s / planespotters.net", credit[0] ? credit : "Unknown");
+        s_photoShown = true;
+        Serial.printf("[radar-photo] %s displayed %dx%d\n", s_photoHex, w, h);
+    } else if (photo_done(s_photoHex)) {
+        lv_label_set_text(s_photoStatus, "Photo unavailable");
+        s_photoShown = true;
+    } else if ((uint32_t)(lv_tick_get() - s_photoStarted) > 20000 &&
+               strcmp(lv_label_get_text(s_photoStatus), "Still looking for a photo...") != 0) {
+        lv_label_set_text(s_photoStatus, "Still looking for a photo...");
+    }
+}
+
 static lv_obj_t   *s_plateImg   = nullptr;   // baked background (bottom layer), a Launch Kit push
 static lv_obj_t   *s_ringsImg   = nullptr;   // etched rings+crosshair, above the map, below the sweep (THEME_CAPS 6)
 static lv_obj_t   *s_overlayImg = nullptr;   // baked CRT+glass (top layer), a Launch Kit push
@@ -471,12 +516,14 @@ static inline lv_point_t rot_pt(float px, float py, float deg, lv_coord_t ox, lv
 // and (b) taxed every frame for features that are usually inactive: trails are a
 // settings toggle, and the banners only exist while an aircraft is selected.
 //
-// Lifecycle now matches everything else on this device: acquire when there is something
-// to show, release when there is not. While unbuffered, the canvas object stays HIDDEN,
-// so LVGL also skips it entirely during composition.
+// Keep the text buffer between selections to avoid repeatedly punching a large hole
+// in PSRAM. Hidden canvases cost no blending; both buffers are released on view exit.
 static bool canvas_acquire(lv_obj_t *canvas, lv_color_t *&buf, const char *tag) {
-    if (!canvas) return false;
-    if (buf) return true;
+    if (!canvas || !s_canvasActive) return false;
+    if (buf) {
+        lv_obj_clear_flag(canvas, LV_OBJ_FLAG_HIDDEN);
+        return true;
+    }
     const size_t sz = LV_CANVAS_BUF_SIZE_TRUE_COLOR_ALPHA(SCREEN_W, SCREEN_H);
 #if defined(ESP_PLATFORM)
     buf = (lv_color_t *)heap_caps_malloc(sz, MALLOC_CAP_SPIRAM);
@@ -484,8 +531,15 @@ static bool canvas_acquire(lv_obj_t *canvas, lv_color_t *&buf, const char *tag) 
     buf = (lv_color_t *)malloc(sz);
 #endif
     if (!buf) {
-        printf("[radar] %s canvas alloc FAILED (%u bytes) — feature skipped this session\n",
-               tag, (unsigned)sz);
+#if defined(ESP_PLATFORM)
+        multi_heap_info_t ps;
+        heap_caps_get_info(&ps, MALLOC_CAP_SPIRAM);
+        printf("[radar] %s canvas alloc FAILED (%u bytes); PSRAM free=%u largest=%u blocks=%u\n",
+               tag, (unsigned)sz, (unsigned)ps.total_free_bytes,
+               (unsigned)ps.largest_free_block, (unsigned)ps.free_blocks);
+#else
+        printf("[radar] %s canvas alloc FAILED (%u bytes)\n", tag, (unsigned)sz);
+#endif
         return false;
     }
     lv_canvas_set_buffer(canvas, buf, SCREEN_W, SCREEN_H, LV_IMG_CF_TRUE_COLOR_ALPHA);
@@ -632,7 +686,8 @@ static void grid_draw_cb(lv_event_t *e) {
         td.border_color = lv_color_hex(0x8A4A00);
         td.border_width = 1;
         td.border_opa = 160;
-        roads_sd::draw(d, road_color(), 130, 1);
+        if(theme_style::radar().mapRoadsOn) roads_sd::draw(d,lv_color_hex(theme_style::radar().mapRoadColor),
+            (lv_opa_t)theme_style::radar().mapRoadOpacity,std::max(1,std::min(8,theme_style::radar().mapRoadWidth)));
         coastline_draw(d, coast_color(), 170, 2);    // landmass outline under the triangle
         if (s_airportsEnabled) airports_draw(d, airport_color(), 150);
         lv_draw_polygon(d, &td, tri, 3);
@@ -643,7 +698,8 @@ static void grid_draw_cb(lv_event_t *e) {
     // Steel blue (sepia in Aviator) + 2 px so the coastline reads as a map
     // outline, distinct from the altitude-trail palette; roads are a thinner,
     // more muted neutral so they don't compete with it.
-    roads_sd::draw(d, road_color(), 150, 1);
+    if(theme_style::radar().mapRoadsOn) roads_sd::draw(d,lv_color_hex(theme_style::radar().mapRoadColor),
+        (lv_opa_t)theme_style::radar().mapRoadOpacity,std::max(1,std::min(8,theme_style::radar().mapRoadWidth)));
     coastline_draw(d, coast_color(), 165, 2);
     if (s_airportsEnabled) airports_draw(d, airport_color(), 150);
 
@@ -999,7 +1055,30 @@ static void sweep_timer_cb(lv_timer_t *t) {
     // Selection mode auto-times-out: 5s with no knob input drops back to the
     // populated default view (deselect + release the knob) so the scope doesn't
     // stay pinned on one aircraft. Runs before the early returns below.
-    if (s_selectMode && (uint32_t)(lv_tick_get() - s_selActivityMs) >= SELECT_IDLE_MS) radar_exit_select();
+    refresh_photo();
+    if (s_selectMode && !s_photoPanel) {
+        AcInfo selected;
+        if (radar::selected(selected) && selected.call[0]) {
+            if (strcmp(s_selectionRouteCall, selected.call) != 0) {
+                snprintf(s_selectionRouteCall, sizeof(s_selectionRouteCall), "%s", selected.call);
+                s_selectionRoutePending = true;
+                route_request(selected.call);
+            }
+            if (s_selectionRoutePending) {
+                char from[40], to[40];
+                // An empty stored result is a completed, unsuccessful lookup too.
+                if (route_get(selected.call, from, sizeof(from), to, sizeof(to))) {
+                    s_selectionRoutePending = false;
+                    s_selActivityMs = lv_tick_get();
+                    Serial.printf("[route-card] %s complete; reading timer started\n", selected.call);
+                }
+            }
+        } else {
+            s_selectionRoutePending = false;
+        }
+        if (!s_selectionRoutePending && (uint32_t)(lv_tick_get() - s_selActivityMs) >= SELECT_IDLE_MS)
+            radar_exit_select();
+    }
     {   // aircraft glyph motion, throttled: see AC_INTERP_MS for why this is slow on purpose
         static uint32_t s_lastInterpMs = 0;
         const uint32_t nowIms = lv_tick_get();
@@ -1687,6 +1766,7 @@ static void pulse_anim_cb(void *obj, int32_t v) {
 // so a turn opens the app switcher again. File scope so the sweep timer's idle
 // check (above, outside the namespace) and knobPress()/knobExit() can all call it.
 static void radar_exit_select() {
+    Serial.println("[route-card] selection dismissed");
     radar::select(-1);
     s_selectMode = false;
     app_shell::setCaptured(false);
@@ -2066,6 +2146,15 @@ void init(void *lv_parent) {
     lv_obj_set_style_text_line_space(s_feedWarn, 3, 0);
     show(s_feedWarn, false);
 
+    s_roadStatus = make_label(parent,"",&lv_font_montserrat_14,lv_color_white(),LV_ALIGN_TOP_MID,0,50);
+    lv_obj_set_width(s_roadStatus,280);
+    lv_obj_set_style_bg_color(s_roadStatus,lv_color_black(),0);
+    lv_obj_set_style_bg_opa(s_roadStatus,LV_OPA_70,0);
+    lv_obj_set_style_radius(s_roadStatus,6,0);
+    lv_obj_set_style_pad_all(s_roadStatus,5,0);
+    lv_obj_set_style_text_align(s_roadStatus,LV_TEXT_ALIGN_CENTER,0);
+    show(s_roadStatus,false);
+
     s_themeLabel = make_label(parent, "", &lv_font_montserrat_20, lv_color_white(), LV_ALIGN_TOP_MID, 0, 92);
     lv_obj_set_style_bg_color(s_themeLabel, lv_color_black(), 0);
     lv_obj_set_style_bg_opa(s_themeLabel, LV_OPA_90, 0);
@@ -2120,7 +2209,7 @@ void init(void *lv_parent) {
     {
         // Canvas OBJECT only; the 636 KB buffer is acquired by refresh_custom_text()
         // while banners are actually visible (a selection exists, or an always-on
-        // RTEXT4 range banner is compiled in) and released when they are not.
+        // RTEXT4 range banner is compiled in) and retained until view exit.
         rmark("after text buffer");
         s_textCanvas = lv_canvas_create(parent);
         lv_obj_clear_flag(s_textCanvas, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
@@ -2213,6 +2302,7 @@ static bool         s_flatTook[3] = { false, false, false };   // static1, stati
 // flattened background, and the live layer is hidden. Zion's three-section architecture
 // assumes the map is "etched in"; this makes that assumption true.
 static lv_img_dsc_t *s_mapSnap  = nullptr;
+static MapSnapshot s_mapSnapshot;
 static bool          s_mapBaked = false;
 static bool          s_ringsBaked = false;   // the etching went into the flat plate, so hide the live object
 
@@ -2222,8 +2312,8 @@ static void take_map_snapshot() {
     // events, and a hidden object draws nothing, which would etch an empty map.
     show(s_gridLayer, true);
     lv_obj_update_layout(s_gridLayer);
-    if (s_mapSnap) { lv_snapshot_free(s_mapSnap); s_mapSnap = nullptr; }
-    s_mapSnap = lv_snapshot_take(s_gridLayer, LV_IMG_CF_TRUE_COLOR_ALPHA);
+    s_mapSnapshot.take(s_gridLayer);
+    s_mapSnap = s_mapSnapshot.image();
     if (!s_mapSnap) { Serial.println("[radar] map snapshot failed; live layer stays"); return; }
 
     // Punch the exclusion zones out of the etched map.
@@ -2508,28 +2598,40 @@ void refreshCustomStyle() {
     // reads the finished state rather than trying to predict it, and it hides only
     // what it has actually absorbed, so a failure here degrades to the live stack
     // rather than to a missing layer.
+    take_map_snapshot();  // theme colours and visibility may change without new geometry
     rebuild_flat_background();
     apply_grid_visibility();
     applyRadarLayerOrder();
 }
 
-void update(const std::vector<Aircraft> &aircraft, const RadarSettings &s) {
-    std::vector<AcDraw> out;
-    out.reserve(aircraft.size());
-    std::set<std::string> present;
+void setRoadStatus(const char *message) {
+    if(!s_roadStatus)return;
+    if(!message)message="";
+    if(strcmp(lv_label_get_text(s_roadStatus),message))lv_label_set_text(s_roadStatus,message);
+    show(s_roadStatus,*message!=0);
+    if(*message)lv_obj_move_foreground(s_roadStatus);
+}
+
+void refreshMap(const RadarSettings &s) {
+    if(!s_gridLayer)return;
     const float R = (float)RADAR_R_OUTER_PX;
-    ++s_flowGen;                                  // one tick per poll; flow segments age in these units
-    s_lastRangeKm = s.rangeKm;                    // kept current for the range banner (radar_range_fmt)
 
     // Reproject the coastline only when the scope geometry actually changes (home
     // moved or range zoomed) — never per frame. Then repaint the static chrome layer.
     static double s_coLat = 1e9, s_coLon = 1e9; static float s_coRange = -1.0f;
-    if (s.homeLat != s_coLat || s.homeLon != s_coLon || s.rangeKm != s_coRange) {
+    static unsigned mapRevision=~0u;
+    static bool roadsOn=false;
+    bool geometryChanged=s.homeLat != s_coLat || s.homeLon != s_coLon || s.rangeKm != s_coRange;
+    bool enabled=theme_style::radar().mapRoadsOn;
+    if (geometryChanged || mapRevision!=roads_sd::revision() || roadsOn!=enabled) {
         const bool firstFix = (s_coRange < 0.0f);
+        if(!roads_sd::project(s.homeLat,s.homeLon,enabled?s.rangeKm:0,s_cx,s_cy,R))return;
         s_coLat = s.homeLat; s_coLon = s.homeLon; s_coRange = s.rangeKm;
-        coastline_project(s.homeLat, s.homeLon, s.rangeKm, s_cx, s_cy, R);
-        airports_project(s.homeLat, s.homeLon, s.rangeKm, s_cx, s_cy, R);
-        roads_sd::project(s.homeLat, s.homeLon, s.rangeKm, s_cx, s_cy, R);
+        if(geometryChanged) {
+            coastline_project(s.homeLat, s.homeLon, s.rangeKm, s_cx, s_cy, R);
+            airports_project(s.homeLat, s.homeLon, s.rangeKm, s_cx, s_cy, R);
+        }
+        mapRevision=roads_sd::revision();roadsOn=enabled;
         if (s_gridLayer) lv_obj_invalidate(s_gridLayer);
         // The projection is new, so the etched copy is stale: render it once at the new
         // geometry and fold it back into the flattened background. Costs one frame's
@@ -2540,7 +2642,7 @@ void update(const std::vector<Aircraft> &aircraft, const RadarSettings &s) {
             rebuild_flat_background();
             apply_grid_visibility();
         }
-        if (!firstFix) {
+        if (!firstFix && geometryChanged) {
             // Scope scale/center changed: old trails were plotted at the previous
             // projection and would be wrong now — drop them and clear the flow layer.
             s_trails.clear();
@@ -2549,6 +2651,16 @@ void update(const std::vector<Aircraft> &aircraft, const RadarSettings &s) {
         }
     }
 
+}
+
+void update(const std::vector<Aircraft> &aircraft, const RadarSettings &s) {
+    std::vector<AcDraw> out;
+    out.reserve(aircraft.size());
+    std::set<std::string> present;
+    const float R = (float)RADAR_R_OUTER_PX;
+    ++s_flowGen;
+    s_lastRangeKm = s.rangeKm;
+    refreshMap(s);
     std::map<std::string, lv_point_t> prevPos;        // smooth-motion: glide starts here
     for (const AcDraw &a : s_acs) prevPos[a.hex] = a.pos;
 
@@ -2954,7 +3066,7 @@ static void rtext_draw_straight(const lv_font_t *font, const char *str, float bx
 // canvas is cleared fully transparent when nothing is, so a design with no
 // aircraft picked shows a clean scope, matching the editor's own show/hide.
 static void refresh_custom_text() {
-    if (!s_textCanvas) return;
+    if (!s_textCanvas || !s_canvasActive) return;
     AcInfo in;
     const bool have = selected(in);
     const theme_style::Radar &rs = theme_style::radar();
@@ -3011,7 +3123,10 @@ static void refresh_custom_text() {
             show(s_cardImg, false);
         }
     }
-    if (!need) { canvas_release(s_textCanvas, s_textBuf); return; }
+    if (!need) {
+        lv_obj_add_flag(s_textCanvas, LV_OBJ_FLAG_HIDDEN);
+        return; // retain the buffer for the next card, until knobExit()
+    }
     if (!canvas_acquire(s_textCanvas, s_textBuf, "text")) return;
     lv_canvas_fill_bg(s_textCanvas, lv_color_black(), LV_OPA_TRANSP);
     // CUSTOM_HAS_RTEXT{n} (whether this banner exists at all) and each FONT stay
@@ -3064,6 +3179,9 @@ static void refresh_custom_text() {}
 #endif
 
 void select(int idx) {
+    if (s_photoPanel) close_photo();
+    s_selectionRoutePending = false;
+    s_selectionRouteCall[0] = 0;
     if (idx < 0 || idx >= (int)s_acs.size()) s_selHex.clear();
     else s_selHex = s_acs[idx].hex;
     if (s_acLayer) lv_obj_invalidate(s_acLayer);
@@ -3100,9 +3218,11 @@ void selectNext(int dir) {
 // any more) — this reset has to run every entry regardless, or stale selection state
 // from a prior visit could leak through in a stock (no custom design) build.
 void knobEnter() {
+    s_canvasActive = true;
     refreshCustomStyle();
     s_selectMode = false;
     select(-1);
+    flow_redraw_all(); // restore trails after the previous exit released their canvas
     app_shell::setCaptured(false);
     // Data now polls continuously from boot (see main.cpp's adsb_task), so this banner can
     // already be primed to fire the instant the screen appears: staleness kept accumulating
@@ -3131,11 +3251,46 @@ void knobEnter() {
 // theme-cycle gesture was a hidden, undiscoverable knob-press with no Settings entry
 // at all, confusingly named the same as actual Launch Kit themes. Retired in favor of
 // the real Settings "Design" picker (theme_select) — see its header for why.
-// Nothing. Selecting an aircraft is what a TURN does now, so the button has no job on this
-// screen, and giving it a second way to do the same thing would only invite the question of
-// what the difference is. Left as an empty handler rather than unregistered so the shape of
-// the app table stays readable.
-void knobPress() {}
+// Press a selected flight to view its photo; press again to return to its card.
+void knobPress() {
+    if (s_photoPanel) { close_photo(); return; }
+    AcInfo in;
+    if (!s_selectMode || !selected(in) || !in.hex[0]) return;
+    s_photoPixels = (lv_color_t *)heap_caps_malloc(232 * 156 * sizeof(lv_color_t), MALLOC_CAP_SPIRAM);
+    s_photoPanel = lv_obj_create(s_parent);
+    lv_obj_remove_style_all(s_photoPanel);
+    // A compact overlay on the existing radar, leaving the scope visible around it.
+    lv_obj_set_size(s_photoPanel, 256, 282);
+    lv_obj_center(s_photoPanel);
+    lv_obj_set_style_radius(s_photoPanel, 12, 0);
+    lv_obj_set_style_border_width(s_photoPanel, 1, 0);
+    lv_obj_set_style_border_color(s_photoPanel, lv_color_hex(0x808080), 0);
+    lv_obj_set_style_bg_color(s_photoPanel, lv_color_black(), 0);
+    lv_obj_set_style_bg_opa(s_photoPanel, LV_OPA_COVER, 0);
+    lv_obj_clear_flag(s_photoPanel, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_move_foreground(s_photoPanel);
+    auto label = [](lv_obj_t *parent, const char *text, int y) {
+        lv_obj_t *o = lv_label_create(parent);
+        lv_label_set_text(o, text);
+        lv_obj_set_width(o, 240);
+        lv_obj_set_style_text_align(o, LV_TEXT_ALIGN_CENTER, 0);
+        lv_obj_set_style_text_color(o, lv_color_white(), 0);
+        lv_obj_set_style_text_font(o, &lv_font_montserrat_14, 0);
+        lv_obj_align(o, LV_ALIGN_CENTER, 0, y);
+        return o;
+    };
+    label(s_photoPanel, in.call[0] ? in.call : in.hex, -117);
+    s_photoStatus = label(s_photoPanel, s_photoPixels ? "Loading photo..." : "Not enough memory for photo", 94);
+    lv_label_set_long_mode(s_photoStatus, LV_LABEL_LONG_SCROLL_CIRCULAR);
+    lv_obj_set_height(s_photoStatus, 20);
+    label(s_photoPanel, "Press to close", 124);
+    s_photoCanvas = lv_canvas_create(s_photoPanel);
+    lv_obj_add_flag(s_photoCanvas, LV_OBJ_FLAG_HIDDEN);
+    snprintf(s_photoHex, sizeof(s_photoHex), "%s", in.hex);
+    s_photoShown = !s_photoPixels;
+    s_photoStarted = lv_tick_get();
+    if (s_photoPixels) photo_request(in.hex, in.type);
+}
 
 // A turn selects. Straight in, with no press to arm it first.
 //
@@ -3148,6 +3303,7 @@ void knobPress() {}
 // an arbitrary index, so the box lands somewhere sensible. After SELECT_IDLE_MS of stillness
 // it clears itself; the Rock gesture leaves the app entirely and clears it on the way out.
 void knobTurn(int dir) {
+    if (s_photoPanel) close_photo();
     if (!s_selectMode) {
         if (countInRange() <= 0) return;   // an empty sky has nothing to select
         s_selectMode = true;
@@ -3161,6 +3317,15 @@ void knobTurn(int dir) {
 // onExit: free the decoded plate/overlay PSRAM and drop selection mode so the idle
 // timer can't fire against a scope that's no longer on screen.
 void knobExit() {
+    close_photo();
+    s_canvasActive = false; // background updates must not reacquire either canvas
+    s_selHex.clear();
+    s_selectionRoutePending = false;
+    s_selectionRouteCall[0] = 0;
+    canvas_release(s_textCanvas, s_textBuf);
+    canvas_release(s_flowCanvas, s_flowBuf);
+    if (s_cardObj) show(s_cardObj, false);
+    if (s_cardImg) show(s_cardImg, false);
     radar_sprite_release();
     s_selectMode = false;
     s_loadingPending = false;
