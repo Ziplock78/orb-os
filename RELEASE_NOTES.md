@@ -18,6 +18,13 @@ Rules for a section, all of them learned from what reads badly on that card:
 
 ---
 
+## 2.18.01
+
+- Rocking the knob to open the menu works the way you expect now. It used to want the knob to come to a stop first, and to see no more than two clicks in either direction, so most people rocked it over and over before anything happened. Any amount of turn counts now, as long as you change direction inside a quarter second. Fixed by Lerxtwood
+- The menu no longer scrolls itself the moment it opens, because it ignores the motion that brought it up
+
+---
+
 ## 2.18.00
 
 - The flight tracker is flying again. The aircraft feed stopped accepting ordinary
