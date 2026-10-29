@@ -34,7 +34,7 @@ namespace knob {
     // turn. Doesn't clear it: leave that to the normal main-loop takePress() dispatch.
     bool pendingPress();
 
-    // The Rock gesture: a leftward detent immediately followed by a rightward one.
+    // The Rock gesture: a quick reversal in either direction, regardless of tick count.
     //
     // Detected HERE rather than by comparing two timestamps in the caller, and the reason is
     // worth keeping. Two per-direction timestamps cannot answer "which came first" when both
@@ -46,15 +46,13 @@ namespace knob {
     // It also cannot be built on takeDelta(), which reports NET movement and so cancels this
     // motion to zero before anything sees it.
     //
-    // lastRockMs: millis() of the rightward detent that completed the most recent reversal,
+    // lastRockMs: millis() of the first opposite-direction detent in the most recent quick reversal,
     // or 0 if there has not been one. A caller acts on it once and remembers the value; a new
     // gesture produces a new timestamp.
     // lastRockGapMs: how long that reversal took, so the caller owns the "quickly" part.
     uint32_t lastRockMs();
     uint32_t lastRockGapMs();
-    // The committed detent count at the reversal, and the count now. input_router compares
-    // the two after a short settle: a flick stops, a scroll that merely changed direction
-    // keeps going, and only the flick is a rock.
+    // Committed detent positions, retained for diagnostics. Travel does not gate a rock.
     int32_t  lastRockDetent();
     int32_t  detentCount();
 

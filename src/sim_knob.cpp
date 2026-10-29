@@ -22,17 +22,12 @@ namespace {
 // ---- injection from the SDL event loop -------------------------------------
 // Mirrors knob.cpp exactly, including detecting the reversal in sequence rather than by
 // comparing timestamps, so the Rock behaves identically in the simulator.
-// The same rule as knob.cpp's on_detent, constant for constant: a reversal after a run of
-// at most ROCK_MAX_RUN detents, arriving between ROCK_MIN_GAP_MS and ROCK_QUICK_MS after
-// the last detent the other way, in either direction. Anything the sim decides differently
-// from the device is a bug in one of them.
-static constexpr int      ROCK_MAX_RUN    = 2;
+// Same timing as knob.cpp: either-direction reversal between 45 and 250 ms,
+// with no limit on the number of detents in either movement.
 static constexpr uint32_t ROCK_MIN_GAP_MS = 45;
 static constexpr uint32_t ROCK_QUICK_MS   = 250;
-static constexpr uint32_t ROCK_MAX_GAP_MS = 900;
 static int      s_lastDir    = 0;
 static uint32_t s_lastDirMs  = 0;
-static int      s_runLen     = 0;
 static int32_t  s_detent     = 0;
 static uint32_t s_rockMs     = 0;
 static uint32_t s_rockGapMs  = 0;
@@ -45,8 +40,7 @@ void simknob::injectTurn(int detents) {
     const uint32_t now = sim_now_ms();
     for (int k = 0; k < (detents > 0 ? detents : -detents); ++k) {
         s_detent += dir;
-        const bool fresh = (now - s_lastDirMs) > ROCK_MAX_GAP_MS;
-        if (!fresh && s_lastDir != 0 && dir != s_lastDir && s_runLen <= ROCK_MAX_RUN) {
+        if (s_lastDir != 0 && dir != s_lastDir) {
             const uint32_t gap = now - s_lastDirMs;
             if (gap >= ROCK_MIN_GAP_MS && gap <= ROCK_QUICK_MS) {
                 s_rockGapMs  = gap;
@@ -54,7 +48,6 @@ void simknob::injectTurn(int detents) {
                 s_rockMs     = now ? now : 1;
             }
         }
-        s_runLen    = (!fresh && dir == s_lastDir) ? s_runLen + 1 : 1;
         s_lastDir   = dir;
         s_lastDirMs = now;
     }
