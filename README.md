@@ -51,11 +51,10 @@ On a first flash you may need to hold **BOOT** then tap **RESET**. On first boot
 
 Most flashing happens from Orb Studio's **My Orb** tab instead, which writes the same images from the browser over Web Serial and checks each region back against the chip afterwards.
 
-Over the air, once it is on your WiFi:
-
-```bash
-pio run -e esp32-s3-amoled-175-ota -t upload   # sends to theorb.local
-```
+There is no update over WiFi. `ORB_OTA_ENABLED` is 0 in [`src/main.cpp`](src/main.cpp) and the
+partition table spends the second app partition on pre-baked theme art instead, so the
+`-ota` environment and `theorb.local/update` cannot work on a shipping Orb. Flashing is over
+USB, from Orb Studio or with the command above.
 
 ## Desktop simulator
 
@@ -77,7 +76,7 @@ It reads the same theme folders from `sim/sdcard/themes/`, makes the same networ
 
 ## Configuration
 
-`http://theorb.local/` on the same WiFi, or the device's IP, for centre point, range, brightness, sound, WiFi reset and an over-the-air firmware upload. Settings live in NVS under the `capsuleradar` namespace, which keeps its old name deliberately: renaming it would make every existing Orb look factory reset.
+`http://theorb.local/` on the same WiFi, or the device's IP, for centre point, range, brightness, sound and WiFi reset. Settings live in NVS under the `capsuleradar` namespace, which keeps its old name deliberately: renaming it would make every existing Orb look factory reset.
 
 ## Repo layout
 
