@@ -18,6 +18,14 @@ Rules for a section, all of them learned from what reads badly on that card:
 
 ---
 
+## 2.18.02
+
+- Your Orb can hold more than one WiFi network now, up to eight of them. It remembers every network you connect it to, so carrying it between home and work no longer means typing a password in again, and joining the second network no longer makes it forget the first. If the network it is on stops answering, it looks around after about a minute and joins whichever of your networks it can actually see. An Orb that never leaves the house behaves exactly as it did before
+- You still teach it a network by joining that network once, the same way a phone works. There is no way yet to add a network you are not standing next to
+- The firmware update page was telling you to look for a file that is not in the release. It now names the right one
+
+---
+
 ## 2.18.01
 
 - Rocking the knob to open the menu works the way you expect now. It used to want the knob to come to a stop first, and to see no more than two clicks in either direction, so most people rocked it over and over before anything happened. Any amount of turn counts now, as long as you change direction inside a quarter second. Fixed by Lerxtwood

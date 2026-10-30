@@ -18,6 +18,7 @@
 #include "theme_pull.h"
 #include "chime_library.h"
 #include "theme_style.h"
+#include "wifi_store.h"     // the saved-network list, for wifilist / wififorget
 #include "theme_font.h"    // ?orb fonts: which typefaces actually loaded
 #include "update_ui.h"
 #include "input_router.h"  // cmd_turn drives the real input path
@@ -487,6 +488,38 @@ void cmd_wifisaved() {
     out_send();
 }
 
+// Every network the Orb has been on, newest first. Names only, for the same reason
+// wifisaved gives none: the question somebody asks in a support thread is "which networks
+// does it know", and a password is not part of that answer. There is no way to read one
+// back out of an Orb over the wire, and that is deliberate.
+void cmd_wifilist() {
+    char ssid[wifi_store::SSID_LEN];
+    const int n = wifi_store::count();
+    out_reset();
+    out_str("{\"ok\":true,\"networks\":[");
+    for (int i = 0; i < n; ++i) {
+        if (!wifi_store::at(i, ssid, sizeof(ssid), nullptr, 0)) continue;
+        if (i) out_str(",");
+        out_json_string(ssid);
+    }
+    out_str("]}");
+    out_send();
+}
+
+// Forget one network by name, or all of them with "*". The Orb keeps whatever it is
+// associated with right now: this empties the list it draws on when it has to look around,
+// it does not disconnect anything. A network forgotten while in range is remembered again
+// the next time it is joined on purpose, which is the behaviour people expect of a phone.
+void cmd_wififorget(const char *arg) {
+    if (!arg || !arg[0]) { reply_error("usage: wififorget <ssid> | wififorget *"); return; }
+    bool did;
+    if (!strcmp(arg, "*")) { wifi_store::forget_all(); did = true; }
+    else                     did = wifi_store::forget(arg);
+    out_reset();
+    out_fmt("{\"ok\":true,\"forgot\":%s,\"left\":%d}", did ? "true" : "false", wifi_store::count());
+    out_send();
+}
+
 // The safety net for testing the one above. If a failed attempt does destroy the stored
 // network despite the backup, this puts it back from our own namespace without the owner
 // having to type a password again — which is the thing that has now cost him two evenings.
@@ -949,6 +982,8 @@ void dispatch(char *line) {
     else if (!strcmp(line, "setloc"))    cmd_setloc(arg);
     else if (!strcmp(line, "wifisaved")) cmd_wifisaved();
     else if (!strcmp(line, "wifirestore")) cmd_wifirestore();
+    else if (!strcmp(line, "wifilist"))  cmd_wifilist();
+    else if (!strcmp(line, "wififorget")) cmd_wififorget(arg);
     else if (!strcmp(line, "sweepms"))   cmd_sweepms(arg);
     else if (!strcmp(line, "interpms")) cmd_interpms(arg);
     else if (!strcmp(line, "glide"))    cmd_glide(arg);

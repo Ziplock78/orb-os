@@ -61,6 +61,7 @@
 #include "intel_view.h"
 #include "ticker_view.h"
 #include "ticker.h"              // world headlines, read through the gateway
+#include "wifi_store.h"             // every network that has worked, for an Orb that gets carried
 #include <set>                       // audio: track which contacts are in range
 #include <string>
 #include <WiFiManager.h>             // captive portal
@@ -248,10 +249,15 @@ static void applyPolledAircraft(std::vector<Aircraft> &fresh, uint32_t nowMs) {
     for (auto &kv : g_acTable) g_aircraft.push_back(kv.second);
 }
 
+// Defined below with the other WiFi helpers. Declared here because adsb_task calls it.
+static bool wifi_try_known_network();
+
 // ---- networking task (core 0): fetch + parse, never touches the display ----
 static void adsb_task(void*) {
     std::vector<Aircraft> fresh;
     bool wasConnected = false;
+    uint32_t wifiRetryAt = 0;
+    uint8_t  wifiTries   = 0;      // goes at the stored network before looking elsewhere
     uint32_t lastPoll = 0;
     uint32_t adsbBackoffMs = 0;                // extra delay after feed failures (exponential, 30s cap)
     uint32_t nextWeatherAt = UINT32_MAX;       // armed five seconds after WiFi connects
@@ -299,14 +305,37 @@ static void adsb_task(void*) {
             diag::log("wifi lost");
         }
         if (!conn) {
-            static uint32_t s_wifiRetryAt = 0;
-            if (millis() - s_wifiRetryAt > 20000UL) {
-                s_wifiRetryAt = millis();
-                Serial.println("[wifi] disconnected — reconnecting");
-                WiFi.reconnect();
+            if (millis() - wifiRetryAt > 20000UL) {
+                wifiRetryAt = millis();
+                // The network the owner last chose gets the first three goes, a full minute.
+                // A router rebooting is much the commoner reason for a drop than the Orb
+                // having been picked up and carried somewhere else, reconnect() costs
+                // nothing, and a scan costs a couple of seconds of radio time.
+                if (wifiTries < 3) {
+                    wifiTries++;
+                    Serial.println("[wifi] disconnected, reconnecting");
+                    WiFi.reconnect();
+                } else {
+                    // A minute gone on a network that is not answering. Look around for one
+                    // the Orb has been on before. If none is in range this falls back to
+                    // asking the stored network again, and the minute starts over, so an Orb
+                    // that has simply lost its router behaves exactly as it did before.
+                    wifiTries = 0;
+                    if (!wifi_try_known_network()) {
+                        Serial.println("[wifi] disconnected, reconnecting");
+                        WiFi.reconnect();
+                    }
+                }
             }
         }
         if (conn && !wasConnected) {
+            wifiTries = 0;               // it answered; the stored network earns its minute back
+            // REMEMBER IT. Every successful association passes through here, whichever route
+            // opened it: autoConnect at boot, the captive portal, the Settings keyboard, or
+            // the cable. Putting the write here rather than beside each of those callers is
+            // deliberate. Both of the credential faults recorded in this file came from a
+            // rule that lived next to one caller and was missed by the next one added.
+            wifi_store::remember_current();
             // disable WiFi modem power-save: on a mains-powered desk gadget it just adds latency
             // and makes RSSI bounce (feed goes stale -> amber bars) even sitting next to the router.
             WiFi.setSleep(false);
@@ -1620,6 +1649,76 @@ void host_wifi_connected_reboot() {
     p.putBool("needsWifiSetup", false);
     p.end();
     g_rebootAtMs = millis() + 1500;
+}
+
+// Join a network the Orb has been on before, when the one it is holding has gone quiet.
+// Returns true only if it is now associated with a different network than it was.
+//
+// This is what makes an Orb carried from home to work find work's network by itself,
+// instead of sitting on "No WiFi" until somebody opens Settings. UX-025 already expects
+// the Orb to move and show the sky of wherever it is; until now the moving part only
+// worked if you set the new network up by hand each time.
+//
+// Everything the single-network path learned still applies, so the attempt goes through
+// host_wifi_connect(), which backs the stored credentials up first, and the failure path
+// puts them back. A remembered network whose password has since changed at the router
+// therefore cannot cost the owner the network they already had, which is the fault this
+// file records twice.
+static bool wifi_try_known_network() {
+    if (wifi_store::count() < 1) return false;
+
+    // Somebody else is already using the radio: the Settings screen scans asynchronously
+    // while its list is open. Asking the driver rather than asking Settings is on purpose.
+    // A flag owned by the UI can be left set by a page that was navigated away from
+    // mid-scan, and a stuck flag here would disable roaming for the life of the boot,
+    // silently. The driver's own answer cannot get stuck.
+    if (WiFi.scanComplete() == WIFI_SCAN_RUNNING) return false;
+
+    const int16_t found = WiFi.scanNetworks(false /*blocking*/, false /*no hidden*/);
+    if (found <= 0) { WiFi.scanDelete(); return false; }
+
+    // Strongest first. The scan order is not promised to be sorted, and picking by signal
+    // is the difference between joining the network in this room and one through two walls.
+    char bestSsid[wifi_store::SSID_LEN] = "";
+    char bestPass[wifi_store::PASS_LEN] = "";
+    char pass[wifi_store::PASS_LEN];
+    int8_t bestRssi = -127;
+    bool   haveBest = false;
+    for (int i = 0; i < found; ++i) {
+        const String ssid = WiFi.SSID(i);
+        if (ssid.length() == 0) continue;
+        if (!wifi_store::password_for(ssid.c_str(), pass, sizeof(pass))) continue;  // not ours
+        const int8_t r = (int8_t)WiFi.RSSI(i);
+        if (haveBest && r <= bestRssi) continue;
+        haveBest = true;
+        bestRssi = r;
+        snprintf(bestSsid, sizeof(bestSsid), "%s", ssid.c_str());
+        memcpy(bestPass, pass, sizeof(bestPass));
+    }
+    WiFi.scanDelete();
+    if (!haveBest) return false;
+
+    // Already the network we are failing on. Rejoining it is what WiFi.reconnect() above
+    // has been doing for the last minute, so there is nothing here that has not been tried.
+    if (WiFi.SSID() == String(bestSsid)) return false;
+
+    Serial.printf("[wifi] '%s' is in range and known (%d dBm); switching to it\n", bestSsid, bestRssi);
+    host_wifi_connect(bestSsid, bestPass);      // backs the stored network up before trying
+
+    const uint32_t until = millis() + 12000;    // the same patience autoConnect is given
+    while (millis() < until) {
+        const int st = host_wifi_connect_status();
+        if (st == 1) {
+            host_wifi_commit_credentials(bestSsid, bestPass);
+            Serial.printf("[wifi] joined '%s'\n", bestSsid);
+            return true;
+        }
+        if (st == 2) break;
+        delay(100);
+    }
+    Serial.printf("[wifi] '%s' did not come up; putting the previous network back\n", bestSsid);
+    host_wifi_restore_saved();
+    return false;
 }
 
 // ----------------------------- WiFi setup over the cable ------------------------
