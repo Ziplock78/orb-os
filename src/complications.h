@@ -16,6 +16,7 @@
 // side without the other is the bug this is shaped to make loud, so tests/complications_test.cpp
 // pins the values both halves have to agree on.
 #include <stdint.h>
+#include <string.h>
 #include <math.h>
 #include <time.h>
 
@@ -125,6 +126,43 @@ inline float turn_of(Source s, Unit u, float lo, float hi, float v) {
 // other way, which is a real gauge and not a mistake, so there is no ordering to enforce.
 inline float deg(float startDeg, float endDeg, float turn) {
     return startDeg + turn * (endDeg - startDeg);
+}
+
+// THE NAMES, because clock_style.json carries strings and not indices.
+//
+// A number would be smaller and would be the wrong choice. The sources are a list two
+// repositories have to agree on, and the failure mode of an index is silent: insert one
+// in the middle on the Studio side and every theme already on an SD card starts reading
+// the wrong dial, with nothing anywhere saying so. A name that no longer exists falls
+// through to `false` here and the subdial simply does not draw, which is a fault somebody
+// can see. Spellings are exactly the keys of COMPLICATION_SOURCES and the strings in
+// COMPLICATION_UNITS; they are the contract, so they are not tidied.
+inline bool source_from_name(const char *n, Source &out) {
+    if (!n) return false;
+    if (!strcmp(n, "date"))     { out = Source::Date;     return true; }
+    if (!strcmp(n, "day"))      { out = Source::Day;      return true; }
+    if (!strcmp(n, "month"))    { out = Source::Month;    return true; }
+    if (!strcmp(n, "hour24"))   { out = Source::Hour24;   return true; }
+    if (!strcmp(n, "moon"))     { out = Source::Moon;     return true; }
+    if (!strcmp(n, "temp"))     { out = Source::Temp;     return true; }
+    if (!strcmp(n, "humidity")) { out = Source::Humidity; return true; }
+    if (!strcmp(n, "wind"))     { out = Source::Wind;     return true; }
+    return false;
+}
+
+// An unknown or absent unit is None, not a failure: every source except temperature and
+// wind has no unit to name, and a dial whose unit went missing still points somewhere
+// sensible because the base unit is what the Orb measures in anyway.
+inline Unit unit_from_name(const char *n) {
+    if (!n || !n[0])        return Unit::None;
+    if (!strcmp(n, "C"))    return Unit::C;
+    if (!strcmp(n, "F"))    return Unit::F;
+    if (!strcmp(n, "%"))    return Unit::Pct;
+    if (!strcmp(n, "km/h")) return Unit::Kmh;
+    if (!strcmp(n, "mph"))  return Unit::Mph;
+    if (!strcmp(n, "m/s"))  return Unit::Ms;
+    if (!strcmp(n, "kn"))   return Unit::Kn;
+    return Unit::None;
 }
 
 } // namespace comp

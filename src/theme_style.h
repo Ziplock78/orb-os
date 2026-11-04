@@ -45,6 +45,7 @@
 //     switches (CUSTOM_HAS_MENU, CUSTOM_HAS_SETTINGS, CUSTOM_HAS_RADAR,
 //     CUSTOM_HAS_RADAR_STYLE) and the menu's three per-slot gates. Those are the next
 //     migration, not a standing limitation.
+#include <math.h>   // NAN, for a scale the theme did not set
 #include <lvgl.h>
 
 namespace theme_style {
@@ -406,6 +407,28 @@ namespace theme_style {
 //      It is an ordinary TextSlot, so it has every control the other lines have, including
 //      the pill, the arc and ALL CAPS. An Orb below this level ignores it entirely.
 //
+//  58  subdials: up to six small dials inside the main one, each with its own hand
+//      pointing at the date, the day, the month, the hour of a 24 hour dial, the age of the
+//      moon, the temperature, the humidity or the wind.
+//
+//      The DIVISION OF LABOUR is the whole design. A subdial's face, its ring, its ticks,
+//      its printed numbers and its label, never moves, so Studio bakes all of it into the
+//      plate art exactly as it already bakes the rest of the dial. Nothing of it reaches
+//      the device, and the device spends nothing drawing it. What travels here is only what
+//      changes: where the hand turns, how far round, and what it is pointing at.
+//
+//      That is not tidiness, it is the sweep. Flattening static layers into the plate is
+//      the known fix for this clock's frame rate (see clock_view.cpp and the sweep work of
+//      2026-08), and six live faces redrawn every frame is that problem six times over. A
+//      theme is allowed six hands because a hand is a line and a dot.
+//
+//      The arithmetic that turns a reading into an angle lives in complications.h, mirrored
+//      from Studio's theme-forge.ts and pinned by tests/complications_test.cpp against
+//      values dumped from that file, so the two halves cannot drift quietly.
+//
+//      An Orb below this level draws the baked faces with no hands on them. That is a dial
+//      with a missing hand, which is worse than nothing, so Studio gates the controls on
+//      this level rather than letting the design look installed.
 //  57  how fast the tick beats: 1, 2, 4, 5, 6 or 8 times a second (18,000 beats an hour
 //      is five a second, 21,600 is six, 28,800 is eight). A mechanical watch runs at 2 or 4
 //      and that beat is what its sweeping second hand is made of; played back at 1 it is the
@@ -424,7 +447,7 @@ namespace theme_style {
 //      third of the hand's smoothness for as long as it runs. Holding on frame nought and
 //      playing now and then costs exactly nothing in between, because a still background is
 //      the case the cache was built for. Zion's design, 2026-09-28.
-constexpr int THEME_CAPS = 57;
+constexpr int THEME_CAPS = 58;
 
 // The most extra background frames a theme may name. Not a storage limit, which Studio
 // enforces in bytes because only Studio knows the resolution: this is the ceiling on how
@@ -474,6 +497,46 @@ struct Hand {
     int  blend   = 0;
 };
 
+// The most subdials one theme may carry. Six, matching Studio's COMPLICATION_SLOTS.
+//
+// Not a storage limit: each one costs a line and a dot per frame, and the ceiling exists
+// so that a hand-written theme file cannot ask the clock to draw an unbounded number of
+// them on the one screen whose frame rate is already the thing being protected.
+constexpr int COMPLICATION_MAX = 6;
+
+// One subdial. THEME_CAPS 58.
+//
+// Everything static about it is already in the plate art, so this is the moving half and
+// nothing else: where the hand turns, how far round it may travel, and which reading it
+// is pointing at. See complications.h for the arithmetic and the source numbering, which
+// is shared with Studio and must not be renumbered on one side alone.
+struct Complication {
+    // comp::Source. 0 date, 1 day, 2 month, 3 hour24, 4 moon, 5 temp, 6 humidity, 7 wind.
+    uint8_t  source = 0;
+    // comp::Unit, for the two readings that have anywhere to go. The scale below is
+    // written in THIS unit, because it is the unit the designer was looking at when they
+    // dragged its ends.
+    uint8_t  unit   = 0;
+    int      x      = 233, y = 320;   // the subdial's centre, on the 466x466 dial
+    int      r      = 46;             // its radius, which the hand's length is a share of
+    // The ends of the scale. NAN means the theme did not say, and comp::turn_of falls back
+    // to the whole of what the source can read: the same fallback Studio uses, so a dial
+    // with no scale set still agrees between the preview and the glass.
+    float    lo = NAN, hi = NAN;
+    // Degrees clockwise from twelve. end below start runs the hand the other way, which is
+    // a real gauge, so there is no ordering to enforce here or anywhere downstream.
+    float    startDeg = 0.0f, endDeg = 360.0f;
+    uint32_t handColor  = 0xE8EDF2;
+    int      handWidth  = 3;
+    // A SHARE of r, not pixels, so resizing a subdial keeps its proportions instead of
+    // leaving a short hand in a big dial. Studio's slider runs 0.2 to 1.
+    float    handLength = 0.78f;
+    int      handOpa    = 255;        // 0..255 on the wire, like every other opacity
+    uint32_t capColor   = 0xE8EDF2;
+    int      capRadius  = 3;          // 0 draws no cap at all
+    int      capOpa     = 255;
+};
+
 struct Clock {
     uint32_t  bg = 0x000000;
     // Rotate the whole background plate in lockstep with a hand: 0 none, 1 hour,
@@ -508,6 +571,11 @@ struct Clock {
     ClockText text1;
     ClockText text2;
     Hand      hand[5];                        // 0=hour 1=minute 2=second 3=static1 4=static2
+    // THEME_CAPS 58. Subdials, in the order Studio wrote them. compN is how many of the
+    // six slots the theme actually filled, so the draw loop never reads a default-built
+    // slot and puts a hand at the centre of a dial that does not exist.
+    Complication complication[COMPLICATION_MAX];
+    int          compN = 0;
     int       order[5] = { 3, 4, 0, 1, 2 };   // back-to-front draw order, kind indices
     int       orderN   = 5;
     // Shadows cast by ONE light that does not move with the hands.

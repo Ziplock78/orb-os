@@ -1,4 +1,5 @@
 #include "theme_style.h"
+#include "complications.h"   // the subdial source/unit names, shared with Studio
 #include "theme_sd.h"
 #include "theme_select.h"
 #include <ArduinoJson.h>
@@ -578,6 +579,50 @@ void load() {
                     s_clock.shadowDX = sh["dx"] | 0;
                     s_clock.shadowDY = sh["dy"] | 0;
                 }
+            }
+            // THEME_CAPS 58. Subdials, and only the moving half of them: the ring, the
+            // marks, the printed scale and the label are already in the plate art, baked
+            // there by Studio exactly as the rest of the dial is. What arrives here is
+            // where a hand turns, how far round it may go, and what it points at.
+            //
+            // A slot naming a source this firmware has never heard of is SKIPPED, not
+            // defaulted. Falling back to the first source would put a confident hand on a
+            // dial printed for something else, and nothing on the screen would say so;
+            // a dial with no hand at least looks like what it is.
+            JsonVariantConst comps = doc["complications"];
+            if (comps.is<JsonArrayConst>()) {
+                int n = 0;
+                for (JsonVariantConst item : comps.as<JsonArrayConst>()) {
+                    if (n >= theme_style::COMPLICATION_MAX) break;
+                    comp::Source src;
+                    if (!comp::source_from_name(item["source"] | "", src)) continue;
+                    theme_style::Complication &c = s_clock.complication[n];
+                    c.source = (uint8_t)src;
+                    c.unit   = (uint8_t)comp::unit_from_name(item["unit"] | "");
+                    c.x      = item["x"] | c.x;
+                    c.y      = item["y"] | c.y;
+                    c.r      = clampi(item["r"] | c.r, 4, 233);
+                    // Absent leaves NAN, which comp::turn_of reads as "the whole of what
+                    // this source can measure" rather than as zero.
+                    if (item["min"].is<float>()) c.lo = item["min"].as<float>();
+                    if (item["max"].is<float>()) c.hi = item["max"].as<float>();
+                    c.startDeg   = item["startDeg"] | c.startDeg;
+                    c.endDeg     = item["endDeg"]   | c.endDeg;
+                    c.handColor  = item["handColor"] | c.handColor;
+                    c.handWidth  = clampi(item["handWidth"] | c.handWidth, 1, 20);
+                    c.handLength = item["handLength"] | c.handLength;
+                    // Studio's slider stops at 1. The ceiling here is looser on purpose:
+                    // this is a guard against a hand-written file, not a second opinion
+                    // about a design, and a hand slightly over its ring is a watch.
+                    if (c.handLength < 0.05f) c.handLength = 0.05f;
+                    if (c.handLength > 1.5f)  c.handLength = 1.5f;
+                    c.handOpa    = clampi(item["handOpa"] | c.handOpa, 0, 255);
+                    c.capColor   = item["capColor"] | c.capColor;
+                    c.capRadius  = clampi(item["capRadius"] | c.capRadius, 0, 20);
+                    c.capOpa     = clampi(item["capOpa"] | c.capOpa, 0, 255);
+                    n++;
+                }
+                s_clock.compN = n;
             }
         }
     }
