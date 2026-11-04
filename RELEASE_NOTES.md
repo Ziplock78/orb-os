@@ -18,6 +18,14 @@ Rules for a section, all of them learned from what reads badly on that card:
 
 ---
 
+## 2.19.00
+
+- Subdials. A clock can carry up to six small dials inside the main one, each with its own hand pointing at the date, the day, the month, the hour on a 24 hour dial, the age of the moon, the temperature, the humidity or the wind speed. Design them in Orb Studio under the clock
+- Their faces are printed into the dial art, so the hands cost the clock almost nothing and the sweeping second hand is as smooth as it was
+- The printed reading under a dial, the line that says what it currently is in words, is not drawn yet. The hands move; the numbers under them come next
+
+---
+
 ## 2.18.01
 
 - Rocking the knob to open the menu works the way you expect now. It used to want the knob to come to a stop first, and to see no more than two clicks in either direction, so most people rocked it over and over before anything happened. Any amount of turn counts now, as long as you change direction inside a quarter second. Fixed by Lerxtwood
