@@ -62,6 +62,8 @@ static uint32_t micros() {
 // on the tick after it arrives.
 #include "orb_time.h"   // one honest read of the wall clock; NOT Arduino's retrying getLocalTime
 #include "orb_text_case.h"   // ALL CAPS on a finished line, THEME_CAPS 53
+#include "complications.h"  // THEME_CAPS 58: where a subdial's hand points
+#include "weather.h"        // ...and the live reading three of them point at
 
 static bool s_noTime = false;
 
@@ -175,11 +177,12 @@ static void draw_hand_edged(float pxc, float pyc, float angDeg, float len, float
     draw_hand_at(pxc, pyc, angDeg, len,        tail,        hw,        fill);
 }
 
-static void draw_disc(float ccx, float ccy, float r, lv_color_t col) {
+static void draw_disc(float ccx, float ccy, float r, lv_color_t col,
+                      lv_opa_t opa = LV_OPA_COVER) {
     lv_draw_rect_dsc_t d;
     lv_draw_rect_dsc_init(&d);
     d.bg_color = col;
-    d.bg_opa   = LV_OPA_COVER;
+    d.bg_opa   = opa;
     d.radius   = LV_RADIUS_CIRCLE;
     lv_canvas_draw_rect(s_canvas, (lv_coord_t)lroundf(ccx - r), (lv_coord_t)lroundf(ccy - r),
                         (lv_coord_t)lroundf(2*r), (lv_coord_t)lroundf(2*r), &d);
@@ -209,6 +212,63 @@ static void draw_needle_at(float pxc, float pyc, float angDeg, float len, float 
     ld.round_start = 1;
     ld.round_end   = 1;
     lv_canvas_draw_line(s_canvas, sp, 2, &ld);
+}
+
+// ---- SUBDIALS (THEME_CAPS 58) -----------------------------------------------
+//
+// The hands, and only the hands. A subdial's ring, its marks, its printed scale and its
+// label do not move, so Studio bakes every one of them into the plate art exactly as it
+// bakes the rest of the dial; by the time this runs they are already on the canvas and
+// cost nothing. What is left is a line and a dot.
+//
+// WHY THIS IS DRAWN WITH THE DIAL AND NOT WITH THE HANDS. Called before the hand loop, so
+// on a sweeping design these land inside s_under and a sweep frame restores them for free
+// instead of redrawing six hands sixty times a second. That is only honest because of what
+// they read: the slowest moves once a day, and the fastest, a 24 hour dial, turns a quarter
+// of a degree a minute. cache_minutes_allowed() already rebuilds s_under at least once a
+// minute for the minute hand's own creep, so a subdial has no staleness left to pay for.
+static void draw_complications(const struct tm *ti) {
+    const theme_style::Clock &cs = theme_style::clock();
+    if (cs.compN <= 0) return;
+
+    // One reading, asked for once, for however many dials point at it. An Orb that has no
+    // weather yet keeps comp::Reading's defaults rather than skipping those dials: a
+    // thermometer resting at a plausible value is a clock that has not warmed up, and a
+    // gap where a hand should be is a clock that looks broken.
+    comp::Reading rd;
+    WeatherSnapshot w;
+    if (weather_get(w)) {
+        rd.has      = true;
+        rd.temp     = w.tempC;
+        rd.humidity = (float)w.humidity;
+        rd.wind     = w.windKmh;
+    }
+
+    // The calendar dials read the local tm the face is already drawn from, so a subdial can
+    // never disagree with the date banner beside it. The moon alone takes absolute time,
+    // because its age is counted from a fixed instant in UTC and a timezone would shift it.
+    const time_t utc = time(nullptr);
+
+    for (int i = 0; i < cs.compN && i < theme_style::COMPLICATION_MAX; ++i) {
+        const theme_style::Complication &c = cs.complication[i];
+        const comp::Source src = (comp::Source)c.source;
+        const comp::Unit   un  = (comp::Unit)c.unit;
+        const float v    = comp::value(src, un, *ti, utc, rd);
+        const float turn = comp::turn_of(src, un, c.lo, c.hi, v);
+        const float ang  = comp::deg(c.startDeg, c.endDeg, turn);
+
+        // Length is a share of the radius, so a resized subdial keeps its proportions.
+        const float len  = (float)c.r * c.handLength;
+        const float tail = len * 0.18f;   // the stub behind the pivot every watch hand has
+        if (c.handOpa > 0 && len >= 1.0f)
+            draw_needle_at((float)c.x, (float)c.y, ang, len, tail,
+                           (float)c.handWidth, lv_color_hex(c.handColor),
+                           (lv_opa_t)c.handOpa);
+        // Last, so the cap covers the tail rather than the tail crossing the cap.
+        if (c.capRadius > 0 && c.capOpa > 0)
+            draw_disc((float)c.x, (float)c.y, (float)c.capRadius,
+                      lv_color_hex(c.capColor), (lv_opa_t)c.capOpa);
+    }
 }
 
 // ---- IMPERIAL face ----------------------------------------------------------
@@ -1673,6 +1733,9 @@ static void compose_custom(const struct tm *ti, int stopKind, bool withOverlay) 
     s_phPlate += (float)(micros() - ph0) / 1000.0f;
     const uint32_t ph1 = micros();
 #endif
+    // Subdials sit on the dial, under everything the dial carries: the banners print over
+    // them and the main hands sweep across them, which is the order a real watch is built in.
+    draw_complications(ti);
     if (!theme_style::clock().textOverHands) draw_banners();
 #if defined(ESP_PLATFORM)
     s_phText += (float)(micros() - ph1) / 1000.0f;
