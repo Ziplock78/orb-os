@@ -18,11 +18,18 @@ Rules for a section, all of them learned from what reads badly on that card:
 
 ---
 
+## 2.19.01
+
+- The line under a subdial is drawn now. A dial can print what it currently reads, in words, in your theme's own typeface: the temperature, the humidity, the day, the phase of the moon. Write your own wording for it if you like, or leave it and get the plain reading
+- A subdial can also be nothing but that line. No ring, no marks, no hand, just the number where you put it, for a face whose artwork already says what it is
+- Each subdial carries its own typeface, weight and size, so one can be small and quiet under a dial while another is the whole complication
+
+---
+
 ## 2.19.00
 
 - Subdials. A clock can carry up to six small dials inside the main one, each with its own hand pointing at the date, the day, the month, the hour on a 24 hour dial, the age of the moon, the temperature, the humidity or the wind speed. Design them in Orb Studio under the clock
 - Their faces are printed into the dial art, so the hands cost the clock almost nothing and the sweeping second hand is as smooth as it was
-- The printed reading under a dial, the line that says what it currently is in words, is not drawn yet. The hands move; the numbers under them come next
 
 ---
 
