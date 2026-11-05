@@ -447,7 +447,27 @@ namespace theme_style {
 //      third of the hand's smoothness for as long as it runs. Holding on frame nought and
 //      playing now and then costs exactly nothing in between, because a still background is
 //      the case the cache was built for. Zion's design, 2026-09-28.
-constexpr int THEME_CAPS = 58;
+//  59  the line a subdial prints under itself: what it reads right now, in words, in the
+//      theme's own typeface. The other half of 58, and the half Studio's preview drew
+//      while the glass drew nothing.
+//
+//      A subdial may now also BE that line and nothing else. A readout has no ring, no
+//      marks and no hand: Studio leaves all of it out of the plate and the device draws no
+//      needle, because a pointer on a face with nothing printed on it points at nothing.
+//      Zion, 2026-10-16: "they don't want it in a dial form. They want it in text number
+//      form."
+//
+//      Six font slots come with it, font_comp1.bin through font_comp6.bin, numbered by a
+//      subdial's position in the list the theme SENDS rather than its slot in the editor.
+//      One face each rather than one shared, because Studio puts a typeface, a weight and
+//      a size on every subdial separately and a shared face would leave five of those six
+//      controls doing nothing. A theme using two subdials ships two files.
+//
+//      An Orb below this level draws the dial and its hand exactly as 58 did, and prints
+//      no line. A READOUT, though, is a subdial it cannot draw at all: Studio has baked no
+//      face for it and the older firmware prints no words, so nothing appears. That is why
+//      this is a level and not a quiet addition.
+constexpr int THEME_CAPS = 59;
 
 // The most extra background frames a theme may name. Not a storage limit, which Studio
 // enforces in bytes because only Studio knows the resolution: this is the ceiling on how
@@ -535,6 +555,37 @@ struct Complication {
     uint32_t capColor   = 0xE8EDF2;
     int      capRadius  = 3;          // 0 draws no cap at all
     int      capOpa     = 255;
+
+    // THEME_CAPS 59. THE PRINTED READING, the line that says what the dial says now.
+    //
+    // Everything here defaults to drawing NOTHING, which is what every theme already on a
+    // card means by saying nothing. readingOn is false although Studio's own default is
+    // true: a theme written before this level carries no reading keys at all, and reading
+    // its silence as "yes please" would put a line of type on hundreds of faces that were
+    // laid out without one.
+    bool     readingOn   = false;
+    // Whether the unit is printed after the number. Only used by the plain reading: a
+    // format string that wants the unit asks for {unit} itself.
+    bool     readingUnit = true;
+    // The format, in the same braces the Weather and Surveillance screens already use.
+    // Empty means the plain reading, which is what a dial shows under it. 48 characters is
+    // Studio's own cap on the field, plus the terminator.
+    char     readingText[49] = "";
+    // The word printed on the little dial. Studio BAKES this into clock_plate.png and does
+    // not need it at draw time, so it travels only because {label} is a token the editor
+    // offers: a token the preview can expand and the glass cannot is the same quiet lie as
+    // a source that exists on one side of the wire.
+    char     label[33] = "";
+    // Pixels from the MIDDLE of this subdial, positive right and down. Pixels rather than a
+    // share of the radius because the line is usually placed against artwork already
+    // printed on the face, and a share would move it when the dial was resized.
+    int      readingX = 0, readingY = 18;
+    uint32_t readingColor = 0xE8EDF2;
+    int      readingOpa   = 255;
+    // A READOUT, not a dial: no hand and no cap, and Studio has already left the ring, the
+    // marks and the printed scale out of the plate. The reading IS the complication.
+    // Default false, so a theme that says nothing is the dial it has always been.
+    bool     textForm = false;
 };
 
 struct Clock {

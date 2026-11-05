@@ -80,7 +80,12 @@ enum Slot { S_CLOCK1, S_CLOCK2, S_MENU_CUR, S_MENU_PREV, S_MENU_NEXT, S_SETTINGS
             // slotted beside S_RADAR4 because the order is the accessor order and the file
             // list below is positional: inserting in the middle would silently hand every
             // later slot the wrong face.
-            S_RADAR_LOC, S_COUNT };
+            S_RADAR_LOC,
+            // The six subdial readings, THEME_CAPS 59. Appended, like S_RADAR_LOC above
+            // and for the same reason. Six because Studio offers six subdials and each
+            // carries its own typeface, weight and size control; a theme using two ships
+            // two files and nothing for the other four.
+            S_COMP1, S_COMP2, S_COMP3, S_COMP4, S_COMP5, S_COMP6, S_COUNT };
 
 // Asset names Launch Kit ships. Kept here rather than derived, so the contract between
 // the two programs is one readable list instead of a naming convention nobody can see.
@@ -105,6 +110,12 @@ const char *SLOT_FILE[S_COUNT] = {
     // The location line's own face, THEME_CAPS 54, so it is a text box like any other
     // rather than one that borrows a readout's typeface.
     "font_radar_loc.bin",
+    // One per subdial, THEME_CAPS 59, numbered by the subdial's position in the list the
+    // theme actually SENDS rather than by its slot in the editor. Studio derives both the
+    // array and these names from one filtered list, so a dial switched off cannot shift
+    // the face of the one after it.
+    "font_comp1.bin", "font_comp2.bin", "font_comp3.bin",
+    "font_comp4.bin", "font_comp5.bin", "font_comp6.bin",
 };
 
 const lv_font_t *s_font[S_COUNT] = { nullptr };
@@ -138,6 +149,14 @@ const lv_font_t *compiled(Slot s) {
 #endif
 #if CUSTOM_HAS_RTEXT4
         case S_RADAR4: return CUSTOM_RTEXT4_FONT;
+#endif
+#if CUSTOM_HAS_TEXT1
+        // A subdial that ships no face of its own borrows the clock's first banner, which
+        // is the nearest thing a compiled build has to this theme's small type. Through
+        // LV_FONT_DEFAULT it would have been Montserrat on a face designed in anything
+        // else, which reads as a bug rather than as a fallback.
+        case S_COMP1: case S_COMP2: case S_COMP3:
+        case S_COMP4: case S_COMP5: case S_COMP6: return CUSTOM_TEXT1_FONT;
 #endif
         default: break;
     }
@@ -294,6 +313,22 @@ const lv_font_t *weather_text(int idx) {
 // A converted face is baked at ONE size, so a screen that got a theme font must not then
 // apply a size control on top of it: the glyphs simply are that size. Same contract the
 // Intel and Ticker screens already keep, and the reason both have a predicate like this.
+// The subdial readings, THEME_CAPS 59. Clamped like radar_text and weather_text: the
+// index is a position in the theme's own list and a malformed file must not read past
+// the table.
+const lv_font_t *comp_text(int idx) {
+    if (idx < 0) idx = 0;
+    if (idx > 5) idx = 5;
+    return get((Slot)(S_COMP1 + idx));
+}
+
+// Whether THIS theme's own face is what draws. A caller honouring a size control has to
+// ask first: a loaded face is baked at one size and ignores any size asked of it after.
+bool comp_has_font(int idx) {
+    if (idx < 0 || idx > 5) return false;
+    return s_font[S_COMP1 + idx] != nullptr;
+}
+
 bool weather_has_font(int slot) {
     if (slot < 0 || slot > 3) return false;
     return s_font[S_WX1 + slot] != nullptr;

@@ -86,6 +86,13 @@ const char *const *slot_files(size_t &count);
 // How many of this theme's fonts actually loaded from flash. 0 means everything is
 // running on compiled fallbacks, which is the honest "nothing changed yet" state rather
 // than a failure.
+// The six subdial readings, THEME_CAPS 59. One face per subdial because Studio offers a
+// typeface, weight and size on each of them separately; a shared face would leave five of
+// those six controls doing nothing. A subdial that ships no file draws in the clock's
+// first banner face, so a missing font is still text.
+const lv_font_t *comp_text(int idx);    // idx 0..5, clamped
+bool comp_has_font(int idx);            // 0..5
+
 const lv_font_t *wind_title();
 const lv_font_t *wind_ask();
 const lv_font_t *wind_turns();

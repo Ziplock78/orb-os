@@ -620,6 +620,23 @@ void load() {
                     c.capColor   = item["capColor"] | c.capColor;
                     c.capRadius  = clampi(item["capRadius"] | c.capRadius, 0, 20);
                     c.capOpa     = clampi(item["capOpa"] | c.capOpa, 0, 255);
+                    // THEME_CAPS 59. The printed reading. Absent keys leave the defaults
+                    // in theme_style.h, which draw nothing: a theme written before this
+                    // level is silent here and has to keep looking exactly as it did.
+                    c.readingOn   = item["readingOn"]   | c.readingOn;
+                    c.readingUnit = item["readingUnit"] | c.readingUnit;
+                    c.textForm    = !strcmp(item["form"] | "dial", "text");
+                    if (item["readingText"].is<const char *>())
+                        strlcpy(c.readingText, item["readingText"].as<const char *>(), sizeof(c.readingText));
+                    if (item["label"].is<const char *>())
+                        strlcpy(c.label, item["label"].as<const char *>(), sizeof(c.label));
+                    // Clamped to the face, not to the subdial: a reading is often placed
+                    // against artwork well outside its own ring, and the only thing worth
+                    // refusing is a number that would draw off the glass entirely.
+                    c.readingX    = clampi(item["readingX"] | c.readingX, -466, 466);
+                    c.readingY    = clampi(item["readingY"] | c.readingY, -466, 466);
+                    c.readingColor = item["readingColor"] | c.readingColor;
+                    c.readingOpa  = clampi(item["readingOpa"] | c.readingOpa, 0, 255);
                     n++;
                 }
                 s_clock.compN = n;

@@ -227,6 +227,11 @@ static void draw_needle_at(float pxc, float pyc, float angDeg, float len, float 
 // they read: the slowest moves once a day, and the fastest, a 24 hour dial, turns a quarter
 // of a degree a minute. cache_minutes_allowed() already rebuilds s_under at least once a
 // minute for the minute hand's own creep, so a subdial has no staleness left to pay for.
+// Defined with the banners below, because it is their glyph-layout path too.
+static void draw_text_line(const lv_font_t *font, const char *buf, int bx, int by,
+                           uint32_t color, int glow, uint32_t glowColor, int align,
+                           lv_opa_t opa, uint32_t bg, int bgOpa, int bgRadius);
+
 static void draw_complications(const struct tm *ti) {
     const theme_style::Clock &cs = theme_style::clock();
     if (cs.compN <= 0) return;
@@ -257,17 +262,42 @@ static void draw_complications(const struct tm *ti) {
         const float turn = comp::turn_of(src, un, c.lo, c.hi, v);
         const float ang  = comp::deg(c.startDeg, c.endDeg, turn);
 
-        // Length is a share of the radius, so a resized subdial keeps its proportions.
-        const float len  = (float)c.r * c.handLength;
-        const float tail = len * 0.18f;   // the stub behind the pivot every watch hand has
-        if (c.handOpa > 0 && len >= 1.0f)
-            draw_needle_at((float)c.x, (float)c.y, ang, len, tail,
-                           (float)c.handWidth, lv_color_hex(c.handColor),
-                           (lv_opa_t)c.handOpa);
-        // Last, so the cap covers the tail rather than the tail crossing the cap.
-        if (c.capRadius > 0 && c.capOpa > 0)
-            draw_disc((float)c.x, (float)c.y, (float)c.capRadius,
-                      lv_color_hex(c.capColor), (lv_opa_t)c.capOpa);
+        // A READOUT HAS NO HAND. Studio has already left the ring, the marks and the
+        // printed scale out of clock_plate.png for one of these, so drawing a needle here
+        // would put a pointer on a face with nothing to point at.
+        if (!c.textForm) {
+            // Length is a share of the radius, so a resized subdial keeps its proportions.
+            const float len  = (float)c.r * c.handLength;
+            const float tail = len * 0.18f;   // the stub behind the pivot every watch hand has
+            if (c.handOpa > 0 && len >= 1.0f)
+                draw_needle_at((float)c.x, (float)c.y, ang, len, tail,
+                               (float)c.handWidth, lv_color_hex(c.handColor),
+                               (lv_opa_t)c.handOpa);
+            // Last, so the cap covers the tail rather than the tail crossing the cap.
+            if (c.capRadius > 0 && c.capOpa > 0)
+                draw_disc((float)c.x, (float)c.y, (float)c.capRadius,
+                          lv_color_hex(c.capColor), (lv_opa_t)c.capOpa);
+        }
+
+        // THE PRINTED READING, THEME_CAPS 59. Over the hand rather than under it, the way
+        // a date window sits over a watch's hands: the line is the thing being read, and a
+        // needle crossing the digits is what a window exists to prevent.
+        //
+        // The angle above and this line are one measurement read two ways, which is why
+        // both come from `v` and neither recomputes it.
+        if (c.readingOn && c.readingOpa > 0) {
+            char line[64];
+            comp::text_of(src, un, c.readingUnit, c.label, c.readingText, v, line, sizeof(line));
+            // An empty line is a format whose every token was unknown. Nothing is drawn,
+            // which reads as the mistake it is; the alternative is a stray plate with no
+            // words in it. No size is passed: a theme's face is baked at one size and
+            // ignores any asked of it afterwards, the same contract every other slot has.
+            if (line[0])
+                draw_text_line(theme_font::comp_text(i), line,
+                               c.x + c.readingX, c.y + c.readingY,
+                               c.readingColor, 0, 0, 1 /* centred on its own subdial */,
+                               (lv_opa_t)c.readingOpa, 0, 0, 0);
+        }
     }
 }
 
@@ -720,24 +750,20 @@ static void fill_plate(int x, int y, int w, int h, int radius, lv_color_t col, l
     }
 }
 
-static void draw_baked_text(const lv_font_t *font, const char *fmt, int bx, int by,
-                            uint32_t color, int glow, uint32_t glowColor, int align,
-                            const struct tm *ti, const char *which, lv_opa_t opa = LV_OPA_COVER,
-                            uint32_t bg = 0, int bgOpa = 0, int bgRadius = 0, bool upper = false) {
-    if (!font)          { banner_silent(which, "no font loaded for this slot", fmt); return; }
-    if (!fmt || !fmt[0]) { banner_silent(which, "empty format", fmt); return; }
-    if (s_noTime)        return;   // nothing true to print yet; see time_for_face()
-    char buf[48];
-    // 0 means strftime refused the format outright — almost always a flag or a conversion
-    // this libc does not implement, since 48 bytes is ample for anything a banner shows.
-    if (strftime(buf, sizeof(buf), fmt, ti) == 0) {
-        banner_silent(which, "strftime rejected the format, or it produced nothing", fmt);
-        return;
-    }
-    // AFTER strftime, not before: %A is Wednesday by now, and uppercasing the format would
-    // have missed it. THEME_CAPS 53.
-    if (upper) orb_upper(buf);
+// ONE GLYPH-LAYOUT-AND-PAINT PATH, for every line of themed text this screen draws.
+//
+// The clock's two banners and a subdial's printed reading are the same job once the
+// string exists: measure it, centre or align it, lay the plate behind it, throw the glow,
+// paint it. They differ only in where the string came from, so that is the only part that
+// is not shared. A second copy of this would be a second opinion about centring, and the
+// two would drift the first time either was touched.
+static void draw_text_line(const lv_font_t *font, const char *buf, int bx, int by,
+                           uint32_t color, int glow, uint32_t glowColor, int align,
+                           lv_opa_t opa = LV_OPA_COVER,
+                           uint32_t bg = 0, int bgOpa = 0, int bgRadius = 0) {
+    if (!font || !buf || !buf[0]) return;
     const int n = (int)strlen(buf);
+
     float w[48], total = 0.0f;
     for (int i = 0; i < n && i < 48; ++i) {
         lv_font_glyph_dsc_t g;
@@ -789,6 +815,26 @@ static void draw_baked_text(const lv_font_t *font, const char *fmt, int bx, int 
         }
     }
     paint(0, 0, lv_color_hex(color), opa);
+}
+
+static void draw_baked_text(const lv_font_t *font, const char *fmt, int bx, int by,
+                            uint32_t color, int glow, uint32_t glowColor, int align,
+                            const struct tm *ti, const char *which, lv_opa_t opa = LV_OPA_COVER,
+                            uint32_t bg = 0, int bgOpa = 0, int bgRadius = 0, bool upper = false) {
+    if (!font)          { banner_silent(which, "no font loaded for this slot", fmt); return; }
+    if (!fmt || !fmt[0]) { banner_silent(which, "empty format", fmt); return; }
+    if (s_noTime)        return;   // nothing true to print yet; see time_for_face()
+    char buf[48];
+    // 0 means strftime refused the format outright — almost always a flag or a conversion
+    // this libc does not implement, since 48 bytes is ample for anything a banner shows.
+    if (strftime(buf, sizeof(buf), fmt, ti) == 0) {
+        banner_silent(which, "strftime rejected the format, or it produced nothing", fmt);
+        return;
+    }
+    // AFTER strftime, not before: %A is Wednesday by now, and uppercasing the format would
+    // have missed it. THEME_CAPS 53.
+    if (upper) orb_upper(buf);
+    draw_text_line(font, buf, bx, by, color, glow, glowColor, align, opa, bg, bgOpa, bgRadius);
 }
 
 // Read a 4-bpp (16-level) glyph alpha bitmap (as lv_font_conv --bpp 4 --no-compress

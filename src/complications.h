@@ -17,8 +17,12 @@
 // pins the values both halves have to agree on.
 #include <stdint.h>
 #include <string.h>
+#include <stdio.h>
 #include <math.h>
 #include <time.h>
+// The one {token} parser on the device. A second copy here is how two screens quietly
+// disagree about what an unclosed brace does, which text_tokens.h was written to stop.
+#include "text_tokens.h"
 
 namespace comp {
 
@@ -163,6 +167,152 @@ inline Unit unit_from_name(const char *n) {
     if (!strcmp(n, "m/s"))  return Unit::Ms;
     if (!strcmp(n, "kn"))   return Unit::Kn;
     return Unit::None;
+}
+
+// ---- THE PRINTED LINE -------------------------------------------------------
+// The other half of a subdial, and the half Studio draws in its preview while the device
+// drew nothing until THEME_CAPS 59. Mirrored from theme-forge.ts: complicationReadingOf,
+// complicationWord, moonPhaseWord, complicationText, COMPLICATION_SOURCES[].short and
+// COMPLICATION_UNITS. Same contract as the arithmetic above: if the line under a dial
+// disagrees with the preview a designer laid it out in, every theme is subtly wrong.
+
+// JAVASCRIPT'S ROUNDING, NOT C'S, and the difference is not academic.
+//
+// Math.round breaks a tie toward +infinity; C's round() and lroundf() break it away from
+// zero. They agree on every positive half and disagree on every negative one, so a
+// thermometer reading exactly -3.5 C prints -3 in Studio's preview and would print -4 on
+// the glass. January in anywhere cold reaches that number, and nothing on the screen would
+// explain why the two differ.
+inline long round_js(float v) { return (long)floor((double)v + 0.5); }
+
+// The unit as Studio spells it, which is also what unit_from_name above reads back. One
+// table turned round rather than a second list, so a unit cannot exist in one direction.
+inline const char *unit_text(Unit u) {
+    switch (u) {
+        case Unit::C:   return "C";
+        case Unit::F:   return "F";
+        case Unit::Pct: return "%";
+        case Unit::Kmh: return "km/h";
+        case Unit::Mph: return "mph";
+        case Unit::Ms:  return "m/s";
+        case Unit::Kn:  return "kn";
+        default:        return "";
+    }
+}
+
+// COMPLICATION_SOURCES[].short: what {name} expands to. Short because it is printed on a
+// dial a few dozen pixels across, not because it is an abbreviation of anything.
+inline const char *source_short(Source s) {
+    switch (s) {
+        case Source::Date:     return "DATE";
+        case Source::Day:      return "DAY";
+        case Source::Month:    return "MONTH";
+        case Source::Hour24:   return "24H";
+        case Source::Moon:     return "MOON";
+        case Source::Temp:     return "TEMP";
+        case Source::Humidity: return "HUM";
+        case Source::Wind:     return "WIND";
+    }
+    return "";
+}
+
+// The eight phases a person would name, from the moon's age in days. Boundaries at the
+// eighths of a lunation with the four exact ones given a narrow window of their own: a
+// full moon is a night, not a fortnight. Edges copied from MOON_WORDS in theme-forge.ts.
+inline const char *moon_word(float ageDays) {
+    const double t = fmod(fmod((double)ageDays / kSynodicDays, 1.0) + 1.0, 1.0);
+    if (t < 0.02) return "New";
+    if (t < 0.23) return "Waxing crescent";
+    if (t < 0.27) return "First quarter";
+    if (t < 0.48) return "Waxing gibbous";
+    if (t < 0.52) return "Full";
+    if (t < 0.73) return "Waning gibbous";
+    if (t < 0.77) return "Last quarter";
+    if (t < 0.98) return "Waning crescent";
+    return "New";
+}
+
+// What this reading is called in words, where it has a name. Anything that is only ever a
+// number comes back as that number, so {word} on a thermometer is the reading rather than
+// a gap: a token that can only ever be empty is a legend promising what it cannot keep.
+inline void word_of(Source s, float v, bool longForm, char *out, size_t outSz) {
+    if (!out || outSz == 0) return;
+    static const char *const DAY_SHORT[7]  = { "Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat" };
+    static const char *const DAY_FULL[7]   = { "Sunday", "Monday", "Tuesday", "Wednesday",
+                                               "Thursday", "Friday", "Saturday" };
+    static const char *const MON_SHORT[12] = { "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+                                               "Jul", "Aug", "Sep", "Oct", "Nov", "Dec" };
+    static const char *const MON_FULL[12]  = { "January", "February", "March", "April", "May",
+                                               "June", "July", "August", "September",
+                                               "October", "November", "December" };
+    const long n = round_js(v);
+    if (s == Source::Day) {
+        const int i = (int)(((n - 1) % 7 + 7) % 7);
+        snprintf(out, outSz, "%s", longForm ? DAY_FULL[i] : DAY_SHORT[i]);
+        return;
+    }
+    if (s == Source::Month) {
+        const int i = (int)(((n - 1) % 12 + 12) % 12);
+        snprintf(out, outSz, "%s", longForm ? MON_FULL[i] : MON_SHORT[i]);
+        return;
+    }
+    // The moon takes the UNROUNDED age: its phase is a position in a cycle, and rounding
+    // to a whole day first would snap the four narrow windows onto day boundaries.
+    if (s == Source::Moon) { snprintf(out, outSz, "%s", moon_word(v)); return; }
+    snprintf(out, outSz, "%ld", n);
+}
+
+// THE PLAIN READING, which is what a dial prints under itself when the theme writes no
+// format of its own. Whole numbers: this is a line a few pixels tall on a 466 px screen,
+// and a decimal there is a smudge.
+inline void reading_of(Unit u, bool withUnit, float v, char *out, size_t outSz) {
+    if (!out || outSz == 0) return;
+    const long n = round_js(v);
+    const char *ut = unit_text(u);
+    if (!withUnit || !ut[0]) { snprintf(out, outSz, "%ld", n); return; }
+    // A percentage sits against its number; everything else takes a space.
+    snprintf(out, outSz, (u == Unit::Pct) ? "%ld%s" : "%ld %s", n, ut);
+}
+
+// THE LINE A SUBDIAL SHOWS. An empty format falls back to the plain reading above, so
+// switching a dial to a readout never hands anybody a blank.
+//
+// `label` is the word printed on the little dial. Studio bakes that word into the plate
+// and does not need it at draw time, but {label} is a token it offers, so the device is
+// sent it too: a token the editor expands and the glass cannot is the same lie as a unit
+// that only exists in one direction.
+inline void text_of(Source s, Unit u, bool withUnit, const char *label,
+                    const char *fmt, float v, char *out, size_t outSz) {
+    if (!out || outSz == 0) return;
+    // Trimmed at both ends before the emptiness test, exactly as Studio's .trim() is: a
+    // field holding one space is a field somebody cleared.
+    char f[64];
+    {
+        const char *b = fmt ? fmt : "";
+        while (*b == ' ' || *b == '\t') ++b;
+        size_t len = strlen(b);
+        while (len > 0 && (b[len - 1] == ' ' || b[len - 1] == '\t')) --len;
+        if (len >= sizeof(f)) len = sizeof(f) - 1;
+        memcpy(f, b, len);
+        f[len] = 0;
+    }
+    if (!f[0]) { reading_of(u, withUnit, v, out, outSz); return; }
+
+    char sv[24], se[24], sw[24], sf[24];
+    snprintf(sv, sizeof(sv), "%ld", round_js(v));
+    snprintf(se, sizeof(se), "%.1f", (double)v);
+    word_of(s, v, false, sw, sizeof(sw));
+    word_of(s, v, true,  sf, sizeof(sf));
+    const text_tokens::Tok toks[] = {
+        { "value", sv },
+        { "exact", se },
+        { "unit",  unit_text(u) },
+        { "name",  source_short(s) },
+        { "label", label ? label : "" },
+        { "word",  sw },
+        { "full",  sf },
+    };
+    text_tokens::expand(out, outSz, f, toks, sizeof(toks) / sizeof(toks[0]));
 }
 
 } // namespace comp
