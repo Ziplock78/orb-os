@@ -18,6 +18,12 @@ Rules for a section, all of them learned from what reads badly on that card:
 
 ---
 
+## 2.19.02
+
+- The sweeping second hand no longer catches once a minute. The hour hand creeping a single pixel used to make the clock redraw its entire face, which held the sweep still for long enough to notice; it now moves in place the way the minute hand already did. Spotted by Zion, who sat and watched it
+
+---
+
 ## 2.19.01
 
 - The line under a subdial is drawn now. A dial can print what it currently reads, in words, in your theme's own typeface: the temperature, the humidity, the day, the phase of the moon. Write your own wording for it if you like, or leave it and get the plain reading

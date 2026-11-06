@@ -2297,6 +2297,31 @@ static bool s_noMinValid = false;
 static float s_noMinHrAng = -1000.0f;
 // The angle the minute hand was last drawn at, so a move knows what to wipe.
 static float s_prevMinAng = -1000.0f;
+
+// The dial with NO hour hand on it, and nothing above the hour hand either.
+//
+// The same argument as s_noMin above, one layer further down, and it is the last place the
+// clock still stopped. The hour hand lives INSIDE s_noMin, so that cache goes stale the
+// moment the hand's tip creeps a pixel: hour_cache_minutes puts that at about 57 s on a
+// 120 px hand. The only repair was a full rebuild_under, and a rebuild is TWO composes, not
+// one, because s_noMin and s_under need different shadows laid down and a single pass cannot
+// produce both. At the 92 ms a compose costs on Zion's Orb that is roughly 184 ms with the
+// sweeping second hand frozen, against a 125 ms beat.
+//
+// Measured on his Orb on 2026-11-06, before this existed: one skipped beat every 57 seconds,
+// seven consecutive gaps of exactly 57 s, the firmware's own sweep_skip counter agreeing with
+// what he could see from his desk.
+//
+// Holding everything below the HOUR hand makes that creep cost the hour hand's box instead of
+// the whole dial, exactly as the minute hand's creep already costs only its own.
+//
+// Not fatal if it will not allocate: the hour creep then falls back to the full rebuild,
+// which is what the clock did before.
+static lv_color_t *s_noHr = nullptr;
+static bool  s_noHrValid = false;
+static int   s_noHrHr    = -1;
+// The angle the hour hand was last drawn at. Same job as s_prevMinAng one layer up.
+static float s_prevHrAng = -1000.0f;
 static int  s_underMin = -1, s_underHr = -1;   // what minute this cache is of
 // WHICH CANVAS these caches are a picture of.
 //
@@ -2523,6 +2548,27 @@ static bool rebuild_under(const struct tm *ti) {
         // Not fatal. Without it every minute move costs a full rebuild, which is exactly what
         // happened before this existed, so the clock is slower and not wrong.
     }
+    if (!s_noHr) {
+        const size_t bytes = (size_t)SCREEN_W * SCREEN_H * sizeof(lv_color_t);
+#if defined(ESP_PLATFORM)
+        s_noHr = (lv_color_t *)heap_caps_malloc(bytes, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+#else
+        s_noHr = (lv_color_t *)malloc(bytes);
+#endif
+        // Not fatal either, and for the same reason: without it the hour hand's creep costs a
+        // full rebuild, which is what it cost before this cache existed.
+    }
+    clip_reset();
+    // The LOWEST cache first: stop below the hour hand. This is a third compose in a rebuild
+    // that used to do two, so a full rebuild gets dearer. That is the trade and it is a good
+    // one: a rebuild happens on the hour, on a theme change and on a background frame, while
+    // the hour hand creeps every 57 seconds, and this is what makes the creep free.
+    if (s_noHr && nomin_cache_usable()) {
+        compose_custom(ti, 0, false);
+        memcpy(s_noHr, s_buf, (size_t)SCREEN_W * SCREEN_H * sizeof(lv_color_t));
+        s_noHrHr    = ti->tm_hour;
+        s_noHrValid = true;
+    }
     clip_reset();
     // The lower cache first, from the same compose: stop below the minute hand, keep that,
     // then carry on up to the second hand for s_under. Two memcpys and one compose rather
@@ -2542,6 +2588,7 @@ static bool rebuild_under(const struct tm *ti) {
     s_underMin = ti->tm_min;
     s_underMins = (float)ti->tm_min + (float)ti->tm_sec / 60.0f;
     s_prevMinAng = minute_angle_now(ti);
+    s_prevHrAng  = hour_angle_now(ti);
     s_prevSecValid = false;
     s_fullNext = true;
     return true;
@@ -2585,6 +2632,195 @@ static bool nomin_cache_usable() {
     return true;
 }
 
+// MOVE THE HOUR HAND WITHOUT REBUILDING THE DIAL.
+//
+// The same trick again, one layer further down, and the last place the clock still stopped.
+// See s_noHr's own comment for the measurement that prompted it: a skipped beat every 57
+// seconds on Zion's Orb, seven gaps in a row to the second, because the hour hand creeping a
+// single pixel threw away a cache that could only be rebuilt by two full composes.
+//
+// Restore only the rows the hour hand covers out of s_noHr, draw it again, and carry on up
+// through the layers the two caches above it need, snapshotting each as it passes. Three
+// memcpys of a box instead of two composes of the dial.
+//
+// Returns false when it cannot be done, and the caller falls back to the full rebuild, which
+// is exactly what the clock did before. No cache, no sprite, no hand: just slower.
+static bool refresh_hour(const struct tm *ti, float ang) {
+    if (!s_buf || !s_under || !s_noMin || !s_noHr || !s_noHrValid) return false;
+    if (!nomin_cache_usable()) return false;     // a moving hand is below the minute
+    if (s_underFor != s_buf) return false;       // a cache of some previous canvas
+    if (s_noHrHr != ti->tm_hour) return false;   // the hour rolled; the whole face changes
+    const theme_style::Clock &cs = theme_style::clock();
+    const theme_style::Hand &hd = cs.hand[0];
+    if (!hd.show) return false;
+    CustomSprite spr = custom_hand(0);
+    if (!spr.data) return false;
+    if (s_prevHrAng < -900.0f) return false;     // nothing to restore from yet
+
+    lv_area_t box = hand_box(0, ang);
+    area_join(box, hand_box(0, s_prevHrAng));
+    if (box.x2 < box.x1 || box.y2 < box.y1) return false;
+    const bool shadow = cs.shadowOn && custom_shadow(0).data;
+    // ITS OWN pair, not the one refresh_minute uses. That pair is static on the argument that
+    // only one of them runs at a time, and this function is called from inside refresh_minute,
+    // which is exactly the case that stops being true.
+    static int runLo[SCREEN_H], runHi[SCREEN_H];
+    const float angs[2] = { s_prevHrAng, ang };
+    for (int y = box.y1; y <= box.y2; ++y) {
+        int lo = 1 << 20, hi = -(1 << 20), a, b;
+        for (int i = 0; i < 2; ++i) {
+            if (sprite_span(y, angs[i], (float)hd.centerX, (float)hd.centerY,
+                            hd.pivotX, hd.pivotY, spr.w, spr.h, a, b)) {
+                if (a < lo) lo = a;
+                if (b > hi) hi = b;
+            }
+            if (shadow && sprite_span(y, angs[i], (float)(hd.centerX + cs.shadowDX),
+                                      (float)(hd.centerY + cs.shadowDY),
+                                      hd.pivotX, hd.pivotY, spr.w, spr.h, a, b)) {
+                if (a < lo) lo = a;
+                if (b > hi) hi = b;
+            }
+        }
+        if (lo < box.x1) lo = box.x1;
+        if (hi > box.x2) hi = box.x2;
+        runLo[y] = lo; runHi[y] = hi;
+        if (hi < lo) continue;
+        memcpy(&s_buf[y * SCREEN_W + lo], &s_noHr[y * SCREEN_W + lo],
+               (size_t)(hi - lo + 1) * sizeof(lv_color_t));
+    }
+
+    s_clipX0 = box.x1; s_clipY0 = box.y1; s_clipX1 = box.x2; s_clipY1 = box.y2;
+    s_runLo = runLo; s_runHi = runHi;
+    const float all[5] = { ang, minute_angle_now(ti), 0.0f, 0.0f, 0.0f };
+
+    // EVERYTHING BELOW THE MINUTE HAND FIRST: shadows, then hands, which is the order
+    // compose_custom lays them in and the only order that keeps s_noMin honest. The minute
+    // hand's shadow must NOT land in that snapshot, or restoring the minute hand later would
+    // leave its old shadow printed underneath. That rule is compose_custom's own, written
+    // where it skips the stop hand's shadow, and it is the reason a rebuild needs two
+    // composes rather than one.
+    if (cs.shadowOn) {
+        for (int i = 0; i < cs.orderN; ++i) {
+            const int k = cs.order[i];
+            if (k == 1) break;                   // the minute hand and above: the next phase
+            if (k < 0 || k > 2) continue;        // statics do not cast; they are the face
+            const theme_style::Hand &oh = cs.hand[k];
+            if (!oh.show) continue;
+            CustomSprite sh = custom_shadow(k);
+            if (sh.data) blend_shadow(sh.data, sh.w, sh.h, oh.pivotX, oh.pivotY,
+                                      (float)(oh.centerX + cs.shadowDX),
+                                      (float)(oh.centerY + cs.shadowDY), all[k]);
+        }
+    }
+    for (int i = 0; i < cs.orderN; ++i) {
+        const int k = cs.order[i];
+        if (k == 1) break;
+        if (k < 0 || k > 4) continue;
+        const theme_style::Hand &oh = cs.hand[k];
+        if (!oh.show) continue;
+        CustomSprite os = custom_hand(k);
+        if (os.data) blend_custom_hand(os.data, os.w, os.h, oh.pivotX, oh.pivotY,
+                                       (float)oh.centerX, (float)oh.centerY, all[k], oh.blend);
+    }
+    // SNAPSHOT ONE: s_noMin, which is defined as exactly this much of the dial. Its hour angle
+    // moves with it, or the guard in refresh_minute would send us straight back here.
+    for (int y = box.y1; y <= box.y2; ++y) {
+        if (runHi[y] < runLo[y]) continue;
+        memcpy(&s_noMin[y * SCREEN_W + runLo[y]], &s_buf[y * SCREEN_W + runLo[y]],
+               (size_t)(runHi[y] - runLo[y] + 1) * sizeof(lv_color_t));
+    }
+    s_noMinHrAng = ang;
+    s_noMinHr    = ti->tm_hour;
+    s_noMinValid = true;
+
+    // THEN THE MINUTE HAND AND WHATEVER ELSE SITS BELOW THE SECOND, over the same rows. This
+    // is refresh_minute's own loop; the box under it is the hour hand's rather than the
+    // minute's, and the parts of the minute hand outside this box were never disturbed.
+    if (cs.shadowOn) {
+        bool past = false;
+        for (int i = 0; i < cs.orderN; ++i) {
+            const int k = cs.order[i];
+            if (k == 2) break;                   // the sweep owns everything from here up
+            if (k < 0 || k > 2) continue;
+            if (!past) { if (k == 1) past = true; else continue; }
+            const theme_style::Hand &oh = cs.hand[k];
+            if (!oh.show) continue;
+            CustomSprite sh = custom_shadow(k);
+            if (sh.data) blend_shadow(sh.data, sh.w, sh.h, oh.pivotX, oh.pivotY,
+                                      (float)(oh.centerX + cs.shadowDX),
+                                      (float)(oh.centerY + cs.shadowDY), all[k]);
+        }
+    }
+    {
+        bool past = false;
+        for (int i = 0; i < cs.orderN; ++i) {
+            const int k = cs.order[i];
+            if (k == 2) break;
+            if (k < 0 || k > 4) continue;
+            if (!past) { if (k == 1) past = true; else continue; }
+            const theme_style::Hand &oh = cs.hand[k];
+            if (!oh.show) continue;
+            CustomSprite os = custom_hand(k);
+            if (os.data) blend_custom_hand(os.data, os.w, os.h, oh.pivotX, oh.pivotY,
+                                           (float)oh.centerX, (float)oh.centerY, all[k], oh.blend);
+        }
+    }
+    // SNAPSHOT TWO: s_under, the cache a sweep frame restores from. The clip STAYS ON until
+    // the layers above the second hand have gone back too, for the reason refresh_minute
+    // gives: resetting it here draws them over the whole dial instead of over these rows.
+    for (int y = box.y1; y <= box.y2; ++y) {
+        if (runHi[y] < runLo[y]) continue;
+        memcpy(&s_under[y * SCREEN_W + runLo[y]], &s_buf[y * SCREEN_W + runLo[y]],
+               (size_t)(runHi[y] - runLo[y] + 1) * sizeof(lv_color_t));
+    }
+
+    // AND EVERYTHING ABOVE THE SECOND HAND, then the glass, over the rows this wiped. Both
+    // are Jean-Paul Stringaro's and the "somebody else's Orb" faults from refresh_minute,
+    // which this would reproduce exactly if it stopped here: the caches hold neither, so a
+    // box restored out of them has lost both until something repaints the whole dial.
+    {
+        bool past = false;
+        for (int i = 0; i < cs.orderN; ++i) {
+            const int k = cs.order[i];
+            if (k < 0 || k > 4) continue;
+            if (k == 2) { past = true; continue; }
+            if (!past) continue;
+            const theme_style::Hand &oh = cs.hand[k];
+            if (!oh.show) continue;
+            if (cs.shadowOn && k <= 2) {
+                CustomSprite osh = custom_shadow(k);
+                if (osh.data) blend_shadow(osh.data, osh.w, osh.h, oh.pivotX, oh.pivotY,
+                                           (float)(oh.centerX + cs.shadowDX),
+                                           (float)(oh.centerY + cs.shadowDY), all[k]);
+            }
+            CustomSprite os = custom_hand(k);
+            if (os.data) blend_custom_hand(os.data, os.w, os.h, oh.pivotX, oh.pivotY,
+                                           (float)oh.centerX, (float)oh.centerY, all[k], oh.blend);
+        }
+    }
+    if (const uint8_t *overlay = custom_overlay()) {
+        for (int y = box.y1; y <= box.y2; ++y) {
+            if (runHi[y] < runLo[y]) continue;
+            const int base = y * SCREEN_W;
+            for (int x = runLo[y]; x <= runHi[y]; ++x) {
+                const int i = base + x;
+                const uint8_t a = overlay[i * 3 + 2];
+                if (!a) continue;
+                lv_color_t sc; sc.full = (uint16_t)(overlay[i * 3] | (overlay[i * 3 + 1] << 8));
+                s_buf[i] = lv_color_mix(sc, s_buf[i], a);
+            }
+        }
+    }
+    clip_reset();
+    s_prevHrAng = ang;
+    // The sweep cannot trust its own small box across this: part of s_buf around the hands has
+    // just been rewritten underneath it.
+    s_prevSecValid = false;
+    s_fullNext = true;
+    lv_obj_invalidate_area(s_canvas, &box);
+    return true;
+}
+
 // MOVE THE MINUTE HAND WITHOUT REBUILDING THE DIAL.
 //
 // The same trick the sweep uses on the second hand, applied one layer down. Restore only the
@@ -2610,7 +2846,14 @@ static bool refresh_minute(const struct tm *ti, float ang) {
         while (apart > 180.0f)  apart -= 360.0f;
         while (apart < -180.0f) apart += 360.0f;
         if (apart < 0.0f) apart = -apart;
-        if (apart >= hour_cache_minutes() * 0.5f) return false;
+        // The hour hand has crept a pixel, so s_noMin is wrong underneath us. That used to
+        // mean a full rebuild and a freeze somebody could see, once every 57 seconds on
+        // Zion's Orb. Move the hour hand in place instead and carry on; refresh_hour leaves
+        // s_noMin, s_under and the canvas all correct over its own box, and still returns
+        // false when it cannot, which puts us back on the old road.
+        if (apart >= hour_cache_minutes() * 0.5f) {
+            if (!refresh_hour(ti, hour_angle_now(ti))) return false;
+        }
     }
     const theme_style::Clock &cs = theme_style::clock();
     const theme_style::Hand &hd = cs.hand[1];
@@ -3219,6 +3462,7 @@ static void tick_cb(lv_timer_t * /*t*/) {
             s_underMin   = -1;        // railway dials
             s_underMins  = -1.0f;     // ...and creeping ones, which is what was missing
             s_noMinValid = false;     // s_noMin holds the background as well
+        s_noHrValid  = false;     // ...and so does s_noHr, one layer further down
             s_fullNext   = true;      // and the frame after it repaints in full
         }
         // Tick fast enough for whichever of the two needs it more, never just the animation.
