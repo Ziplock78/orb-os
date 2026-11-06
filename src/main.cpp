@@ -36,6 +36,7 @@
 #include "custom_weld.h"   // CUSTOM_WELD_HASH — lets a push tell whether new firmware is needed
 #include "orb_time.h"      // one honest read of the wall clock; NOT Arduino's retrying getLocalTime
 #include "theme_style.h"   // per-theme app roster (theme_style::apps())
+#include "custom_sprite.h" // the baked hand art, for /handart
 #include "clock_wind.h"    // the clock's virtual mainspring, THEME_CAPS 37
 #include "wind_notice.h"   // ...and the panel that asks for it
 #include "theme_audio.h"   // sounds a theme brings with it: wind.pcm, chime.pcm
@@ -3226,7 +3227,7 @@ void setup() {
     // Orb it is meant to be measuring.
     g_web.on("/handcheck", []{
         clockview::HandCheck hc;
-        char b[300];
+        char b[460];
         if (!clockview::handCheck(hc))
             snprintf(b, sizeof(b), "{\"ok\":false,\"why\":\"not a custom face, or no memory\"}");
         else
@@ -3234,12 +3235,86 @@ void setup() {
                      "{\"ok\":true,\"of\":%ld,\"sweep\":%ld,\"minute\":%ld,\"hour\":%ld,"
                      "\"drift\":%ld,\"drift_steps\":%d,"
                      "\"worst_sweep\":%d,\"worst_minute\":%d,\"worst_hour\":%d,"
-                     "\"worst_drift\":%d,\"minute_rolled\":%s}",
+                     "\"worst_drift\":%d,\"minute_rolled\":%s,"
+                     "\"hour_box\":[%d,%d,%d,%d],\"drift_box\":[%d,%d,%d,%d],"
+                     "\"centre\":[%d,%d]}",
                      (long)(466L * 466L), hc.sweep, hc.minute, hc.hour,
                      hc.drift, hc.driftSteps,
                      hc.worstSweep, hc.worstMinute, hc.worstHour, hc.worstDrift,
-                     hc.minuteRolled ? "true" : "false");
+                     hc.minuteRolled ? "true" : "false",
+                     hc.hourX0, hc.hourY0, hc.hourX1, hc.hourY1,
+                     hc.driftX0, hc.driftY0, hc.driftX1, hc.driftY1,
+                     theme_style::clock().hand[0].centerX,
+                     theme_style::clock().hand[0].centerY);
         g_web.send(200, "application/json", b);
+    });
+    // WHAT SHAPE IS THE HAND THE ORB WAS ACTUALLY GIVEN?
+    //
+    // Orb Studio draws its preview from vector paths and bakes a PNG for the device, so the
+    // two can disagree about a hand without either of them being obviously wrong, and no
+    // amount of staring at the preview will show it. Zion saw a green glob behind the hands
+    // on the glass that Studio's preview does not draw, on 2026-11-06, and every pixel check
+    // in this firmware was blind to it: they all compare one drawing path against another,
+    // and both of them draw whatever the sprite contains.
+    //
+    // So this reports the sprite itself. `belowPivot` is the one to read: it is how far the
+    // ink reaches on the far side of the pivot, which is a counterweight. A design with no
+    // counterweight has to answer 0 or close to it.
+    g_web.on("/handart", []{
+        String out = "{\"ok\":true,\"hands\":[";
+        for (int k = 0; k < 6; ++k) {
+            // 0-2 the hands, 3-5 their shadows, which Studio bakes as separate silhouettes
+            // from the same shape and which the firmware draws at the hand's own angle.
+            // A shadow carrying ink its hand does not is a counterweight nobody designed.
+            const bool isShadow = k >= 3;
+            CustomSprite sp = isShadow ? custom_shadow(k - 3) : custom_hand(k);
+            const theme_style::Hand &hd = theme_style::clock().hand[isShadow ? k - 3 : k];
+            int top = -1, bot = -1, left = -1, right = -1;
+            long ink = 0;
+            if (sp.data) {
+                for (int y = 0; y < sp.h; ++y) {
+                    for (int x = 0; x < sp.w; ++x) {
+                        if (!sp.data[((size_t)y * sp.w + x) * 3 + 2]) continue;
+                        ++ink;
+                        if (top < 0) top = y;
+                        bot = y;
+                        if (left < 0 || x < left) left = x;
+                        if (x > right) right = x;
+                    }
+                }
+            }
+            char b[300];
+            snprintf(b, sizeof(b),
+                     "%s{\"what\":\"%s%d\",\"show\":%s,\"w\":%d,\"h\":%d,\"pivotX\":%d,\"pivotY\":%d,"
+                     "\"inkTop\":%d,\"inkBottom\":%d,\"inkLeft\":%d,\"inkRight\":%d,\"inkPx\":%ld,"
+                     "\"abovePivot\":%d,\"belowPivot\":%d}",
+                     k ? "," : "", isShadow ? "shadow" : "hand", isShadow ? k - 3 : k,
+                     hd.show ? "true" : "false", sp.w, sp.h,
+                     hd.pivotX, hd.pivotY, top, bot, left, right, ink,
+                     top >= 0 ? hd.pivotY - top : -1,
+                     bot >= 0 ? bot - hd.pivotY : -1);
+            out += b;
+        }
+        out += "]}";
+        g_web.send(200, "application/json", out);
+    });
+    // WHICH HAND PAINTS WHAT. See clock_view.h for why elimination is what is left.
+    g_web.on("/handfoot", []{
+        String out = "{\"ok\":true,\"hands\":[";
+        for (int k = 0; k < 3; ++k) {
+            clockview::HandFoot f;
+            char b[220];
+            if (!clockview::handFootprint(k, f))
+                snprintf(b, sizeof(b), "%s{\"hand\":%d,\"ok\":false}", k ? "," : "", k);
+            else
+                snprintf(b, sizeof(b),
+                         "%s{\"hand\":%d,\"ok\":true,\"px\":%ld,\"box\":[%d,%d,%d,%d],"
+                         "\"center\":[%d,%d]}",
+                         k ? "," : "", k, f.px, f.x0, f.y0, f.x1, f.y1, f.cx, f.cy);
+            out += b;
+        }
+        out += "]}";
+        g_web.send(200, "application/json", out);
     });
     // Per-task and heap-fragmentation detail, added for the 2026-08-22 investigation into
     // why ADS-B reads start timing out a minute or two into Flight Tracker. /health already

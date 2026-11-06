@@ -103,8 +103,24 @@ namespace clockview {
     // Coming back to the angle it started at, the dial has to be the dial it started with.
     struct HandCheck { long sweep, minute, hour, drift;
                        int worstSweep, worstMinute, worstHour, worstDrift;
-                       int driftSteps; bool minuteRolled; };
+                       int driftSteps; bool minuteRolled;
+                       // WHERE the hour column's wrong pixels are, against the hand centre.
+                       // The count alone was read as "too few to see" on 2026-11-06, which
+                       // was wrong: forty bright pixels in one cluster on a black dial is a
+                       // visible spur. A box says cluster or scatter, and on which side.
+                       int hourX0, hourY0, hourX1, hourY1;
+                       int driftX0, driftY0, driftX1, driftY1; };
     bool      handCheck(HandCheck &out);
+    // WHICH PIXELS DOES ONE HAND ACTUALLY PAINT? Compose the face, compose it again with
+    // that hand hidden, and report the box the difference falls in. Added 2026-11-06 to
+    // attribute a green glob behind the hands that no sprite on the Orb contains: the hand
+    // art has no counterweight ink and the theme ships no shadows, so something else is
+    // drawing it and elimination is the only honest way left to find out what.
+    //
+    // `cx`/`cy` come back too, because the question is not where the mark is but which side
+    // of the pivot it is on.
+    struct HandFoot { int x0, y0, x1, y1, cx, cy; long px; };
+    bool      handFootprint(int kind, HandFoot &out);
     // What a 565 colour blended with itself comes back as, which is the one piece of
     // arithmetic the Multiply and Screen blends on a hand turn on. White multiplied by
     // white has to stay white, or the hand's own image box prints a grey rectangle onto

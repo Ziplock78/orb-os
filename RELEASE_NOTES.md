@@ -18,9 +18,9 @@ Rules for a section, all of them learned from what reads badly on that card:
 
 ---
 
-## 2.19.04
+## 2.19.09
 
-- The sweeping second hand no longer catches once a minute. The hour hand creeping a single pixel used to make the clock redraw its entire face, which held the sweep still for long enough to notice; it now moves in place the way the minute hand already did. Spotted by Zion, who sat and watched it
+- Nothing changes on your dial. This build carries the groundwork for a smoother second hand, switched off until it draws cleanly, and the tools the Orb now uses to check its own drawing against itself
 
 ---
 

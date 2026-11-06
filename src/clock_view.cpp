@@ -2632,6 +2632,20 @@ static bool nomin_cache_usable() {
     return true;
 }
 
+// OFF, and this is the honest state of it.
+//
+// refresh_hour below does what it says and kills the once-a-minute freeze: measured at zero
+// skipped beats over 37 minutes against roughly 39 before it. But it leaves residue at the
+// hub. /handcheck put numbers on it on 2026-11-06: 12 wrong pixels in a box 9 x 22 after one
+// move, 70 in a box 23 x 49 after 150, both of them pressed against the hand centre. That is
+// the green spur Zion photographed, and it grows.
+//
+// A clock that draws right and catches once a minute beats a smooth one that grows a mark at
+// its own hub, so this stays off until the residue is nil. The switch is here rather than the
+// code deleted because /handcheck can now prove when it is fixed: hour_box has to come back
+// empty, not merely small. The count alone read as "too few to see" and that was wrong.
+static constexpr bool HOUR_MOVE_IN_PLACE = false;
+
 // MOVE THE HOUR HAND WITHOUT REBUILDING THE DIAL.
 //
 // The same trick again, one layer further down, and the last place the clock still stopped.
@@ -2852,7 +2866,7 @@ static bool refresh_minute(const struct tm *ti, float ang) {
         // s_noMin, s_under and the canvas all correct over its own box, and still returns
         // false when it cannot, which puts us back on the old road.
         if (apart >= hour_cache_minutes() * 0.5f) {
-            if (!refresh_hour(ti, hour_angle_now(ti))) return false;
+            if (!HOUR_MOVE_IN_PLACE || !refresh_hour(ti, hour_angle_now(ti))) return false;
         }
     }
     const theme_style::Clock &cs = theme_style::clock();
@@ -3866,11 +3880,31 @@ static long sweep_vs_full(bool moveMinute, int *wx, int *wy) {
 // comparable: the sweep alone, a minute move, and an hour move. The first two are the long
 // proven paths and are here as controls. If all three are small, the in-place hour move is
 // honest. If only the third is large, it is mine, and worst_at says where to look.
+// Where the differences fall, not just how many. A tight box means one cluster, which is
+// something drawn in the wrong place; a box the size of the dial means scatter, which is
+// rounding. Those two want opposite fixes, and the count cannot tell them apart.
+static void diff_box(const lv_color_t *a, const lv_color_t *b,
+                     int &x0, int &y0, int &x1, int &y1) {
+    x0 = y0 = x1 = y1 = -1;
+    for (int y = 0; y < SCREEN_H; ++y) {
+        for (int x = 0; x < SCREEN_W; ++x) {
+            const size_t i = (size_t)y * SCREEN_W + x;
+            if (a[i].full == b[i].full) continue;
+            if (x0 < 0 || x < x0) x0 = x;
+            if (x > x1) x1 = x;
+            if (y0 < 0 || y < y0) y0 = y;
+            if (y > y1) y1 = y;
+        }
+    }
+}
+
 bool clockview::handCheck(HandCheck &out) {
     out.sweep = out.minute = out.hour = out.drift = -1;
     out.worstSweep = out.worstMinute = out.worstHour = out.worstDrift = -1;
     out.driftSteps = 0;
     out.minuteRolled = false;
+    out.hourX0 = out.hourY0 = out.hourX1 = out.hourY1 = -1;
+    out.driftX0 = out.driftY0 = out.driftX1 = out.driftY1 = -1;
     if (!s_buf || !s_canvas || s_face != FACE_CUSTOM) return false;
 
     struct tm ti;
@@ -3944,6 +3978,7 @@ bool clockview::handCheck(HandCheck &out) {
                     sweep_frame(secs);
                     long c = 0;
                     out.worstHour = worst_difference(full, s_buf, &c, nullptr, nullptr);
+                    diff_box(full, s_buf, out.hourX0, out.hourY0, out.hourX1, out.hourY1);
                     out.hour = took ? c : -2;   // -2: refused, so nothing was measured
                 }
             }
@@ -3972,6 +4007,7 @@ bool clockview::handCheck(HandCheck &out) {
             sweep_pad_for_shadow();
             sweep_frame(secs);
             long c = 0; out.worstDrift = worst_difference(full, s_buf, &c, nullptr, nullptr);
+            diff_box(full, s_buf, out.driftX0, out.driftY0, out.driftX1, out.driftY1);
             out.drift = c;
             out.driftSteps = steps;
         }
@@ -3985,6 +4021,61 @@ bool clockview::handCheck(HandCheck &out) {
     free(full);
 #endif
     // Whatever state the three runs left behind, the next frame repaints in full.
+    s_fullNext = true;
+    return true;
+}
+
+// See clock_view.h. Hide one hand, redraw, and report what went missing.
+bool clockview::handFootprint(int kind, HandFoot &out) {
+    out.x0 = out.y0 = out.x1 = out.y1 = -1; out.px = 0;
+    out.cx = out.cy = -1;
+    if (!s_buf || !s_canvas || s_face != FACE_CUSTOM) return false;
+    if (kind < 0 || kind > 4) return false;
+    theme_style::Clock &style = const_cast<theme_style::Clock &>(theme_style::clock());
+    out.cx = style.hand[kind].centerX;
+    out.cy = style.hand[kind].centerY;
+
+    const size_t n = (size_t)SCREEN_W * SCREEN_H;
+#if defined(ESP_PLATFORM)
+    lv_color_t *ref = (lv_color_t *)heap_caps_malloc(n * sizeof(lv_color_t),
+                                                     MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+#else
+    lv_color_t *ref = (lv_color_t *)malloc(n * sizeof(lv_color_t));
+#endif
+    if (!ref) return false;
+
+    struct tm ti;
+    time_for_face(&ti);
+    clip_reset();
+    s_layUse = false;
+    compose_custom(&ti, -1, true);
+    memcpy(ref, s_buf, n * sizeof(lv_color_t));
+
+    // The same face with this one hand switched off. The style is this process's own copy
+    // and is put back before returning, the same borrow sweepDiffersBy takes for the shadow.
+    const bool was = style.hand[kind].show;
+    style.hand[kind].show = false;
+    clip_reset();
+    s_layUse = false;
+    compose_custom(&ti, -1, true);
+    style.hand[kind].show = was;
+
+    for (int y = 0; y < SCREEN_H; ++y) {
+        for (int x = 0; x < SCREEN_W; ++x) {
+            const size_t i = (size_t)y * SCREEN_W + x;
+            if (ref[i].full == s_buf[i].full) continue;
+            ++out.px;
+            if (out.x0 < 0 || x < out.x0) out.x0 = x;
+            if (x > out.x1) out.x1 = x;
+            if (out.y0 < 0 || y < out.y0) out.y0 = y;
+            if (y > out.y1) out.y1 = y;
+        }
+    }
+#if defined(ESP_PLATFORM)
+    heap_caps_free(ref);
+#else
+    free(ref);
+#endif
     s_fullNext = true;
     return true;
 }
