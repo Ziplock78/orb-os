@@ -85,6 +85,26 @@ namespace clockview {
     // watchmaker would quote (8 is 28,800, 4 is 14,400).
     int       sweepBeat();
     long      sweepDiffersBy(int *x, int *y);
+    // DOES MOVING THE HOUR HAND IN PLACE DRAW THE SAME DIAL? Answered in pixels.
+    //
+    // Added 2.19.02 with the in-place hour move, and the reason is Zion's photograph on
+    // 2026-11-06: slivers of hour hand left behind in a fan, which nobody could settle by
+    // looking because the hour hand and minute hand sit almost on top of each other near
+    // the hour and two hands close together look like one hand torn in half.
+    //
+    // Builds the caches at the instant one hour-creep ago, creeps both hands forward the way
+    // the clock really does, and compares that against a full compose of the same instant.
+    // `sweep` is the control, `minute` the long-proven path, `hour` the new one. Anything the
+    // hour column has that the other two do not is mine.
+    //
+    // `drift` is the column that matters most and the one a single move cannot give you.
+    // One creep being clean says nothing about sixty of them in a row, which is what an hour
+    // of real running is, so this creeps the hand away a pixel at a time and brings it home.
+    // Coming back to the angle it started at, the dial has to be the dial it started with.
+    struct HandCheck { long sweep, minute, hour, drift;
+                       int worstSweep, worstMinute, worstHour, worstDrift;
+                       int driftSteps; bool minuteRolled; };
+    bool      handCheck(HandCheck &out);
     // What a 565 colour blended with itself comes back as, which is the one piece of
     // arithmetic the Multiply and Screen blends on a hand turn on. White multiplied by
     // white has to stay white, or the hand's own image box prints a grey rectangle onto

@@ -3218,6 +3218,29 @@ void setup() {
                      differ, (long)(466L * 466L), worst, wx, wy);
         g_web.send(200, "application/json", b);
     });
+    // THE SAME QUESTION FOR THE HANDS THEMSELVES, and the reason it exists is that a
+    // photograph could not settle it: near the hour, an hour hand and a minute hand sit
+    // almost on top of each other, and two hands close together look exactly like one hand
+    // torn in half. Three columns, one reference compose, so they can be read against each
+    // other. Over HTTP because it costs four full composes and the serial cable reboots the
+    // Orb it is meant to be measuring.
+    g_web.on("/handcheck", []{
+        clockview::HandCheck hc;
+        char b[300];
+        if (!clockview::handCheck(hc))
+            snprintf(b, sizeof(b), "{\"ok\":false,\"why\":\"not a custom face, or no memory\"}");
+        else
+            snprintf(b, sizeof(b),
+                     "{\"ok\":true,\"of\":%ld,\"sweep\":%ld,\"minute\":%ld,\"hour\":%ld,"
+                     "\"drift\":%ld,\"drift_steps\":%d,"
+                     "\"worst_sweep\":%d,\"worst_minute\":%d,\"worst_hour\":%d,"
+                     "\"worst_drift\":%d,\"minute_rolled\":%s}",
+                     (long)(466L * 466L), hc.sweep, hc.minute, hc.hour,
+                     hc.drift, hc.driftSteps,
+                     hc.worstSweep, hc.worstMinute, hc.worstHour, hc.worstDrift,
+                     hc.minuteRolled ? "true" : "false");
+        g_web.send(200, "application/json", b);
+    });
     // Per-task and heap-fragmentation detail, added for the 2026-08-22 investigation into
     // why ADS-B reads start timing out a minute or two into Flight Tracker. /health already
     // gives one internal-heap number; this is who is holding the rest of it, and how broken

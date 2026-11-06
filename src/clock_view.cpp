@@ -3860,6 +3860,135 @@ static long sweep_vs_full(bool moveMinute, int *wx, int *wy) {
     return count;
 }
 
+// DOES MOVING THE HOUR HAND IN PLACE DRAW THE SAME DIAL? See clock_view.h for the why.
+//
+// Three columns against ONE reference compose of the current instant, so they are directly
+// comparable: the sweep alone, a minute move, and an hour move. The first two are the long
+// proven paths and are here as controls. If all three are small, the in-place hour move is
+// honest. If only the third is large, it is mine, and worst_at says where to look.
+bool clockview::handCheck(HandCheck &out) {
+    out.sweep = out.minute = out.hour = out.drift = -1;
+    out.worstSweep = out.worstMinute = out.worstHour = out.worstDrift = -1;
+    out.driftSteps = 0;
+    out.minuteRolled = false;
+    if (!s_buf || !s_canvas || s_face != FACE_CUSTOM) return false;
+
+    struct tm ti;
+    time_for_face(&ti);
+    const size_t n = (size_t)SCREEN_W * SCREEN_H;
+#if defined(ESP_PLATFORM)
+    lv_color_t *full = (lv_color_t *)heap_caps_malloc(n * sizeof(lv_color_t),
+                                                      MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+#else
+    lv_color_t *full = (lv_color_t *)malloc(n * sizeof(lv_color_t));
+#endif
+    if (!full) return false;
+
+    const float secs = railway_seconds((float)ti.tm_sec);
+    // The authority: the whole dial the slow way, at this instant.
+    clip_reset();
+    s_layUse = false;
+    compose_custom(&ti, -1, true);
+    memcpy(full, s_buf, n * sizeof(lv_color_t));
+
+    // The three lines after every rebuild are not decoration, for the reason sweep_vs_full
+    // gives: a rebuild leaves s_buf with no glass on it, and it is the first sweep frame,
+    // with the whole screen as its box, that puts the glass back over all of it.
+    auto settle = [&]() {
+        s_prevSec.x1 = 0; s_prevSec.y1 = 0;
+        s_prevSec.x2 = SCREEN_W - 1; s_prevSec.y2 = SCREEN_H - 1;
+        s_prevSecValid = true;
+        sweep_pad_for_shadow();
+        sweep_frame(secs);
+    };
+
+    // 1. The control: build at this instant and sweep. Nothing crept, so whatever this
+    //    reports is the floor the other two are measured against rather than a fault.
+    if (rebuild_under(&ti)) {
+        settle();
+        long c = 0; out.worstSweep = worst_difference(full, s_buf, &c, nullptr, nullptr);
+        out.sweep = c;
+    }
+
+    // 2. The minute hand's in-place move, shipping since 2.16.38 and documented as leaving
+    //    about twenty pixels under the hand cap. That number is the realistic target.
+    if (rebuild_under(&ti)) {
+        settle();
+        if (refresh_minute(&ti, minute_angle_now(&ti))) {
+            sweep_pad_for_shadow();
+            sweep_frame(secs);
+            long c = 0; out.worstMinute = worst_difference(full, s_buf, &c, nullptr, nullptr);
+            out.minute = c;
+        }
+    }
+
+    // 3. The new one. Build the caches one hour-creep in the PAST, then creep both hands
+    //    forward exactly as the clock does, which is the only way to make refresh_hour do
+    //    real work: built at this instant it would be asked to move the hand nowhere.
+    struct tm back = ti;
+    time_t tt = mktime(&back);
+    if (tt != (time_t)-1) {
+        tt -= (time_t)(hour_cache_minutes() * 60.0f + 1.0f);
+        struct tm tmp;
+        if (localtime_r(&tt, &tmp)) {
+            back = tmp;
+            // The banners and the subdials are composed at `back` and never redrawn by a
+            // creep, so a minute that rolled over inside the wind-back shows up as text
+            // differing. Said out loud rather than silently inflating the count.
+            out.minuteRolled = (back.tm_min != ti.tm_min);
+            if (rebuild_under(&back)) {
+                settle();
+                const bool took = refresh_hour(&ti, hour_angle_now(&ti));
+                if (refresh_minute(&ti, minute_angle_now(&ti))) {
+                    sweep_pad_for_shadow();
+                    sweep_frame(secs);
+                    long c = 0;
+                    out.worstHour = worst_difference(full, s_buf, &c, nullptr, nullptr);
+                    out.hour = took ? c : -2;   // -2: refused, so nothing was measured
+                }
+            }
+        }
+    }
+
+    // 4. RESIDUE PILING UP, which is the whole question a single move leaves open. Creep the
+    //    hour hand away one pixel at a time, then put it back where it began. The journey
+    //    home is one move, and its box cannot cover the wedge the hand swept through, so
+    //    anything an intermediate position left behind is still sitting there and shows up
+    //    here and in no other column. Returning to the same angle has to return the same
+    //    dial; this is sweep_drift_once's argument, one layer down.
+    if (rebuild_under(&ti)) {
+        settle();
+        const float base = hour_angle_now(&ti);
+        const float step = hour_cache_minutes() * 0.5f;   // one pixel at the hand's tip
+        bool ok = step > 0.0f;
+        const int steps = ok ? 150 : 0;                   // about two and a half hours of creep
+        for (int i = 1; ok && i <= steps; ++i) {
+            float a = base + step * (float)i;
+            while (a >= 360.0f) a -= 360.0f;
+            ok = refresh_hour(&ti, a);
+        }
+        if (ok) ok = refresh_hour(&ti, base);
+        if (ok && refresh_minute(&ti, minute_angle_now(&ti))) {
+            sweep_pad_for_shadow();
+            sweep_frame(secs);
+            long c = 0; out.worstDrift = worst_difference(full, s_buf, &c, nullptr, nullptr);
+            out.drift = c;
+            out.driftSteps = steps;
+        }
+    }
+
+#if defined(ESP_PLATFORM)
+    Serial.printf("[handcheck] sweep %ld  minute %ld  hour %ld  (of %ld, minute rolled %s)\n",
+                  out.sweep, out.minute, out.hour, (long)n, out.minuteRolled ? "yes" : "no");
+    heap_caps_free(full);
+#else
+    free(full);
+#endif
+    // Whatever state the three runs left behind, the next frame repaints in full.
+    s_fullNext = true;
+    return true;
+}
+
 // DOES THE LAYER CACHE DRAW THE SAME PICTURE? Answered in pixels, not by looking.
 //
 // A cache is only ever as good as its agreement with the thing it replaces, and "hands 0 ms"
